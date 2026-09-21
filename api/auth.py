@@ -1,13 +1,15 @@
+from http.server import BaseHTTPRequestHandler
 import json
 import os
 import urllib.error
 import urllib.request
+from urllib.parse import parse_qs, urlparse
 from typing import Any, Dict, Optional
 
 
-# ---------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------
+# =========================================================
+# SUPABASE CONFIGURATION
+# =========================================================
 
 def get_supabase_url() -> str:
     url = os.environ.get("SUPABASE_URL", "").strip()
@@ -15,23 +17,24 @@ def get_supabase_url() -> str:
     if not url:
         raise RuntimeError("SUPABASE_URL is not configured.")
 
-    # Remove accidental trailing slashes.
     url = url.rstrip("/")
 
-    # Prevent common configuration mistakes.
     for suffix in (
         "/rest/v1",
         "/auth/v1",
         "/storage/v1",
     ):
         if url.endswith(suffix):
-            url = url[: -len(suffix)]
+            url = url[:-len(suffix)]
 
     return url.rstrip("/")
 
 
 def get_supabase_service_key() -> str:
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    key = os.environ.get(
+        "SUPABASE_SERVICE_ROLE_KEY",
+        ""
+    ).strip()
 
     if not key:
         raise RuntimeError(
@@ -41,9 +44,9 @@ def get_supabase_service_key() -> str:
     return key
 
 
-# ---------------------------------------------------------
-# HTTP helper
-# ---------------------------------------------------------
+# =========================================================
+# SUPABASE HTTP REQUEST
+# =========================================================
 
 def supabase_request(
     method: str,
@@ -53,7 +56,6 @@ def supabase_request(
 ):
     base_url = get_supabase_url()
 
-    # Always make sure the path begins with exactly one slash.
     path = "/" + path.lstrip("/")
 
     url = base_url + path
@@ -64,7 +66,9 @@ def supabase_request(
     }
 
     if access_token:
-        headers["Authorization"] = f"Bearer {access_token}"
+        headers["Authorization"] = (
+            f"Bearer {access_token}"
+        )
 
     data = None
 
@@ -79,110 +83,108 @@ def supabase_request(
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            response_body = response.read().decode("utf-8")
+        with urllib.request.urlopen(
+            request,
+            timeout=30
+        ) as response:
+
+            response_body = (
+                response.read()
+                .decode("utf-8")
+            )
 
             try:
-                parsed = json.loads(response_body)
+                parsed = json.loads(
+                    response_body
+                )
             except json.JSONDecodeError:
                 parsed = response_body
 
             return response.status, parsed
 
     except urllib.error.HTTPError as error:
-        error_body = error.read().decode("utf-8")
+
+        error_body = (
+            error.read()
+            .decode("utf-8")
+        )
 
         try:
-            parsed = json.loads(error_body)
+            parsed = json.loads(
+                error_body
+            )
         except json.JSONDecodeError:
             parsed = {
-                "error": error_body or "Supabase request failed."
+                "error": (
+                    error_body
+                    or "Supabase request failed."
+                )
             }
 
         return error.code, parsed
 
     except urllib.error.URLError as error:
+
         return 503, {
-            "error": f"Unable to reach Supabase: {error.reason}"
+            "error": (
+                "Unable to reach Supabase: "
+                f"{error.reason}"
+            )
         }
 
     except Exception as error:
+
         return 500, {
-            "error": f"Supabase request failed: {str(error)}"
+            "error": (
+                "Supabase request failed: "
+                f"{str(error)}"
+            )
         }
 
 
-# ---------------------------------------------------------
-# Response helpers
-# ---------------------------------------------------------
-
-def json_response(
-    body: Dict[str, Any],
-    status: int = 200,
-):
-    return {
-        "statusCode": status,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        },
-        "body": json.dumps(body),
-    }
-
-
-# ---------------------------------------------------------
-# Validation
-# ---------------------------------------------------------
+# =========================================================
+# VALIDATION
+# =========================================================
 
 def validate_email(email: str) -> Optional[str]:
+
     email = email.strip()
 
     if not email:
         return "Email is required."
 
-    if "@" not in email or "." not in email.split("@")[-1]:
+    if (
+        "@" not in email
+        or "." not in email.split("@")[-1]
+    ):
         return "Please enter a valid email address."
 
     return None
 
 
-def validate_password(password: str) -> Optional[str]:
+def validate_password(
+    password: str
+) -> Optional[str]:
+
     if not password:
         return "Password is required."
 
     if len(password) < 6:
-        return "Password must be at least 6 characters."
+        return (
+            "Password must be at least 6 characters."
+        )
 
     return None
 
 
-# ---------------------------------------------------------
-# Authentication helpers
-# ---------------------------------------------------------
+# =========================================================
+# AUTHENTICATION
+# =========================================================
 
-def extract_bearer_token(request) -> Optional[str]:
-    headers = getattr(request, "headers", {}) or {}
+def get_authenticated_user(
+    access_token: str
+):
 
-    authorization = (
-        headers.get("Authorization")
-        or headers.get("authorization")
-        or ""
-    ).strip()
-
-    if not authorization:
-        return None
-
-    if not authorization.lower().startswith("bearer "):
-        return None
-
-    token = authorization[7:].strip()
-
-    return token if token else None
-
-
-def get_authenticated_user(access_token: str):
     status, result = supabase_request(
         "GET",
         "/auth/v1/user",
@@ -198,14 +200,19 @@ def get_authenticated_user(access_token: str):
     return result
 
 
-# ---------------------------------------------------------
-# Profiles
-# ---------------------------------------------------------
+# =========================================================
+# PROFILE
+# =========================================================
 
 def get_profile(user_id: str):
+
     status, result = supabase_request(
         "GET",
-        f"/rest/v1/profiles?id=eq.{user_id}&select=*",
+        (
+            "/rest/v1/profiles"
+            f"?id=eq.{user_id}"
+            "&select=*"
+        ),
     )
 
     if status != 200:
@@ -225,6 +232,7 @@ def create_profile(
     full_name: str,
     email: str,
 ):
+
     body = {
         "id": user_id,
         "full_name": full_name.strip(),
@@ -243,41 +251,38 @@ def create_profile(
     return True, result
 
 
-# ---------------------------------------------------------
-# Signup
-# ---------------------------------------------------------
+# =========================================================
+# SIGNUP
+# =========================================================
 
 def signup(
     full_name: str,
     email: str,
     password: str,
 ):
+
     full_name = full_name.strip()
     email = email.strip().lower()
 
     if not full_name:
-        return json_response(
-            {"error": "Full name is required."},
-            400,
-        )
+        return {
+            "error": "Full name is required."
+        }, 400
 
     email_error = validate_email(email)
 
     if email_error:
-        return json_response(
-            {"error": email_error},
-            400,
-        )
+        return {
+            "error": email_error
+        }, 400
 
     password_error = validate_password(password)
 
     if password_error:
-        return json_response(
-            {"error": password_error},
-            400,
-        )
+        return {
+            "error": password_error
+        }, 400
 
-    # Create the Supabase Auth account.
     status, result = supabase_request(
         "POST",
         "/auth/v1/signup",
@@ -285,50 +290,54 @@ def signup(
             "email": email,
             "password": password,
             "data": {
-                "full_name": full_name,
+                "full_name": full_name
             },
         },
     )
 
     if status not in (200, 201):
-        error_message = "Account creation failed."
+
+        error_message = (
+            "Account creation failed."
+        )
 
         if isinstance(result, dict):
             error_message = (
                 result.get("msg")
                 or result.get("message")
-                or result.get("error_description")
+                or result.get(
+                    "error_description"
+                )
                 or result.get("error")
                 or error_message
             )
 
-        return json_response(
-            {"error": error_message},
-            status,
-        )
+        return {
+            "error": error_message
+        }, status
 
     if not isinstance(result, dict):
-        return json_response(
-            {"error": "Invalid response from authentication server."},
-            500,
-        )
+
+        return {
+            "error": (
+                "Invalid response from "
+                "authentication server."
+            )
+        }, 500
 
     user = result.get("user") or {}
 
     user_id = user.get("id")
 
     if not user_id:
-        return json_response(
-            {
-                "error": (
-                    "Account was created, but the user ID "
-                    "was not returned."
-                )
-            },
-            500,
-        )
 
-    # Create the application profile.
+        return {
+            "error": (
+                "Account was created, but "
+                "the user ID was not returned."
+            )
+        }, 500
+
     profile_ok, profile_result = create_profile(
         user_id=user_id,
         full_name=full_name,
@@ -336,65 +345,68 @@ def signup(
     )
 
     if not profile_ok:
-        return json_response(
+
+        return {
+            "error": (
+                "Account was created, but "
+                "the profile could not be created."
+            ),
+            "details": profile_result,
+        }, 500
+
+    access_token = result.get(
+        "access_token"
+    )
+
+    refresh_token = result.get(
+        "refresh_token"
+    )
+
+    return {
+        "success": True,
+        "message": (
+            "Account created successfully."
+        ),
+        "user": {
+            "id": user_id,
+            "email": email,
+            "full_name": full_name,
+        },
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "session": (
             {
-                "error": (
-                    "Account was created, but the profile "
-                    "could not be created."
-                ),
-                "details": profile_result,
-            },
-            500,
-        )
-
-    access_token = result.get("access_token")
-    refresh_token = result.get("refresh_token")
-
-    return json_response(
-        {
-            "success": True,
-            "message": "Account created successfully.",
-            "user": {
-                "id": user_id,
-                "email": email,
-                "full_name": full_name,
-            },
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "session": {
                 "access_token": access_token,
                 "refresh_token": refresh_token,
             }
             if access_token
-            else None,
-        },
-        200,
-    )
+            else None
+        ),
+    }, 200
 
 
-# ---------------------------------------------------------
-# Login
-# ---------------------------------------------------------
+# =========================================================
+# LOGIN
+# =========================================================
 
 def login(
     email: str,
     password: str,
 ):
+
     email = email.strip().lower()
 
     email_error = validate_email(email)
 
     if email_error:
-        return json_response(
-            {"error": email_error},
-            400,
-        )
+        return {
+            "error": email_error
+        }, 400
 
     if not password:
-        return json_response(
-            {"error": "Password is required."},
-            400,
-        )
+        return {
+            "error": "Password is required."
+        }, 400
 
     status, result = supabase_request(
         "POST",
@@ -406,271 +418,580 @@ def login(
     )
 
     if status != 200:
+
         error_message = "Login failed."
 
         if isinstance(result, dict):
             error_message = (
                 result.get("msg")
                 or result.get("message")
-                or result.get("error_description")
+                or result.get(
+                    "error_description"
+                )
                 or result.get("error")
                 or error_message
             )
 
-        return json_response(
-            {"error": error_message},
-            status,
-        )
+        return {
+            "error": error_message
+        }, status
 
     user = result.get("user") or {}
 
     user_id = user.get("id")
 
     if not user_id:
-        return json_response(
-            {"error": "Login succeeded but user information is missing."},
-            500,
-        )
+
+        return {
+            "error": (
+                "Login succeeded but user "
+                "information is missing."
+            )
+        }, 500
 
     profile = get_profile(user_id)
 
     full_name = ""
 
     if profile:
-        full_name = profile.get("full_name", "")
-
-    return json_response(
-        {
-            "success": True,
-            "message": "Login successful.",
-            "user": {
-                "id": user_id,
-                "email": user.get("email", email),
-                "full_name": full_name,
-            },
-            "access_token": result.get("access_token"),
-            "refresh_token": result.get("refresh_token"),
-            "expires_in": result.get("expires_in"),
-            "token_type": result.get("token_type"),
-            "session": {
-                "access_token": result.get("access_token"),
-                "refresh_token": result.get("refresh_token"),
-            },
-        },
-        200,
-    )
-
-
-# ---------------------------------------------------------
-# Refresh session
-# ---------------------------------------------------------
-
-def refresh_session(refresh_token: str):
-    if not refresh_token:
-        return json_response(
-            {"error": "Refresh token is required."},
-            400,
+        full_name = profile.get(
+            "full_name",
+            ""
         )
+
+    return {
+        "success": True,
+        "message": "Login successful.",
+        "user": {
+            "id": user_id,
+            "email": user.get(
+                "email",
+                email
+            ),
+            "full_name": full_name,
+        },
+        "access_token": result.get(
+            "access_token"
+        ),
+        "refresh_token": result.get(
+            "refresh_token"
+        ),
+        "expires_in": result.get(
+            "expires_in"
+        ),
+        "token_type": result.get(
+            "token_type"
+        ),
+        "session": {
+            "access_token": result.get(
+                "access_token"
+            ),
+            "refresh_token": result.get(
+                "refresh_token"
+            ),
+        },
+    }, 200
+
+
+# =========================================================
+# REFRESH SESSION
+# =========================================================
+
+def refresh_session(
+    refresh_token: str
+):
+
+    if not refresh_token:
+
+        return {
+            "error": (
+                "Refresh token is required."
+            )
+        }, 400
 
     status, result = supabase_request(
         "POST",
-        "/auth/v1/token?grant_type=refresh_token",
+        (
+            "/auth/v1/token"
+            "?grant_type=refresh_token"
+        ),
         body={
-            "refresh_token": refresh_token,
+            "refresh_token": refresh_token
         },
     )
 
     if status != 200:
-        error_message = "Session refresh failed."
+
+        error_message = (
+            "Session refresh failed."
+        )
 
         if isinstance(result, dict):
             error_message = (
                 result.get("msg")
                 or result.get("message")
-                or result.get("error_description")
+                or result.get(
+                    "error_description"
+                )
                 or result.get("error")
                 or error_message
             )
 
-        return json_response(
-            {"error": error_message},
-            status,
-        )
+        return {
+            "error": error_message
+        }, status
 
     user = result.get("user") or {}
+
     user_id = user.get("id")
 
     full_name = ""
 
     if user_id:
+
         profile = get_profile(user_id)
 
         if profile:
-            full_name = profile.get("full_name", "")
+            full_name = profile.get(
+                "full_name",
+                ""
+            )
 
-    return json_response(
-        {
-            "success": True,
-            "access_token": result.get("access_token"),
-            "refresh_token": result.get("refresh_token"),
-            "expires_in": result.get("expires_in"),
-            "user": {
-                "id": user_id,
-                "email": user.get("email", ""),
-                "full_name": full_name,
-            },
+    return {
+        "success": True,
+        "access_token": result.get(
+            "access_token"
+        ),
+        "refresh_token": result.get(
+            "refresh_token"
+        ),
+        "expires_in": result.get(
+            "expires_in"
+        ),
+        "user": {
+            "id": user_id,
+            "email": user.get(
+                "email",
+                ""
+            ),
+            "full_name": full_name,
         },
-        200,
-    )
+    }, 200
 
 
-# ---------------------------------------------------------
-# Profile endpoint
-# ---------------------------------------------------------
+# =========================================================
+# PROFILE ENDPOINT
+# =========================================================
 
-def profile(request):
-    access_token = extract_bearer_token(request)
+def profile(
+    access_token: Optional[str]
+):
 
     if not access_token:
-        return json_response(
-            {"error": "Authorization token is required."},
-            401,
-        )
 
-    user = get_authenticated_user(access_token)
+        return {
+            "error": (
+                "Authorization token is required."
+            )
+        }, 401
+
+    user = get_authenticated_user(
+        access_token
+    )
 
     if not user:
-        return json_response(
-            {"error": "Invalid or expired session."},
-            401,
-        )
+
+        return {
+            "error": (
+                "Invalid or expired session."
+            )
+        }, 401
 
     user_id = user.get("id")
 
     if not user_id:
-        return json_response(
-            {"error": "User information is missing."},
-            401,
-        )
 
-    profile_data = get_profile(user_id)
+        return {
+            "error": (
+                "User information is missing."
+            )
+        }, 401
 
-    if not profile_data:
-        return json_response(
-            {"error": "User profile not found."},
-            404,
-        )
-
-    return json_response(
-        {
-            "success": True,
-            "user": {
-                "id": user_id,
-                "email": user.get("email", ""),
-                "full_name": profile_data.get("full_name", ""),
-            },
-            "profile": profile_data,
-        },
-        200,
+    profile_data = get_profile(
+        user_id
     )
 
+    if not profile_data:
 
-# ---------------------------------------------------------
-# Request body
-# ---------------------------------------------------------
+        return {
+            "error": "User profile not found."
+        }, 404
 
-def get_json_body(request):
+    return {
+        "success": True,
+        "user": {
+            "id": user_id,
+            "email": user.get(
+                "email",
+                ""
+            ),
+            "full_name": profile_data.get(
+                "full_name",
+                ""
+            ),
+        },
+        "profile": profile_data,
+    }, 200
+
+
+# =========================================================
+# HTTP HELPERS
+# =========================================================
+
+def read_request_body(handler):
+
     try:
-        body = request.get_json(silent=True)
 
-        if isinstance(body, dict):
-            return body
-    except Exception:
-        pass
+        content_length = int(
+            handler.headers.get(
+                "Content-Length",
+                "0"
+            )
+        )
+
+    except (TypeError, ValueError):
+
+        content_length = 0
+
+    if content_length <= 0:
+        return {}
+
+    raw = handler.rfile.read(
+        content_length
+    )
+
+    if not raw:
+        return {}
 
     try:
-        raw_body = request.body
 
-        if isinstance(raw_body, bytes):
-            raw_body = raw_body.decode("utf-8")
+        parsed = json.loads(
+            raw.decode("utf-8")
+        )
 
-        if isinstance(raw_body, str) and raw_body.strip():
-            parsed = json.loads(raw_body)
+        if isinstance(parsed, dict):
+            return parsed
 
-            if isinstance(parsed, dict):
-                return parsed
     except Exception:
         pass
 
     return {}
 
 
-# ---------------------------------------------------------
-# Main Vercel handler
-# ---------------------------------------------------------
+def get_bearer_token(handler):
 
-def handler(request):
-    method = getattr(request, "method", "GET").upper()
+    authorization = (
+        handler.headers.get(
+            "Authorization",
+            ""
+        )
+        .strip()
+    )
 
-    # CORS preflight.
-    if method == "OPTIONS":
-        return json_response(
-            {"success": True},
-            200,
+    if not authorization:
+        return None
+
+    if not authorization.lower().startswith(
+        "bearer "
+    ):
+        return None
+
+    token = authorization[7:].strip()
+
+    return token if token else None
+
+
+def send_json(
+    handler,
+    body: Dict[str, Any],
+    status: int = 200,
+):
+
+    payload = json.dumps(
+        body
+    ).encode("utf-8")
+
+    handler.send_response(status)
+
+    handler.send_header(
+        "Content-Type",
+        "application/json"
+    )
+
+    handler.send_header(
+        "Access-Control-Allow-Origin",
+        "*"
+    )
+
+    handler.send_header(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization"
+    )
+
+    handler.send_header(
+        "Access-Control-Allow-Methods",
+        "GET, POST, OPTIONS"
+    )
+
+    handler.send_header(
+        "Cache-Control",
+        "no-store"
+    )
+
+    handler.send_header(
+        "Content-Length",
+        str(len(payload))
+    )
+
+    handler.end_headers()
+
+    handler.wfile.write(payload)
+
+
+# =========================================================
+# MAIN VERCEL HANDLER
+# =========================================================
+
+class handler(BaseHTTPRequestHandler):
+
+    def do_OPTIONS(self):
+
+        self.send_response(204)
+
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            "*"
         )
 
-    body = get_json_body(request)
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "GET, POST, OPTIONS"
+        )
 
-    # Also support action through query string.
-    action = body.get("action")
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization"
+        )
 
-    if not action:
+        self.send_header(
+            "Cache-Control",
+            "no-store"
+        )
+
+        self.end_headers()
+
+
+    def do_GET(self):
+
         try:
-            action = request.args.get("action")
-        except Exception:
-            action = None
 
-    action = (action or "").strip().lower()
-
-    try:
-        if action == "signup":
-            return signup(
-                full_name=str(body.get("full_name", "")),
-                email=str(body.get("email", "")),
-                password=str(body.get("password", "")),
+            parsed_url = urlparse(
+                self.path
             )
 
-        if action == "login":
-            return login(
-                email=str(body.get("email", "")),
-                password=str(body.get("password", "")),
+            query = parse_qs(
+                parsed_url.query
             )
 
-        if action == "refresh":
-            return refresh_session(
-                refresh_token=str(
-                    body.get("refresh_token", "")
+            action = query.get(
+                "action",
+                [""]
+            )[0].strip().lower()
+
+            if action == "profile":
+
+                access_token = (
+                    get_bearer_token(self)
                 )
+
+                body, status = profile(
+                    access_token
+                )
+
+                send_json(
+                    self,
+                    body,
+                    status
+                )
+
+                return
+
+            send_json(
+                self,
+                {
+                    "error": (
+                        "Invalid action. "
+                        "Use signup, login, "
+                        "refresh, or profile."
+                    )
+                },
+                400
             )
 
-        if action == "profile":
-            return profile(request)
+        except Exception as error:
 
-        return json_response(
-            {
-                "error": (
-                    "Invalid action. "
-                    "Use signup, login, refresh, or profile."
+            send_json(
+                self,
+                {
+                    "error": (
+                        "Authentication "
+                        "server error."
+                    ),
+                    "details": str(error)
+                },
+                500
+            )
+
+
+    def do_POST(self):
+
+        try:
+
+            body = read_request_body(
+                self
+            )
+
+            action = str(
+                body.get(
+                    "action",
+                    ""
                 )
-            },
-            400,
-        )
+            ).strip().lower()
 
-    except Exception as error:
-        return json_response(
-            {
-                "error": "Authentication server error.",
-                "details": str(error),
-            },
-            500,
-        )
+            if action == "signup":
+
+                response_body, status = signup(
+                    full_name=str(
+                        body.get(
+                            "full_name",
+                            ""
+                        )
+                    ),
+                    email=str(
+                        body.get(
+                            "email",
+                            ""
+                        )
+                    ),
+                    password=str(
+                        body.get(
+                            "password",
+                            ""
+                        )
+                    ),
+                )
+
+                send_json(
+                    self,
+                    response_body,
+                    status
+                )
+
+                return
+
+
+            if action == "login":
+
+                response_body, status = login(
+                    email=str(
+                        body.get(
+                            "email",
+                            ""
+                        )
+                    ),
+                    password=str(
+                        body.get(
+                            "password",
+                            ""
+                        )
+                    ),
+                )
+
+                send_json(
+                    self,
+                    response_body,
+                    status
+                )
+
+                return
+
+
+            if action == "refresh":
+
+                response_body, status = (
+                    refresh_session(
+                        refresh_token=str(
+                            body.get(
+                                "refresh_token",
+                                ""
+                            )
+                        )
+                    )
+                )
+
+                send_json(
+                    self,
+                    response_body,
+                    status
+                )
+
+                return
+
+
+            if action == "profile":
+
+                access_token = (
+                    get_bearer_token(self)
+                )
+
+                response_body, status = (
+                    profile(
+                        access_token
+                    )
+                )
+
+                send_json(
+                    self,
+                    response_body,
+                    status
+                )
+
+                return
+
+
+            send_json(
+                self,
+                {
+                    "error": (
+                        "Invalid action. "
+                        "Use signup, login, "
+                        "refresh, or profile."
+                    )
+                },
+                400
+            )
+
+
+        except Exception as error:
+
+            send_json(
+                self,
+                {
+                    "error": (
+                        "Authentication "
+                        "server error."
+                    ),
+                    "details": str(error)
+                },
+                500
+            )
