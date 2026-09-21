@@ -1,281 +1,409 @@
-import json
 import os
-import urllib.error
+import json
+import time
+import hmac
+import hashlib
+import base64
 import urllib.request
+import urllib.error
 from http.server import BaseHTTPRequestHandler
-
-from analysis_common import (
-    OPENAI_URL,
-    api_key,
-    json_response,
-    parse_completed_response,
-    read_job_token,
-)
+from urllib.parse import urlparse, parse_qs
 
 
-class TemporaryStatusError(Exception):
-    pass
+OPENAI_URL = "https://api.openai.com/v1/responses"
+JOB_TTL_SECONDS = 24 * 60 * 60
 
 
-class PermanentStatusError(Exception):
-    pass
+def json_response(handler, status_code, data):
+    body = json.dumps(data).encode("utf-8")
+
+    handler.send_response(status_code)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+    handler.send_header(
+        "Access-Control-Allow-Headers",
+        "Content-Type"
+    )
+    handler.send_header(
+        "Access-Control-Max-Age",
+        "86400"
+    )
+    handler.send_header(
+        "Content-Length",
+        str(len(body))
+    )
+    handler.end_headers()
+    handler.wfile.write(body)
 
 
-def get_query_parameter(path, name):
-    if "?" not in path:
+def get_secret():
+    secret = os.environ.get("JOB_TOKEN_SECRET")
+
+    if not secret:
+        secret = os.environ.get("OPENAI_API_KEY")
+
+    if not secret:
+        raise RuntimeError("Server configuration error")
+
+    return secret.encode("utf-8")
+
+
+def create_signature(payload):
+    return hmac.new(
+        get_secret(),
+        payload.encode("utf-8"),
+        hashlib.sha256
+    ).hexdigest()
+
+
+def read_job_token(token):
+    try:
+        if "." not in token:
+            return None
+
+        encoded_payload, supplied_signature = token.rsplit(".", 1)
+
+        expected_signature = create_signature(encoded_payload)
+
+        if not hmac.compare_digest(
+            supplied_signature,
+            expected_signature
+        ):
+            return None
+
+        padding = "=" * (-len(encoded_payload) % 4)
+
+        raw_payload = base64.urlsafe_b64decode(
+            encoded_payload + padding
+        )
+
+        payload = json.loads(
+            raw_payload.decode("utf-8")
+        )
+
+        response_id = payload.get("r")
+        created_at = payload.get("t")
+        instrument = payload.get("i")
+        trade_focus = payload.get("f")
+
+        if not response_id:
+            return None
+
+        if not created_at:
+            return None
+
+        if time.time() - int(created_at) > JOB_TTL_SECONDS:
+            return None
+
+        return {
+            "response_id": response_id,
+            "instrument": instrument or "",
+            "trade_focus": trade_focus or ""
+        }
+
+    except Exception:
         return None
 
-    query = path.split("?", 1)[1]
 
-    for part in query.split("&"):
-        if "=" not in part:
-            continue
+def get_openai_response(response_id):
+    api_key = os.environ.get("OPENAI_API_KEY")
 
-        key, value = part.split("=", 1)
+    if not api_key:
+        raise RuntimeError("Server configuration error")
 
-        if key == name:
-            return value
-
-    return None
-
-
-def retrieve_openai_response(response_id, key):
-    url = f"{OPENAI_URL}/{response_id}"
+    url = OPENAI_URL + "/" + response_id
 
     request = urllib.request.Request(
         url,
         method="GET",
         headers={
-            "Authorization": f"Bearer {key}",
-            "Accept": "application/json",
-        },
+            "Authorization": "Bearer " + api_key,
+            "Content-Type": "application/json"
+        }
     )
 
+    with urllib.request.urlopen(
+        request,
+        timeout=45
+    ) as response:
+
+        raw = response.read().decode("utf-8")
+
+        return json.loads(raw)
+
+
+def extract_text(response_data):
+    output = response_data.get("output", [])
+
+    if not isinstance(output, list):
+        return ""
+
+    pieces = []
+
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+
+        content = item.get("content", [])
+
+        if not isinstance(content, list):
+            continue
+
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+
+            text = part.get("text")
+
+            if isinstance(text, str):
+                pieces.append(text)
+
+    return "".join(pieces).strip()
+
+
+def parse_analysis(response_data, instrument, trade_focus):
+
+    text = extract_text(response_data)
+
+    if not text:
+        return None
+
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            raw = response.read().decode("utf-8")
+        result = json.loads(text)
+    except Exception:
+        return None
 
-            if not raw:
-                raise TemporaryStatusError()
+    if not isinstance(result, dict):
+        return None
 
-            return json.loads(raw)
+    result["instrument"] = result.get(
+        "instrument",
+        instrument
+    )
 
-    except urllib.error.HTTPError as exc:
-        if exc.code in (408, 409, 425, 429, 500, 502, 503, 504):
-            raise TemporaryStatusError()
+    result["trade_focus"] = result.get(
+        "trade_focus",
+        trade_focus
+    )
 
-        if exc.code == 404:
-            raise PermanentStatusError("Analysis job was not found.")
+    signal = result.get("signal")
 
-        raise PermanentStatusError(
-            "The analysis service rejected the status request."
-        )
+    if signal not in [
+        "BUY",
+        "SELL",
+        "NO TRADE"
+    ]:
+        return None
 
-    except urllib.error.URLError:
-        raise TemporaryStatusError()
+    confidence = result.get("confidence")
 
-    except TimeoutError:
-        raise TemporaryStatusError()
+    try:
+        confidence = int(confidence)
+    except Exception:
+        return None
 
-    except json.JSONDecodeError:
-        raise TemporaryStatusError()
+    confidence = max(
+        0,
+        min(100, confidence)
+    )
 
+    result["confidence"] = confidence
 
-def get_response_status(response_data):
-    status = response_data.get("status")
-
-    if isinstance(status, str):
-        return status.lower()
-
-    return ""
+    return result
 
 
 class handler(BaseHTTPRequestHandler):
 
+    def do_OPTIONS(self):
+        self.send_response(204)
+
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            "*"
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "GET, OPTIONS"
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type"
+        )
+
+        self.end_headers()
+
     def do_GET(self):
+
         try:
-            token = get_query_parameter(self.path, "job_id")
 
-            if not token:
+            parsed = urlparse(self.path)
+
+            params = parse_qs(
+                parsed.query
+            )
+
+            job_values = params.get(
+                "job_id",
+                []
+            )
+
+            if not job_values:
                 json_response(
                     self,
+                    400,
                     {
                         "status": "failed",
-                        "error": "Missing analysis job ID.",
-                    },
-                    400,
+                        "error": "Missing job_id"
+                    }
                 )
                 return
+
+            token = job_values[0]
+
+            job = read_job_token(token)
+
+            if not job:
+                json_response(
+                    self,
+                    400,
+                    {
+                        "status": "failed",
+                        "error": "Invalid or expired analysis job"
+                    }
+                )
+                return
+
+            response_id = job["response_id"]
+            instrument = job["instrument"]
+            trade_focus = job["trade_focus"]
 
             try:
-                response_id, instrument, trade_focus = read_job_token(token)
-            except Exception:
-                json_response(
-                    self,
-                    {
-                        "status": "failed",
-                        "error": "Invalid or expired analysis job.",
-                    },
-                    400,
-                )
-                return
-
-            key = api_key()
-
-            if not key:
-                json_response(
-                    self,
-                    {
-                        "status": "failed",
-                        "error": "Analysis service is not configured.",
-                    },
-                    500,
-                )
-                return
-
-            try:
-                response_data = retrieve_openai_response(
-                    response_id,
-                    key,
+                response_data = get_openai_response(
+                    response_id
                 )
 
-            except TemporaryStatusError:
-                json_response(
-                    self,
-                    {
-                        "status": "retry",
-                        "error": "Analysis status is temporarily unavailable.",
-                        "poll_after_seconds": 5,
-                    },
-                    503,
-                )
-                return
+            except urllib.error.HTTPError as error:
 
-            except PermanentStatusError as exc:
+                if error.code in [408, 409, 429, 500, 502, 503, 504]:
+
+                    json_response(
+                        self,
+                        200,
+                        {
+                            "status": "retry"
+                        }
+                    )
+                    return
+
                 json_response(
                     self,
-                    {
-                        "status": "failed",
-                        "error": str(exc),
-                    },
                     200,
+                    {
+                        "status": "failed",
+                        "error": "Analysis service error"
+                    }
                 )
                 return
 
-            status = get_response_status(response_data)
+            except (
+                urllib.error.URLError,
+                TimeoutError
+            ):
 
-            # ---------------------------------------------------------
-            # ANALYSIS STILL RUNNING
-            # ---------------------------------------------------------
+                json_response(
+                    self,
+                    200,
+                    {
+                        "status": "retry"
+                    }
+                )
+                return
 
-            if status in (
+            openai_status = response_data.get(
+                "status"
+            )
+
+            if openai_status in [
                 "queued",
                 "in_progress",
-                "processing",
-            ):
+                "processing"
+            ]:
+
                 json_response(
                     self,
-                    {
-                        "status": "in_progress",
-                        "poll_after_seconds": 3,
-                    },
                     200,
+                    {
+                        "status": "in_progress"
+                    }
                 )
                 return
 
-            # ---------------------------------------------------------
-            # ANALYSIS COMPLETED
-            # ---------------------------------------------------------
+            if openai_status == "completed":
 
-            if status == "completed":
-                try:
-                    result = parse_completed_response(
-                        response_data,
-                        instrument,
-                        trade_focus,
-                    )
+                result = parse_analysis(
+                    response_data,
+                    instrument,
+                    trade_focus
+                )
 
-                    result["status"] = "completed"
+                if result is None:
 
                     json_response(
                         self,
-                        result,
                         200,
-                    )
-                    return
-
-                except Exception:
-                    json_response(
-                        self,
                         {
                             "status": "failed",
-                            "error": "The analysis completed, but the result could not be read.",
-                        },
-                        200,
+                            "error": "Analysis returned invalid data"
+                        }
                     )
                     return
 
-            # ---------------------------------------------------------
-            # ANALYSIS FAILED
-            # ---------------------------------------------------------
+                json_response(
+                    self,
+                    200,
+                    {
+                        "status": "completed",
+                        "result": result
+                    }
+                )
+                return
 
-            if status in (
+            if openai_status in [
                 "failed",
                 "cancelled",
                 "canceled",
                 "expired",
-                "incomplete",
-            ):
-                error_message = "The analysis did not complete."
-
-                if status == "cancelled" or status == "canceled":
-                    error_message = "The analysis was cancelled."
-
-                elif status == "expired":
-                    error_message = "The analysis job expired."
-
-                elif status == "incomplete":
-                    error_message = "The analysis ended before a complete result was produced."
-
-                elif status == "failed":
-                    error_message = "The analysis service could not complete the analysis."
+                "incomplete"
+            ]:
 
                 json_response(
                     self,
+                    200,
                     {
                         "status": "failed",
-                        "error": error_message,
-                    },
-                    200,
+                        "error": "Analysis could not be completed"
+                    }
                 )
                 return
 
-            # ---------------------------------------------------------
-            # UNKNOWN STATUS
-            # ---------------------------------------------------------
-
             json_response(
                 self,
-                {
-                    "status": "in_progress",
-                    "poll_after_seconds": 3,
-                },
                 200,
+                {
+                    "status": "in_progress"
+                }
             )
 
         except Exception:
+
             json_response(
                 self,
+                500,
                 {
                     "status": "failed",
-                    "error": "Unable to retrieve the analysis status.",
-                },
-                500,
+                    "error": "Analysis status server error"
+                }
             )
-
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
