@@ -14,7 +14,6 @@ JOB_TTL_SECONDS = 86400
 
 
 def make_response(status, data):
-
     return {
         "statusCode": status,
         "headers": {
@@ -30,115 +29,65 @@ def make_response(status, data):
 
 
 def get_token_from_request(request):
-
     try:
-
-        query = getattr(
-            request,
-            "query",
-            None
-        )
+        query = getattr(request, "query", None)
 
         if isinstance(query, dict):
+            value = query.get("job_id")
 
-            value = query.get(
-                "job_id"
-            )
-
-            if isinstance(
-                value,
-                list
-            ):
-
-                return (
-                    value[0]
-                    if value
-                    else None
-                )
+            if isinstance(value, list):
+                return value[0] if value else None
 
             if value:
                 return value
 
-        url = getattr(
-            request,
-            "url",
-            ""
-        )
+        url = getattr(request, "url", "")
 
         if url and "?" in url:
-
-            query_string = url.split(
-                "?",
-                1
-            )[1]
-
-            values = parse_qs(
-                query_string
-            ).get(
-                "job_id"
-            )
+            query_string = url.split("?", 1)[1]
+            values = parse_qs(query_string).get("job_id")
 
             if values:
                 return values[0]
 
     except Exception as e:
-
         raise Exception(
-            "Could not read job_id: "
-            + str(e)
+            "Could not read job_id: " + str(e)
         )
 
     return None
 
 
 def get_secret():
-
-    secret = os.environ.get(
-        "JOB_TOKEN_SECRET"
-    )
+    secret = os.environ.get("JOB_TOKEN_SECRET")
 
     if not secret:
-
-        secret = os.environ.get(
-            "OPENAI_API_KEY"
-        )
+        secret = os.environ.get("OPENAI_API_KEY")
 
     if not secret:
-
         raise Exception(
             "JOB_TOKEN_SECRET and OPENAI_API_KEY are both missing"
         )
 
-    return secret.encode(
-        "utf-8"
-    )
+    return secret.encode("utf-8")
 
 
 def verify_token(token):
-
     if not token:
-
         raise Exception(
             "No job_id was supplied"
         )
 
     if "." not in token:
-
         raise Exception(
             "Invalid job token format"
         )
 
-    encoded_payload, supplied_signature = \
-        token.rsplit(
-            ".",
-            1
-        )
+    encoded_payload, supplied_signature = token.rsplit(".", 1)
 
     expected_signature = hmac.new(
         get_secret(),
-        encoded_payload.encode(
-            "utf-8"
-        ),
+        encoded_payload.encode("utf-8"),
         hashlib.sha256
     ).hexdigest()
 
@@ -146,13 +95,11 @@ def verify_token(token):
         supplied_signature,
         expected_signature
     ):
-
         raise Exception(
             "Invalid job token signature"
         )
 
     try:
-
         padding = "=" * (
             -len(encoded_payload) % 4
         )
@@ -162,65 +109,37 @@ def verify_token(token):
         )
 
         payload = json.loads(
-            decoded.decode(
-                "utf-8"
-            )
+            decoded.decode("utf-8")
         )
 
     except Exception as e:
-
         raise Exception(
-            "Could not decode job token: "
-            + str(e)
+            "Could not decode job token: " + str(e)
         )
 
-    response_id = payload.get(
-        "r"
-    )
-
-    created_at = payload.get(
-        "t"
-    )
-
-    instrument = payload.get(
-        "i",
-        ""
-    )
-
-    trade_focus = payload.get(
-        "f",
-        ""
-    )
+    response_id = payload.get("r")
+    created_at = payload.get("t")
+    instrument = payload.get("i", "")
+    trade_focus = payload.get("f", "")
 
     if not response_id:
-
         raise Exception(
             "Job token does not contain response ID"
         )
 
     if not created_at:
-
         raise Exception(
             "Job token does not contain timestamp"
         )
 
     try:
-
-        created_at = int(
-            created_at
-        )
-
+        created_at = int(created_at)
     except Exception:
-
         raise Exception(
             "Job token timestamp is invalid"
         )
 
-    if (
-        time.time() - created_at
-        > JOB_TTL_SECONDS
-    ):
-
+    if time.time() - created_at > JOB_TTL_SECONDS:
         raise Exception(
             "Analysis job has expired"
         )
@@ -232,16 +151,10 @@ def verify_token(token):
     )
 
 
-def retrieve_openai_response(
-    response_id
-):
-
-    api_key = os.environ.get(
-        "OPENAI_API_KEY"
-    )
+def retrieve_openai_response(response_id):
+    api_key = os.environ.get("OPENAI_API_KEY")
 
     if not api_key:
-
         raise Exception(
             "OPENAI_API_KEY is missing from Vercel"
         )
@@ -253,11 +166,8 @@ def retrieve_openai_response(
     )
 
     request = urllib.request.Request(
-
         response_url,
-
         method="GET",
-
         headers={
             "Authorization":
                 "Bearer " + api_key,
@@ -268,11 +178,9 @@ def retrieve_openai_response(
             "Accept":
                 "application/json",
         }
-
     )
 
     try:
-
         with urllib.request.urlopen(
             request,
             timeout=30
@@ -283,19 +191,14 @@ def retrieve_openai_response(
             )
 
             if not raw:
-
                 raise Exception(
                     "OpenAI returned an empty response"
                 )
 
             try:
-
-                return json.loads(
-                    raw
-                )
+                return json.loads(raw)
 
             except Exception as e:
-
                 raise Exception(
                     "OpenAI returned invalid JSON: "
                     + str(e)
@@ -304,19 +207,13 @@ def retrieve_openai_response(
     except urllib.error.HTTPError as e:
 
         try:
-
             body = e.read().decode(
                 "utf-8"
             )
-
         except Exception:
-
             body = ""
 
-        # Give the frontend useful information.
-        # In particular, preserve OpenAI's real 404.
         if e.code == 404:
-
             raise Exception(
                 "OpenAI could not find analysis response "
                 + response_id
@@ -354,19 +251,14 @@ def retrieve_openai_response(
 
 
 def extract_text(data):
-
     output_text = data.get(
         "output_text"
     )
 
     if (
-        isinstance(
-            output_text,
-            str
-        )
+        isinstance(output_text, str)
         and output_text.strip()
     ):
-
         return output_text.strip()
 
     output = data.get(
@@ -374,22 +266,14 @@ def extract_text(data):
         []
     )
 
-    if not isinstance(
-        output,
-        list
-    ):
-
+    if not isinstance(output, list):
         return ""
 
     pieces = []
 
     for item in output:
 
-        if not isinstance(
-            item,
-            dict
-        ):
-
+        if not isinstance(item, dict):
             continue
 
         content = item.get(
@@ -397,20 +281,12 @@ def extract_text(data):
             []
         )
 
-        if not isinstance(
-            content,
-            list
-        ):
-
+        if not isinstance(content, list):
             continue
 
         for part in content:
 
-            if not isinstance(
-                part,
-                dict
-            ):
-
+            if not isinstance(part, dict):
                 continue
 
             text_value = part.get(
@@ -421,7 +297,6 @@ def extract_text(data):
                 text_value,
                 str
             ):
-
                 pieces.append(
                     text_value
                 )
@@ -436,50 +311,34 @@ def parse_result(
     instrument,
     trade_focus
 ):
-
-    text = extract_text(
-        data
-    )
+    text = extract_text(data)
 
     if not text:
-
         raise Exception(
             "OpenAI completed but no analysis text was found"
         )
 
     try:
-
-        result = json.loads(
-            text
-        )
+        result = json.loads(text)
 
     except Exception as e:
-
         raise Exception(
             "Analysis JSON could not be parsed: "
             + str(e)
         )
 
-    if not isinstance(
-        result,
-        dict
-    ):
-
+    if not isinstance(result, dict):
         raise Exception(
             "Analysis result is not an object"
         )
 
     result["instrument"] = (
-        result.get(
-            "instrument"
-        )
+        result.get("instrument")
         or instrument
     )
 
     result["trade_focus"] = (
-        result.get(
-            "trade_focus"
-        )
+        result.get("trade_focus")
         or trade_focus
     )
 
@@ -492,23 +351,19 @@ def parse_result(
         "SELL",
         "NO TRADE"
     ]:
-
         raise Exception(
             "Invalid signal returned: "
             + str(signal)
         )
 
     try:
-
         confidence = int(
             result.get(
                 "confidence",
                 0
             )
         )
-
     except Exception:
-
         confidence = 0
 
     result["confidence"] = max(
@@ -533,22 +388,17 @@ def handler(request):
         )
 
         if method == "OPTIONS":
-
             return make_response(
                 204,
                 {}
             )
 
         if method != "GET":
-
             return make_response(
                 405,
                 {
-                    "status":
-                        "failed",
-
-                    "error":
-                        "GET required"
+                    "status": "failed",
+                    "error": "GET required"
                 }
             )
 
@@ -557,15 +407,11 @@ def handler(request):
         )
 
         if not token:
-
             return make_response(
                 400,
                 {
-                    "status":
-                        "failed",
-
-                    "error":
-                        "Missing job_id"
+                    "status": "failed",
+                    "error": "Missing job_id"
                 }
             )
 
@@ -573,9 +419,7 @@ def handler(request):
             response_id,
             instrument,
             trade_focus
-        ) = verify_token(
-            token
-        )
+        ) = verify_token(token)
 
         print(
             "LM ANALYZER STATUS CHECK"
@@ -604,7 +448,6 @@ def handler(request):
             data,
             dict
         ):
-
             raise Exception(
                 "OpenAI response is not an object"
             )
@@ -618,9 +461,7 @@ def handler(request):
             openai_status
         )
 
-        /*
-         * BACKGROUND RESPONSE STILL RUNNING
-         */
+        # BACKGROUND RESPONSE STILL RUNNING
 
         if openai_status in [
             "queued",
@@ -639,9 +480,7 @@ def handler(request):
                 }
             )
 
-        /*
-         * COMPLETED
-         */
+        # COMPLETED
 
         if openai_status == "completed":
 
@@ -662,9 +501,7 @@ def handler(request):
                 }
             )
 
-        /*
-         * TERMINAL FAILURE
-         */
+        # TERMINAL FAILURE
 
         if openai_status in [
             "failed",
@@ -675,15 +512,9 @@ def handler(request):
         ]:
 
             details = (
-                data.get(
-                    "error"
-                )
-                or data.get(
-                    "incomplete_details"
-                )
-                or data.get(
-                    "status_details"
-                )
+                data.get("error")
+                or data.get("incomplete_details")
+                or data.get("status_details")
             )
 
             print(
@@ -691,9 +522,7 @@ def handler(request):
             )
 
             print(
-                json.dumps(
-                    data
-                )
+                json.dumps(data)
             )
 
             return make_response(
@@ -713,9 +542,7 @@ def handler(request):
                 }
             )
 
-        /*
-         * UNKNOWN STATUS
-         */
+        # UNKNOWN STATUS
 
         return make_response(
             200,
