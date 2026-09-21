@@ -6,25 +6,55 @@ import hashlib
 import base64
 import urllib.request
 import urllib.error
-from urllib.parse import parse_qs
+from urllib.parse import urlparse, parse_qs
 
 
 OPENAI_URL = "https://api.openai.com/v1/responses"
 JOB_TTL_SECONDS = 86400
 
 
-def response_json(status_code, data):
+def make_response(status, data):
     return {
-        "statusCode": status_code,
+        "statusCode": status,
         "headers": {
             "Content-Type": "application/json",
-            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Cache-Control": "no-store",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
         },
         "body": json.dumps(data),
     }
+
+
+def get_token_from_request(request):
+    try:
+        query = getattr(request, "query", None)
+
+        if isinstance(query, dict):
+            value = query.get("job_id")
+
+            if isinstance(value, list):
+                return value[0] if value else None
+
+            if value:
+                return value
+
+        url = getattr(request, "url", "")
+
+        if url and "?" in url:
+            query_string = url.split("?", 1)[1]
+            values = parse_qs(query_string).get("job_id")
+
+            if values:
+                return values[0]
+
+    except Exception as e:
+        raise Exception(
+            "Could not read job_id: " + str(e)
+        )
+
+    return None
 
 
 def get_secret():
@@ -34,17 +64,24 @@ def get_secret():
         secret = os.environ.get("OPENAI_API_KEY")
 
     if not secret:
-        raise Exception("Server configuration error: job token secret is missing")
+        raise Exception(
+            "JOB_TOKEN_SECRET and OPENAI_API_KEY are both missing"
+        )
 
     return secret.encode("utf-8")
 
 
-def verify_job_token(token):
+def verify_token(token):
+
     if not token:
-        raise Exception("Missing analysis job")
+        raise Exception(
+            "No job_id was supplied"
+        )
 
     if "." not in token:
-        raise Exception("Invalid analysis job")
+        raise Exception(
+            "Invalid job token format"
+        )
 
     encoded_payload, supplied_signature = token.rsplit(".", 1)
 
@@ -58,10 +95,14 @@ def verify_job_token(token):
         supplied_signature,
         expected_signature
     ):
-        raise Exception("Invalid analysis job")
+        raise Exception(
+            "Invalid job token signature"
+        )
 
     try:
-        padding = "=" * (-len(encoded_payload) % 4)
+        padding = "=" * (
+            -len(encoded_payload) % 4
+        )
 
         decoded = base64.urlsafe_b64decode(
             encoded_payload + padding
@@ -71,8 +112,10 @@ def verify_job_token(token):
             decoded.decode("utf-8")
         )
 
-    except Exception:
-        raise Exception("Invalid analysis job token")
+    except Exception as e:
+        raise Exception(
+            "Could not decode job token: " + str(e)
+        )
 
     response_id = payload.get("r")
     created_at = payload.get("t")
@@ -80,30 +123,43 @@ def verify_job_token(token):
     trade_focus = payload.get("f", "")
 
     if not response_id:
-        raise Exception("Analysis response ID missing")
+        raise Exception(
+            "Job token does not contain response ID"
+        )
 
     if not created_at:
-        raise Exception("Analysis job timestamp missing")
+        raise Exception(
+            "Job token does not contain timestamp"
+        )
 
     try:
         created_at = int(created_at)
     except Exception:
-        raise Exception("Invalid analysis job timestamp")
+        raise Exception(
+            "Job token timestamp is invalid"
+        )
 
     if time.time() - created_at > JOB_TTL_SECONDS:
-        raise Exception("Analysis job expired")
+        raise Exception(
+            "Analysis job has expired"
+        )
 
     return response_id, instrument, trade_focus
 
 
-def get_openai_response(response_id):
+def retrieve_openai_response(response_id):
+
     api_key = os.environ.get("OPENAI_API_KEY")
 
     if not api_key:
-        raise Exception("OpenAI API key is not configured")
+        raise Exception(
+            "OPENAI_API_KEY is missing from Vercel"
+        )
+
+    url = OPENAI_URL + "/" + response_id
 
     request = urllib.request.Request(
-        OPENAI_URL + "/" + response_id,
+        url,
         method="GET",
         headers={
             "Authorization": "Bearer " + api_key,
@@ -112,12 +168,15 @@ def get_openai_response(response_id):
     )
 
     try:
+
         with urllib.request.urlopen(
             request,
-            timeout=45
+            timeout=30
         ) as response:
 
-            raw = response.read().decode("utf-8")
+            raw = response.read().decode(
+                "utf-8"
+            )
 
             if not raw:
                 raise Exception(
@@ -126,117 +185,156 @@ def get_openai_response(response_id):
 
             try:
                 return json.loads(raw)
-            except Exception:
+
+            except Exception as e:
                 raise Exception(
-                    "OpenAI returned invalid JSON"
+                    "OpenAI returned invalid JSON: "
+                    + str(e)
                 )
 
-    except urllib.error.HTTPError as error:
+    except urllib.error.HTTPError as e:
 
         try:
-            error_body = error.read().decode("utf-8")
+            body = e.read().decode(
+                "utf-8"
+            )
         except Exception:
-            error_body = ""
+            body = ""
 
         raise Exception(
             "OpenAI HTTP "
-            + str(error.code)
+            + str(e.code)
             + ": "
-            + error_body[:1000]
+            + body[:1000]
         )
 
-    except urllib.error.URLError as error:
-
-        reason = getattr(
-            error,
-            "reason",
-            "unknown connection error"
-        )
+    except urllib.error.URLError as e:
 
         raise Exception(
             "OpenAI connection error: "
-            + str(reason)
+            + str(
+                getattr(
+                    e,
+                    "reason",
+                    "unknown"
+                )
+            )
         )
 
-    except TimeoutError:
-        raise Exception(
-            "OpenAI request timed out"
-        )
 
+def extract_text(data):
 
-def extract_output_text(data):
-    output = data.get("output", [])
+    # First try Responses API output_text.
+    output_text = data.get(
+        "output_text"
+    )
 
-    if not isinstance(output, list):
+    if isinstance(
+        output_text,
+        str
+    ) and output_text.strip():
+
+        return output_text.strip()
+
+    output = data.get(
+        "output",
+        []
+    )
+
+    if not isinstance(
+        output,
+        list
+    ):
         return ""
 
-    parts = []
+    pieces = []
 
     for item in output:
 
-        if not isinstance(item, dict):
+        if not isinstance(
+            item,
+            dict
+        ):
             continue
 
-        content = item.get("content", [])
+        content = item.get(
+            "content",
+            []
+        )
 
-        if not isinstance(content, list):
+        if not isinstance(
+            content,
+            list
+        ):
             continue
 
-        for content_item in content:
+        for part in content:
 
-            if not isinstance(content_item, dict):
+            if not isinstance(
+                part,
+                dict
+            ):
                 continue
 
-            text_value = content_item.get("text")
+            text_value = part.get(
+                "text"
+            )
 
-            if isinstance(text_value, str):
-                parts.append(text_value)
+            if isinstance(
+                text_value,
+                str
+            ):
+                pieces.append(
+                    text_value
+                )
 
-    return "".join(parts).strip()
+    return "".join(
+        pieces
+    ).strip()
 
 
-def parse_completed_result(
+def parse_result(
     data,
     instrument,
     trade_focus
 ):
-    text = extract_output_text(data)
 
-    if not text:
-
-        # Some Responses API responses can expose
-        # output_text directly.
-        output_text = data.get("output_text")
-
-        if isinstance(output_text, str):
-            text = output_text.strip()
+    text = extract_text(data)
 
     if not text:
         raise Exception(
-            "OpenAI completed without returning analysis data"
+            "OpenAI completed but no analysis text was found"
         )
 
     try:
         result = json.loads(text)
 
-    except Exception as error:
+    except Exception as e:
+
         raise Exception(
-            "OpenAI returned invalid JSON: "
-            + str(error)
+            "Analysis JSON could not be parsed: "
+            + str(e)
         )
 
-    if not isinstance(result, dict):
+    if not isinstance(
+        result,
+        dict
+    ):
         raise Exception(
-            "OpenAI returned an invalid analysis object"
+            "Analysis result is not an object"
         )
 
-    if not result.get("instrument"):
-        result["instrument"] = instrument
+    result["instrument"] = result.get(
+        "instrument"
+    ) or instrument
 
-    if not result.get("trade_focus"):
-        result["trade_focus"] = trade_focus
+    result["trade_focus"] = result.get(
+        "trade_focus"
+    ) or trade_focus
 
-    signal = result.get("signal")
+    signal = result.get(
+        "signal"
+    )
 
     if signal not in [
         "BUY",
@@ -244,7 +342,8 @@ def parse_completed_result(
         "NO TRADE"
     ]:
         raise Exception(
-            "Analysis returned an invalid signal"
+            "Invalid signal returned: "
+            + str(signal)
         )
 
     try:
@@ -268,54 +367,8 @@ def parse_completed_result(
     return result
 
 
-def get_query_value(request, name):
-    """
-    Works with Vercel-style request objects and
-    also tolerates query-string dictionaries.
-    """
-
-    query = getattr(
-        request,
-        "query",
-        None
-    )
-
-    if isinstance(query, dict):
-
-        value = query.get(name)
-
-        if isinstance(value, list):
-
-            if value:
-                return value[0]
-
-            return None
-
-        return value
-
-    url = getattr(
-        request,
-        "url",
-        ""
-    )
-
-    if url:
-
-        parsed = parse_qs(
-            url.split("?", 1)[1]
-            if "?" in url
-            else ""
-        )
-
-        values = parsed.get(name)
-
-        if values:
-            return values[0]
-
-    return None
-
-
 def handler(request):
+
     try:
 
         method = getattr(
@@ -325,57 +378,63 @@ def handler(request):
         )
 
         if method == "OPTIONS":
-
-            return response_json(
+            return make_response(
                 204,
                 {}
             )
 
         if method != "GET":
-
-            return response_json(
+            return make_response(
                 405,
                 {
                     "status": "failed",
-                    "error": "Method not allowed"
+                    "error": "GET required"
                 }
             )
 
-        token = get_query_value(
-            request,
-            "job_id"
+        token = get_token_from_request(
+            request
         )
 
         if not token:
-
-            return response_json(
+            return make_response(
                 400,
                 {
                     "status": "failed",
-                    "error": "Missing analysis job"
+                    "error": "Missing job_id"
                 }
             )
 
-        response_id, instrument, trade_focus = verify_job_token(
+        response_id, instrument, trade_focus = verify_token(
             token
         )
 
-        data = get_openai_response(
+        print(
+            "STATUS CHECK:",
+            response_id,
+            instrument,
+            trade_focus
+        )
+
+        data = retrieve_openai_response(
             response_id
         )
 
-        if not isinstance(data, dict):
-
-            return response_json(
-                502,
-                {
-                    "status": "failed",
-                    "error": "OpenAI returned an invalid response"
-                }
+        if not isinstance(
+            data,
+            dict
+        ):
+            raise Exception(
+                "OpenAI response is not an object"
             )
 
         openai_status = data.get(
             "status"
+        )
+
+        print(
+            "OPENAI STATUS:",
+            openai_status
         )
 
         if openai_status in [
@@ -384,7 +443,7 @@ def handler(request):
             "processing"
         ]:
 
-            return response_json(
+            return make_response(
                 200,
                 {
                     "status": "in_progress",
@@ -394,13 +453,13 @@ def handler(request):
 
         if openai_status == "completed":
 
-            result = parse_completed_result(
+            result = parse_result(
                 data,
                 instrument,
                 trade_focus
             )
 
-            return response_json(
+            return make_response(
                 200,
                 {
                     "status": "completed",
@@ -416,55 +475,47 @@ def handler(request):
             "incomplete"
         ]:
 
-            error_details = data.get(
-                "error"
+            details = (
+                data.get("error")
+                or data.get("incomplete_details")
+                or data.get("status_details")
             )
 
-            if error_details is None:
-                error_details = data.get(
-                    "incomplete_details"
-                )
-
-            if error_details is None:
-                error_details = data.get(
-                    "status_details"
-                )
-
             print(
-                "OPENAI TERMINAL RESPONSE:",
+                "OPENAI TERMINAL:",
                 json.dumps(data)
             )
 
-            return response_json(
+            return make_response(
                 200,
                 {
                     "status": "failed",
                     "error": "OpenAI analysis failed",
                     "openai_status": openai_status,
-                    "details": error_details
+                    "details": details
                 }
             )
 
-        return response_json(
+        return make_response(
             200,
             {
                 "status": "failed",
-                "error": "Unknown OpenAI analysis status",
+                "error": "Unknown OpenAI status",
                 "openai_status": openai_status
             }
         )
 
-    except Exception as error:
+    except Exception as e:
 
         print(
-            "ANALYSIS STATUS ERROR:",
-            repr(error)
+            "STATUS FUNCTION ERROR:",
+            repr(e)
         )
 
-        return response_json(
+        return make_response(
             200,
             {
                 "status": "failed",
-                "error": str(error)
+                "error": str(e)
             }
         )
