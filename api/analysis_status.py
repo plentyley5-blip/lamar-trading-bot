@@ -1,7 +1,7 @@
 import json
-import os
 import urllib.error
 import urllib.request
+
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
@@ -9,56 +9,99 @@ from analysis_common import (
     OPENAI_URL,
     get_openai_key,
     parse_completed_response,
-    read_job_token,
+)
+
+from user_security import (
+    extract_bearer_token,
+    read_secure_job_token,
+    verify_access_token,
 )
 
 
 def retrieve_response(response_id):
+
     api_key = get_openai_key()
 
-    url = OPENAI_URL + "/" + response_id
+    url = (
+        OPENAI_URL
+        + "/"
+        + response_id
+    )
 
     request = urllib.request.Request(
         url,
         method="GET",
         headers={
-            "Authorization": "Bearer " + api_key,
-            "Accept": "application/json",
+            "Authorization":
+                "Bearer " + api_key,
+            "Accept":
+                "application/json",
         },
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            body = response.read().decode("utf-8")
-            return response.status, json.loads(body)
+
+        with urllib.request.urlopen(
+            request,
+            timeout=30
+        ) as response:
+
+            body = response.read().decode(
+                "utf-8"
+            )
+
+            return (
+                response.status,
+                json.loads(body)
+            )
 
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
 
-        return exc.code, {
-            "error": {
-                "http_status": exc.code,
-                "message": body,
+        body = exc.read().decode(
+            "utf-8",
+            errors="replace"
+        )
+
+        return (
+            exc.code,
+            {
+                "error": {
+                    "http_status": exc.code,
+                    "message": body
+                }
             }
-        }
+        )
 
     except urllib.error.URLError as exc:
-        return 0, {
-            "error": {
-                "message": "Connection to OpenAI failed: " + str(exc.reason)
+
+        return (
+            0,
+            {
+                "error": {
+                    "message":
+                        "Connection to OpenAI failed: "
+                        + str(exc.reason)
+                }
             }
-        }
+        )
 
 
 class handler(BaseHTTPRequestHandler):
 
-    def send_json(self, status_code, data):
+    def send_json(
+        self,
+        status_code,
+        data
+    ):
+
         body = json.dumps(
             data,
             ensure_ascii=False
         ).encode("utf-8")
 
-        self.send_response(status_code)
+        self.send_response(
+            status_code
+        )
 
         self.send_header(
             "Content-Type",
@@ -77,7 +120,7 @@ class handler(BaseHTTPRequestHandler):
 
         self.send_header(
             "Access-Control-Allow-Headers",
-            "Content-Type"
+            "Content-Type, Authorization"
         )
 
         self.send_header(
@@ -95,6 +138,7 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_OPTIONS(self):
+
         self.send_response(204)
 
         self.send_header(
@@ -109,7 +153,7 @@ class handler(BaseHTTPRequestHandler):
 
         self.send_header(
             "Access-Control-Allow-Headers",
-            "Content-Type"
+            "Content-Type, Authorization"
         )
 
         self.end_headers()
@@ -117,69 +161,130 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
 
         try:
-            parsed = urlparse(self.path)
+
+            access_token = extract_bearer_token(
+                self.headers
+            )
+
+            user = verify_access_token(
+                access_token
+            )
+
+            authenticated_user_id = str(
+                user.get("id", "")
+            ).strip()
+
+            if not authenticated_user_id:
+
+                self.send_json(
+                    401,
+                    {
+                        "status": "failed",
+                        "error":
+                            "Your account could not be identified."
+                    }
+                )
+
+                return
+
+            parsed = urlparse(
+                self.path
+            )
 
             params = parse_qs(
                 parsed.query
             )
 
-            job_values = params.get("job_id", [])
+            job_values = params.get(
+                "job_id",
+                []
+            )
 
             if not job_values:
+
                 self.send_json(
                     400,
                     {
                         "status": "failed",
-                        "error": "job_id is required"
+                        "error":
+                            "job_id is required"
                     }
                 )
+
                 return
 
             job_id = job_values[0].strip()
 
             if not job_id:
+
                 self.send_json(
                     400,
                     {
                         "status": "failed",
-                        "error": "job_id is empty"
+                        "error":
+                            "job_id is empty"
                     }
                 )
+
                 return
 
-            response_id, instrument, trade_focus = read_job_token(
+            (
+                response_id,
+                instrument,
+                trade_focus,
+                job_user_id
+            ) = read_secure_job_token(
                 job_id
             )
 
-            http_status, response_data = retrieve_response(
-                response_id
-            )
+            if (
+                job_user_id
+                != authenticated_user_id
+            ):
 
-            # OpenAI returned an HTTP error.
-            if http_status != 200:
-
-                error_object = response_data.get(
-                    "error",
-                    {}
+                self.send_json(
+                    403,
+                    {
+                        "status": "failed",
+                        "error":
+                            "You are not authorized to access this analysis."
+                    }
                 )
 
-                message = error_object.get(
-                    "message",
-                    "Unknown OpenAI error"
+                return
+
+            http_status, response_data = (
+                retrieve_response(
+                    response_id
+                )
+            )
+
+            if http_status != 200:
+
+                error_object = (
+                    response_data.get(
+                        "error",
+                        {}
+                    )
+                )
+
+                message = (
+                    error_object.get(
+                        "message",
+                        "Unknown OpenAI error"
+                    )
                 )
 
                 self.send_json(
                     200,
                     {
                         "status": "failed",
-                        "error": (
+                        "error":
                             "OpenAI response lookup failed. "
-                            "HTTP "
+                            + "HTTP "
                             + str(http_status)
                             + ". "
                             + str(message)
-                        ),
-                        "response_id": response_id
                     }
                 )
 
@@ -192,7 +297,6 @@ class handler(BaseHTTPRequestHandler):
                 )
             ).lower().strip()
 
-            # Still processing.
             if openai_status in (
                 "queued",
                 "in_progress",
@@ -208,7 +312,6 @@ class handler(BaseHTTPRequestHandler):
 
                 return
 
-            # Successfully completed.
             if openai_status == "completed":
 
                 result = parse_completed_response(
@@ -227,7 +330,6 @@ class handler(BaseHTTPRequestHandler):
 
                 return
 
-            # OpenAI finished unsuccessfully.
             if openai_status in (
                 "failed",
                 "cancelled",
@@ -237,10 +339,15 @@ class handler(BaseHTTPRequestHandler):
             ):
 
                 error_value = (
-                    response_data.get("error")
-                    or response_data.get("incomplete_details")
+                    response_data.get(
+                        "error"
+                    )
+                    or response_data.get(
+                        "incomplete_details"
+                    )
                     or (
-                        "OpenAI analysis ended with status: "
+                        "OpenAI analysis ended "
+                        "with status: "
                         + openai_status
                     )
                 )
@@ -255,28 +362,29 @@ class handler(BaseHTTPRequestHandler):
 
                 return
 
-            # Unknown OpenAI status.
             self.send_json(
                 200,
                 {
                     "status": "failed",
-                    "error": (
-                        "Unknown OpenAI response status: "
+                    "error":
+                        "Unknown analysis status: "
                         + openai_status
-                    ),
-                    "response_id": response_id,
-                    "openai_response": response_data
                 }
             )
 
         except Exception as exc:
 
-            # Always return JSON instead of allowing Vercel
-            # to generate its generic HTTP 500 page.
+            message = str(exc)
+
+            status_code = 401
+
+            if "job" in message.lower():
+                status_code = 400
+
             self.send_json(
-                200,
+                status_code,
                 {
                     "status": "failed",
-                    "error": str(exc)
+                    "error": message
                 }
             )
