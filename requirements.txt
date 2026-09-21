@@ -1,1 +1,3 @@
-# No third-party Python packages required.
+# LM ANALYZER
+# Backend uses Python standard library for HTTP/API communication.
+# No third-party Python packages are required.
