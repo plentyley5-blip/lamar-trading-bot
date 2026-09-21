@@ -257,7 +257,9 @@ select{
 }
 
 @keyframes spin{
-  to{transform:rotate(360deg)}
+  to{
+    transform:rotate(360deg);
+  }
 }
 
 .loader-text{
@@ -274,6 +276,7 @@ select{
   border-radius:12px;
   margin-bottom:15px;
   line-height:1.5;
+  word-break:break-word;
 }
 
 .error.show{
@@ -348,6 +351,7 @@ select{
 }
 
 @media(max-width:700px){
+
   .app{
     padding:15px;
   }
@@ -376,9 +380,6 @@ select{
   <div class="status">LAMAR TRADING BOT</div>
 </header>
 
-
-<!-- HOME -->
-
 <section id="home">
 
   <div class="card hero">
@@ -404,9 +405,6 @@ select{
 
 </section>
 
-
-<!-- ANALYSIS -->
-
 <section id="analysis" class="hidden">
 
   <button class="back" id="backHome">
@@ -420,25 +418,70 @@ select{
     </div>
 
     <select id="pair">
-      <option value="">Select instrument</option>
-      <option value="XAUUSD">XAUUSD</option>
-      <option value="EURUSD">EURUSD</option>
-      <option value="GBPUSD">GBPUSD</option>
-      <option value="USDJPY">USDJPY</option>
-      <option value="AUDUSD">AUDUSD</option>
-      <option value="USDCAD">USDCAD</option>
-      <option value="USDCHF">USDCHF</option>
-      <option value="NZDUSD">NZDUSD</option>
-      <option value="EURGBP">EURGBP</option>
-      <option value="EURJPY">EURJPY</option>
-      <option value="GBPJPY">GBPJPY</option>
-      <option value="BTCUSD">BTCUSD</option>
-      <option value="US30">US30</option>
-      <option value="OTHER">Other</option>
+
+      <option value="">
+        Select instrument
+      </option>
+
+      <option value="XAUUSD">
+        XAUUSD
+      </option>
+
+      <option value="EURUSD">
+        EURUSD
+      </option>
+
+      <option value="GBPUSD">
+        GBPUSD
+      </option>
+
+      <option value="USDJPY">
+        USDJPY
+      </option>
+
+      <option value="AUDUSD">
+        AUDUSD
+      </option>
+
+      <option value="USDCAD">
+        USDCAD
+      </option>
+
+      <option value="USDCHF">
+        USDCHF
+      </option>
+
+      <option value="NZDUSD">
+        NZDUSD
+      </option>
+
+      <option value="EURGBP">
+        EURGBP
+      </option>
+
+      <option value="EURJPY">
+        EURJPY
+      </option>
+
+      <option value="GBPJPY">
+        GBPJPY
+      </option>
+
+      <option value="BTCUSD">
+        BTCUSD
+      </option>
+
+      <option value="US30">
+        US30
+      </option>
+
+      <option value="OTHER">
+        Other
+      </option>
+
     </select>
 
   </div>
-
 
   <div class="card">
 
@@ -472,7 +515,6 @@ select{
 
       </div>
 
-
       <div class="upload">
 
         <label for="m15">
@@ -496,7 +538,6 @@ select{
     </div>
 
   </div>
-
 
   <div class="card">
 
@@ -548,16 +589,15 @@ select{
 
 </section>
 
-
-<!-- PROCESSING -->
-
 <section id="processing" class="hidden">
 
   <div class="card loader">
 
     <div class="spinner"></div>
 
-    <h2>Analyzing charts</h2>
+    <h2>
+      Analyzing charts
+    </h2>
 
     <p
       class="loader-text"
@@ -569,9 +609,6 @@ select{
   </div>
 
 </section>
-
-
-<!-- RESULT -->
 
 <section id="resultSection" class="hidden">
 
@@ -586,7 +623,9 @@ select{
 
     <div class="signal">
 
-      <div>TRADE SIGNAL</div>
+      <div>
+        TRADE SIGNAL
+      </div>
 
       <div
         class="signal-value"
@@ -596,7 +635,6 @@ select{
       </div>
 
     </div>
-
 
     <div class="result-grid">
 
@@ -662,66 +700,105 @@ select{
 
     </div>
 
-
     <div class="text-box">
-      <h3>TRADE IDEA</h3>
-      <p id="rIdea">—</p>
+
+      <h3>
+        TRADE IDEA
+      </h3>
+
+      <p id="rIdea">
+        —
+      </p>
+
     </div>
 
     <div class="text-box">
-      <h3>DATA ANALYSIS</h3>
-      <p id="rData">—</p>
+
+      <h3>
+        DATA ANALYSIS
+      </h3>
+
+      <p id="rData">
+        —
+      </p>
+
     </div>
 
     <div class="text-box">
-      <h3>EXPLANATION</h3>
-      <p id="rExplanation">—</p>
+
+      <h3>
+        EXPLANATION
+      </h3>
+
+      <p id="rExplanation">
+        —
+      </p>
+
     </div>
 
     <div class="text-box">
-      <h3>CONTRIBUTING METHODS</h3>
+
+      <h3>
+        CONTRIBUTING METHODS
+      </h3>
+
       <ul
         class="list"
         id="rContributing"
       ></ul>
+
     </div>
 
     <div class="text-box">
-      <h3>WEAK METHODS</h3>
+
+      <h3>
+        WEAK METHODS
+      </h3>
+
       <ul
         class="list"
         id="rWeak"
       ></ul>
+
     </div>
 
     <div class="text-box">
-      <h3>CONFLICTING METHODS</h3>
+
+      <h3>
+        CONFLICTING METHODS
+      </h3>
+
       <ul
         class="list"
         id="rConflicting"
       ></ul>
+
     </div>
 
     <div class="text-box">
-      <h3>WARNINGS</h3>
+
+      <h3>
+        WARNINGS
+      </h3>
+
       <ul
         class="list"
         id="rWarnings"
       ></ul>
+
     </div>
 
   </div>
 
 </section>
 
-
-<!-- HISTORY -->
-
 <section id="history" class="hidden">
 
   <div class="card hero">
 
-    <h2>HISTORY</h2>
+    <h2>
+      HISTORY
+    </h2>
 
     <p>
       Your completed analyses will appear here.
@@ -731,14 +808,13 @@ select{
 
 </section>
 
-
-<!-- PROFILE -->
-
 <section id="profile" class="hidden">
 
   <div class="card hero">
 
-    <h2>PROFILE</h2>
+    <h2>
+      PROFILE
+    </h2>
 
     <p>
       LM ANALYZER
@@ -747,7 +823,6 @@ select{
   </div>
 
 </section>
-
 
 <nav class="nav">
 
@@ -770,16 +845,10 @@ select{
 
 </div>
 
-
 <script>
 
 const $ = selector =>
   document.querySelector(selector);
-
-
-/* =========================
-   APP STATE
-========================= */
 
 let tradeFocus = "DAY TRADE";
 
@@ -790,20 +859,21 @@ let currentJobId = null;
 
 let pollingTimer = null;
 
-
-/* =========================
-   SCREENS
-========================= */
-
 const screens = {
-  home: $("#home"),
-  analysis: $("#analysis"),
-  processing: $("#processing"),
-  result: $("#resultSection"),
-  history: $("#history"),
-  profile: $("#profile")
-};
 
+  home: $("#home"),
+
+  analysis: $("#analysis"),
+
+  processing: $("#processing"),
+
+  result: $("#resultSection"),
+
+  history: $("#history"),
+
+  profile: $("#profile")
+
+};
 
 function showScreen(name){
 
@@ -812,12 +882,8 @@ function showScreen(name){
   );
 
   screens[name].classList.remove("hidden");
+
 }
-
-
-/* =========================
-   FILE VALIDATION
-========================= */
 
 function validImage(file){
 
@@ -829,15 +895,10 @@ function validImage(file){
 
 }
 
-
-/* =========================
-   FILE TO BASE64
-========================= */
-
 function readFile(file){
 
   return new Promise(
-    (resolve, reject) => {
+    (resolve,reject) => {
 
       if(!validImage(file)){
 
@@ -850,10 +911,8 @@ function readFile(file){
         return;
       }
 
-
       const reader =
         new FileReader();
-
 
       reader.onload = () => {
 
@@ -871,10 +930,11 @@ function readFile(file){
           return;
         }
 
-        resolve(reader.result);
+        resolve(
+          reader.result
+        );
 
       };
-
 
       reader.onerror = () => {
 
@@ -886,7 +946,6 @@ function readFile(file){
 
       };
 
-
       reader.onabort = () => {
 
         reject(
@@ -897,18 +956,12 @@ function readFile(file){
 
       };
 
-
       reader.readAsDataURL(file);
 
     }
   );
 
 }
-
-
-/* =========================
-   4H UPLOAD
-========================= */
 
 $("#h4").addEventListener(
   "change",
@@ -919,7 +972,6 @@ $("#h4").addEventListener(
       event.target.files.length
         ? event.target.files[0]
         : null;
-
 
     if(!validImage(file)){
 
@@ -933,9 +985,7 @@ $("#h4").addEventListener(
       return;
     }
 
-
     h4File = file;
-
 
     const preview =
       $("#h4Preview");
@@ -943,11 +993,11 @@ $("#h4").addEventListener(
     const objectUrl =
       URL.createObjectURL(file);
 
-    preview.src = objectUrl;
+    preview.src =
+      objectUrl;
 
     preview.style.display =
       "block";
-
 
     preview.onload = () => {
 
@@ -957,16 +1007,10 @@ $("#h4").addEventListener(
 
     };
 
-
     updateReady();
 
   }
 );
-
-
-/* =========================
-   15M UPLOAD
-========================= */
 
 $("#m15").addEventListener(
   "change",
@@ -977,7 +1021,6 @@ $("#m15").addEventListener(
       event.target.files.length
         ? event.target.files[0]
         : null;
-
 
     if(!validImage(file)){
 
@@ -991,9 +1034,7 @@ $("#m15").addEventListener(
       return;
     }
 
-
     m15File = file;
-
 
     const preview =
       $("#m15Preview");
@@ -1001,11 +1042,11 @@ $("#m15").addEventListener(
     const objectUrl =
       URL.createObjectURL(file);
 
-    preview.src = objectUrl;
+    preview.src =
+      objectUrl;
 
     preview.style.display =
       "block";
-
 
     preview.onload = () => {
 
@@ -1015,86 +1056,63 @@ $("#m15").addEventListener(
 
     };
 
-
     updateReady();
 
   }
 );
-
-
-/* =========================
-   READY CHECK
-========================= */
 
 function updateReady(){
 
   const pair =
     $("#pair").value;
 
-
   const ready =
     pair !== "" &&
     validImage(h4File) &&
     validImage(m15File);
-
 
   $("#go").disabled =
     !ready;
 
 }
 
-
-/* =========================
-   INSTRUMENT
-========================= */
-
 $("#pair").addEventListener(
   "change",
   updateReady
 );
 
-
-/* =========================
-   TRADE FOCUS
-========================= */
-
 document
   .querySelectorAll("[data-focus]")
-  .forEach(button => {
+  .forEach(
+    button => {
 
-    button.addEventListener(
-      "click",
-      () => {
+      button.addEventListener(
+        "click",
+        () => {
 
-        tradeFocus =
-          button.dataset.focus;
+          tradeFocus =
+            button.dataset.focus;
 
+          document
+            .querySelectorAll(
+              "[data-focus]"
+            )
+            .forEach(
+              b =>
+                b.classList.remove(
+                  "active"
+                )
+            );
 
-        document
-          .querySelectorAll(
-            "[data-focus]"
-          )
-          .forEach(
-            b =>
-              b.classList.remove(
-                "active"
-              )
+          button.classList.add(
+            "active"
           );
 
+        }
+      );
 
-        button.classList.add(
-          "active"
-        );
-
-      }
-    );
-
-  });
-
-
-/* =========================
-   ERROR
-========================= */
+    }
+  );
 
 function showError(message){
 
@@ -1110,22 +1128,12 @@ function showError(message){
 
 }
 
-
-/* =========================
-   LOADER
-========================= */
-
 function setLoaderText(text){
 
-  $("#loaderText")
-    .textContent = text;
+  $("#loaderText").textContent =
+    text;
 
 }
-
-
-/* =========================
-   START ANALYSIS
-========================= */
 
 $("#startAnalysis").addEventListener(
   "click",
@@ -1138,11 +1146,6 @@ $("#startAnalysis").addEventListener(
   }
 );
 
-
-/* =========================
-   BACK HOME
-========================= */
-
 $("#backHome").addEventListener(
   "click",
   () => {
@@ -1153,11 +1156,6 @@ $("#backHome").addEventListener(
 
   }
 );
-
-
-/* =========================
-   BACK TO ANALYSIS
-========================= */
 
 $("#backAnalysis").addEventListener(
   "click",
@@ -1170,11 +1168,6 @@ $("#backAnalysis").addEventListener(
   }
 );
 
-
-/* =========================
-   ANALYZE
-========================= */
-
 $("#go").addEventListener(
   "click",
   async () => {
@@ -1185,18 +1178,9 @@ $("#go").addEventListener(
     const error =
       $("#error");
 
-
     error.classList.remove(
       "show"
     );
-
-
-    /*
-      IMPORTANT:
-      Use stored File objects.
-      Never use input.files[0]
-      here.
-    */
 
     if(!validImage(h4File)){
 
@@ -1207,7 +1191,6 @@ $("#go").addEventListener(
       return;
     }
 
-
     if(!validImage(m15File)){
 
       showError(
@@ -1216,7 +1199,6 @@ $("#go").addEventListener(
 
       return;
     }
-
 
     if(!$("#pair").value){
 
@@ -1227,19 +1209,15 @@ $("#go").addEventListener(
       return;
     }
 
-
     button.disabled =
       true;
-
 
     currentJobId =
       null;
 
-
     showScreen(
       "processing"
     );
-
 
     try{
 
@@ -1247,33 +1225,23 @@ $("#go").addEventListener(
         "Preparing your 4H chart…"
       );
 
-
-      /*
-        These are the actual stored
-        File objects.
-      */
-
       const higherImage =
         await readFile(
           h4File
         );
 
-
       setLoaderText(
         "Preparing your 15M chart…"
       );
-
 
       const lowerImage =
         await readFile(
           m15File
         );
 
-
       setLoaderText(
         "Sending charts to the analysis engine…"
       );
-
 
       const requestBody = {
 
@@ -1291,7 +1259,6 @@ $("#go").addEventListener(
 
       };
 
-
       const response =
         await fetch(
           "/api/analysis_submit",
@@ -1307,16 +1274,14 @@ $("#go").addEventListener(
               JSON.stringify(
                 requestBody
               )
+
           }
         );
-
 
       const rawText =
         await response.text();
 
-
       let data;
-
 
       try{
 
@@ -1329,11 +1294,12 @@ $("#go").addEventListener(
 
         throw new Error(
           "The analysis server returned an invalid response. HTTP " +
-          response.status
+          response.status +
+          " BODY: " +
+          rawText
         );
 
       }
-
 
       if(!response.ok){
 
@@ -1344,7 +1310,6 @@ $("#go").addEventListener(
 
       }
 
-
       if(!data.job_id){
 
         throw new Error(
@@ -1353,20 +1318,16 @@ $("#go").addEventListener(
 
       }
 
-
       currentJobId =
         data.job_id;
-
 
       setLoaderText(
         "Analysis job started. Reading the charts…"
       );
 
-
       await pollAnalysis(
         currentJobId
       );
-
 
     }catch(errorObject){
 
@@ -1375,17 +1336,14 @@ $("#go").addEventListener(
         errorObject
       );
 
-
       showScreen(
         "analysis"
       );
-
 
       showError(
         errorObject.message ||
         "The analysis could not be completed."
       );
-
 
     }finally{
 
@@ -1396,11 +1354,6 @@ $("#go").addEventListener(
 
   }
 );
-
-
-/* =========================
-   WAIT
-========================= */
 
 function sleep(ms){
 
@@ -1414,18 +1367,10 @@ function sleep(ms){
 
 }
 
-
-/* =========================
-   POLL BACKEND
-========================= */
-
-async function pollAnalysis(
-  jobId
-){
+async function pollAnalysis(jobId){
 
   const maxAttempts =
     240;
-
 
   for(
     let attempt = 0;
@@ -1450,16 +1395,14 @@ async function pollAnalysis(
             "Accept":
               "application/json"
           }
+
         }
       );
-
 
     const rawText =
       await response.text();
 
-
     let data;
-
 
     try{
 
@@ -1480,14 +1423,23 @@ async function pollAnalysis(
         rawText
       );
 
-
       throw new Error(
         "The analysis server returned an invalid status response. HTTP " +
-        response.status
+        response.status +
+        " BODY: " +
+        rawText
       );
 
     }
 
+    console.log(
+      "LM ANALYZER STATUS:",
+      data
+    );
+
+    /*
+     * ANALYSIS COMPLETED
+     */
 
     if(
       data.status ===
@@ -1498,21 +1450,21 @@ async function pollAnalysis(
         "Analysis completed. Building your result…"
       );
 
-
       renderResult(
         data.result
       );
-
 
       showScreen(
         "result"
       );
 
-
       return;
 
     }
 
+    /*
+     * ANALYSIS FAILED
+     */
 
     if(
       data.status ===
@@ -1520,26 +1472,32 @@ async function pollAnalysis(
     ){
 
       throw new Error(
-        data.error ||
-        "The analysis failed."
+        "Analysis failed: " +
+        JSON.stringify(
+          data
+        )
       );
 
     }
 
+    /*
+     * ANALYSIS STILL RUNNING
+     */
 
     if(
       data.status ===
-      "queued" ||
+        "queued" ||
+
       data.status ===
-      "in_progress" ||
+        "in_progress" ||
+
       data.status ===
-      "processing"
+        "processing"
     ){
 
       setLoaderText(
         "Analysis engine is reading your charts…"
       );
-
 
       await sleep(
         Math.max(
@@ -1551,18 +1509,26 @@ async function pollAnalysis(
         )
       );
 
-
       continue;
 
     }
 
+    /*
+     * IMPORTANT DIAGNOSTIC:
+     *
+     * If the backend sends a status that
+     * this app does not recognize, show
+     * the COMPLETE server response.
+     */
 
     throw new Error(
-      "Unknown analysis status returned by server."
+      "Unknown analysis status returned by server: " +
+      JSON.stringify(
+        data
+      )
     );
 
   }
-
 
   throw new Error(
     "The analysis is taking longer than expected. Please try again."
@@ -1570,14 +1536,7 @@ async function pollAnalysis(
 
 }
 
-
-/* =========================
-   RESULT HELPERS
-========================= */
-
-function valueOrDash(
-  value
-){
+function valueOrDash(value){
 
   if(
     value === null ||
@@ -1595,7 +1554,6 @@ function valueOrDash(
 
 }
 
-
 function renderList(
   elementId,
   values
@@ -1604,10 +1562,8 @@ function renderList(
   const element =
     $("#" + elementId);
 
-
   element.innerHTML =
     "";
-
 
   if(
     !Array.isArray(values) ||
@@ -1627,8 +1583,8 @@ function renderList(
     );
 
     return;
-  }
 
+  }
 
   values.forEach(
     value => {
@@ -1639,7 +1595,9 @@ function renderList(
         );
 
       li.textContent =
-        String(value);
+        String(
+          value
+        );
 
       element.appendChild(
         li
@@ -1650,14 +1608,7 @@ function renderList(
 
 }
 
-
-/* =========================
-   RENDER RESULT
-========================= */
-
-function renderResult(
-  result
-){
+function renderResult(result){
 
   if(!result){
 
@@ -1667,120 +1618,100 @@ function renderResult(
 
   }
 
-
   $("#signal").textContent =
     valueOrDash(
       result.signal
     );
-
 
   $("#rInstrument").textContent =
     valueOrDash(
       result.instrument
     );
 
-
   $("#rFocus").textContent =
     valueOrDash(
       result.trade_focus
     );
-
 
   $("#rTrend").textContent =
     valueOrDash(
       result.trend
     );
 
-
   $("#rConfidence").textContent =
     valueOrDash(
       result.confidence
     ) + "%";
-
 
   $("#rEntry").textContent =
     valueOrDash(
       result.entry
     );
 
-
   $("#rSL").textContent =
     valueOrDash(
       result.stop_loss
     );
-
 
   $("#rTP1").textContent =
     valueOrDash(
       result.take_profit_1
     );
 
-
   $("#rTP2").textContent =
     valueOrDash(
       result.take_profit_2
     );
-
 
   $("#rRR").textContent =
     valueOrDash(
       result.risk_reward
     );
 
-
   $("#rStrength").textContent =
     valueOrDash(
       result.strength
     );
-
 
   $("#rDuration").textContent =
     valueOrDash(
       result.duration
     );
 
-
   $("#rNews").textContent =
     valueOrDash(
       result.news_fundamental_risk
     );
-
 
   $("#rIdea").textContent =
     valueOrDash(
       result.trade_idea
     );
 
-
   $("#rData").textContent =
     valueOrDash(
       result.data_analysis
     );
-
 
   $("#rExplanation").textContent =
     valueOrDash(
       result.explanation
     );
 
-
   renderList(
     "rContributing",
     result.contributing_methods
   );
-
 
   renderList(
     "rWeak",
     result.weak_methods
   );
 
-
   renderList(
     "rConflicting",
     result.conflicting_methods
   );
-
 
   renderList(
     "rWarnings",
@@ -1789,14 +1720,24 @@ function renderResult(
 
 }
 
-
-/* =========================
-   NAVIGATION
-========================= */
-
 $("#navHome").addEventListener(
   "click",
   () => {
+
+    document
+      .querySelectorAll(
+        ".nav button"
+      )
+      .forEach(
+        button =>
+          button.classList.remove(
+            "active"
+          )
+      );
+
+    $("#navHome").classList.add(
+      "active"
+    );
 
     showScreen(
       "home"
@@ -1805,10 +1746,24 @@ $("#navHome").addEventListener(
   }
 );
 
-
 $("#navHistory").addEventListener(
   "click",
   () => {
+
+    document
+      .querySelectorAll(
+        ".nav button"
+      )
+      .forEach(
+        button =>
+          button.classList.remove(
+            "active"
+          )
+      );
+
+    $("#navHistory").classList.add(
+      "active"
+    );
 
     showScreen(
       "history"
@@ -1817,10 +1772,24 @@ $("#navHistory").addEventListener(
   }
 );
 
-
 $("#navProfile").addEventListener(
   "click",
   () => {
+
+    document
+      .querySelectorAll(
+        ".nav button"
+      )
+      .forEach(
+        button =>
+          button.classList.remove(
+            "active"
+          )
+      );
+
+    $("#navProfile").classList.add(
+      "active"
+    );
 
     showScreen(
       "profile"
@@ -1828,11 +1797,6 @@ $("#navProfile").addEventListener(
 
   }
 );
-
-
-/* =========================
-   INITIAL STATE
-========================= */
 
 updateReady();
 
