@@ -5,34 +5,23 @@ import hmac
 import hashlib
 import base64
 import urllib.request
-import urllib.error
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 
 OPENAI_URL = "https://api.openai.com/v1/responses"
-JOB_TTL_SECONDS = 24 * 60 * 60
+JOB_TTL_SECONDS = 86400
 
 
-def json_response(handler, status_code, data):
+def send_json(handler, status, data):
     body = json.dumps(data).encode("utf-8")
 
-    handler.send_response(status_code)
+    handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Access-Control-Allow-Origin", "*")
     handler.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-    handler.send_header(
-        "Access-Control-Allow-Headers",
-        "Content-Type"
-    )
-    handler.send_header(
-        "Access-Control-Max-Age",
-        "86400"
-    )
-    handler.send_header(
-        "Content-Length",
-        str(len(body))
-    )
+    handler.send_header("Access-Control-Allow-Headers", "Content-Type")
+    handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -44,83 +33,74 @@ def get_secret():
         secret = os.environ.get("OPENAI_API_KEY")
 
     if not secret:
-        raise RuntimeError("Server configuration error")
+        raise Exception("JOB_TOKEN_SECRET and OPENAI_API_KEY are both missing")
 
     return secret.encode("utf-8")
 
 
-def create_signature(payload):
-    return hmac.new(
+def verify_token(token):
+
+    if "." not in token:
+        raise Exception("Token has no signature")
+
+    encoded_payload, signature = token.rsplit(".", 1)
+
+    expected = hmac.new(
         get_secret(),
-        payload.encode("utf-8"),
+        encoded_payload.encode("utf-8"),
         hashlib.sha256
     ).hexdigest()
 
+    if not hmac.compare_digest(signature, expected):
+        raise Exception("Invalid job signature")
 
-def read_job_token(token):
-    try:
-        if "." not in token:
-            return None
+    padding = "=" * (-len(encoded_payload) % 4)
 
-        encoded_payload, supplied_signature = token.rsplit(".", 1)
+    decoded = base64.urlsafe_b64decode(
+        encoded_payload + padding
+    )
 
-        expected_signature = create_signature(encoded_payload)
+    payload = json.loads(
+        decoded.decode("utf-8")
+    )
 
-        if not hmac.compare_digest(
-            supplied_signature,
-            expected_signature
-        ):
-            return None
+    response_id = payload.get("r")
+    created = payload.get("t")
+    instrument = payload.get("i")
+    trade_focus = payload.get("f")
 
-        padding = "=" * (-len(encoded_payload) % 4)
+    if not response_id:
+        raise Exception("Token has no response ID")
 
-        raw_payload = base64.urlsafe_b64decode(
-            encoded_payload + padding
-        )
+    if not created:
+        raise Exception("Token has no creation time")
 
-        payload = json.loads(
-            raw_payload.decode("utf-8")
-        )
+    if time.time() - int(created) > JOB_TTL_SECONDS:
+        raise Exception("Job token expired")
 
-        response_id = payload.get("r")
-        created_at = payload.get("t")
-        instrument = payload.get("i")
-        trade_focus = payload.get("f")
-
-        if not response_id:
-            return None
-
-        if not created_at:
-            return None
-
-        if time.time() - int(created_at) > JOB_TTL_SECONDS:
-            return None
-
-        return {
-            "response_id": response_id,
-            "instrument": instrument or "",
-            "trade_focus": trade_focus or ""
-        }
-
-    except Exception:
-        return None
+    return (
+        response_id,
+        instrument,
+        trade_focus
+    )
 
 
-def get_openai_response(response_id):
+def get_response(response_id):
+
     api_key = os.environ.get("OPENAI_API_KEY")
 
     if not api_key:
-        raise RuntimeError("Server configuration error")
+        raise Exception("OPENAI_API_KEY is missing")
 
     url = OPENAI_URL + "/" + response_id
 
     request = urllib.request.Request(
         url,
-        method="GET",
         headers={
             "Authorization": "Bearer " + api_key,
             "Content-Type": "application/json"
-        }
+        },
+        method="GET"
     )
 
     with urllib.request.urlopen(
@@ -128,94 +108,15 @@ def get_openai_response(response_id):
         timeout=45
     ) as response:
 
-        raw = response.read().decode("utf-8")
+        data = response.read().decode("utf-8")
 
-        return json.loads(raw)
-
-
-def extract_text(response_data):
-    output = response_data.get("output", [])
-
-    if not isinstance(output, list):
-        return ""
-
-    pieces = []
-
-    for item in output:
-        if not isinstance(item, dict):
-            continue
-
-        content = item.get("content", [])
-
-        if not isinstance(content, list):
-            continue
-
-        for part in content:
-            if not isinstance(part, dict):
-                continue
-
-            text = part.get("text")
-
-            if isinstance(text, str):
-                pieces.append(text)
-
-    return "".join(pieces).strip()
-
-
-def parse_analysis(response_data, instrument, trade_focus):
-
-    text = extract_text(response_data)
-
-    if not text:
-        return None
-
-    try:
-        result = json.loads(text)
-    except Exception:
-        return None
-
-    if not isinstance(result, dict):
-        return None
-
-    result["instrument"] = result.get(
-        "instrument",
-        instrument
-    )
-
-    result["trade_focus"] = result.get(
-        "trade_focus",
-        trade_focus
-    )
-
-    signal = result.get("signal")
-
-    if signal not in [
-        "BUY",
-        "SELL",
-        "NO TRADE"
-    ]:
-        return None
-
-    confidence = result.get("confidence")
-
-    try:
-        confidence = int(confidence)
-    except Exception:
-        return None
-
-    confidence = max(
-        0,
-        min(100, confidence)
-    )
-
-    result["confidence"] = confidence
-
-    return result
+        return json.loads(data)
 
 
 class handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
+
         self.send_response(204)
 
         self.send_header(
@@ -245,13 +146,12 @@ class handler(BaseHTTPRequestHandler):
                 parsed.query
             )
 
-            job_values = params.get(
-                "job_id",
-                []
+            jobs = params.get(
+                "job_id"
             )
 
-            if not job_values:
-                json_response(
+            if not jobs:
+                send_json(
                     self,
                     400,
                     {
@@ -261,69 +161,23 @@ class handler(BaseHTTPRequestHandler):
                 )
                 return
 
-            token = job_values[0]
+            token = jobs[0]
 
-            job = read_job_token(token)
+            response_id, instrument, trade_focus = verify_token(
+                token
+            )
 
-            if not job:
-                json_response(
-                    self,
-                    400,
-                    {
-                        "status": "failed",
-                        "error": "Invalid or expired analysis job"
-                    }
-                )
-                return
+            data = get_response(
+                response_id
+            )
 
-            response_id = job["response_id"]
-            instrument = job["instrument"]
-            trade_focus = job["trade_focus"]
-
-            try:
-                response_data = get_openai_response(
-                    response_id
-                )
-
-            except urllib.error.HTTPError as error:
-
-                if error.code in [408, 409, 429, 500, 502, 503, 504]:
-
-                    json_response(
-                        self,
-                        200,
-                        {
-                            "status": "retry"
-                        }
-                    )
-                    return
-
-                json_response(
-                    self,
-                    200,
-                    {
-                        "status": "failed",
-                        "error": "Analysis service error"
-                    }
-                )
-                return
-
-            except (
-                urllib.error.URLError,
-                TimeoutError
-            ):
-
-                json_response(
-                    self,
-                    200,
-                    {
-                        "status": "retry"
-                    }
-                )
-                return
-
-            openai_status = response_data.get(
+            openai_status = data.get(
                 "status"
+            )
+
+            print(
+                "OPENAI STATUS:",
+                openai_status
             )
 
             if openai_status in [
@@ -332,7 +186,7 @@ class handler(BaseHTTPRequestHandler):
                 "processing"
             ]:
 
-                json_response(
+                send_json(
                     self,
                     200,
                     {
@@ -343,25 +197,56 @@ class handler(BaseHTTPRequestHandler):
 
             if openai_status == "completed":
 
-                result = parse_analysis(
-                    response_data,
-                    instrument,
-                    trade_focus
+                output = data.get(
+                    "output",
+                    []
                 )
 
-                if result is None:
+                text_parts = []
 
-                    json_response(
-                        self,
-                        200,
-                        {
-                            "status": "failed",
-                            "error": "Analysis returned invalid data"
-                        }
+                for item in output:
+
+                    if not isinstance(
+                        item,
+                        dict
+                    ):
+                        continue
+
+                    content = item.get(
+                        "content",
+                        []
                     )
-                    return
 
-                json_response(
+                    for part in content:
+
+                        if not isinstance(
+                            part,
+                            dict
+                        ):
+                            continue
+
+                        if isinstance(
+                            part.get("text"),
+                            str
+                        ):
+                            text_parts.append(
+                                part["text"]
+                            )
+
+                text = "".join(
+                    text_parts
+                ).strip()
+
+                if not text:
+                    raise Exception(
+                        "OpenAI completed but returned no text"
+                    )
+
+                result = json.loads(
+                    text
+                )
+
+                send_json(
                     self,
                     200,
                     {
@@ -379,31 +264,39 @@ class handler(BaseHTTPRequestHandler):
                 "incomplete"
             ]:
 
-                json_response(
+                print(
+                    "OPENAI TERMINAL RESPONSE:",
+                    json.dumps(data)
+                )
+
+                send_json(
                     self,
                     200,
                     {
                         "status": "failed",
-                        "error": "Analysis could not be completed"
+                        "error": "OpenAI analysis failed",
+                        "openai_status": openai_status
                     }
                 )
                 return
 
-            json_response(
-                self,
-                200,
-                {
-                    "status": "in_progress"
-                }
+            raise Exception(
+                "Unknown OpenAI response status: "
+                + str(openai_status)
             )
 
-        except Exception:
+        except Exception as error:
 
-            json_response(
+            print(
+                "ANALYSIS_STATUS_ERROR:",
+                repr(error)
+            )
+
+            send_json(
                 self,
                 500,
                 {
-                    "status": "failed",
-                    "error": "Analysis status server error"
+                    "status": "server_error",
+                    "error": str(error)
                 }
             )
