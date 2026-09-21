@@ -1,47 +1,2130 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>LAMAR TRADING BOT</title>
+
 <style>
-:root{--bg:#070a10;--panel:#0d121b;--panel2:#111824;--line:#202938;--text:#f4f7fb;--muted:#8994a6;--accent:#8b7cff;--accent2:#55d6be;--green:#36d399;--red:#ff6378;--yellow:#f5c76a;--shadow:0 18px 55px rgba(0,0,0,.35)}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% -10%,rgba(139,124,255,.16),transparent 35%),radial-gradient(circle at 0 35%,rgba(85,214,190,.08),transparent 28%),var(--bg);color:var(--text);font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif}button,input,select{font:inherit}.app{display:grid;grid-template-columns:230px 1fr;min-height:100vh}.sidebar{border-right:1px solid var(--line);background:rgba(8,11,17,.82);backdrop-filter:blur(16px);padding:25px 16px;position:sticky;top:0;height:100vh}.brand{display:flex;align-items:center;gap:11px;padding:7px 10px 30px}.logo{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--accent),#4c3ed0);display:grid;place-items:center;font-weight:900;box-shadow:0 8px 28px rgba(139,124,255,.25)}.brand b{letter-spacing:.12em}.brand small{display:block;color:var(--muted);font-size:10px;margin-top:2px;letter-spacing:.12em}.nav{display:grid;gap:7px}.nav button{background:transparent;border:0;color:#aeb7c6;text-align:left;padding:12px 13px;border-radius:11px;cursor:pointer}.nav button.active,.nav button:hover{background:#151b27;color:white}.sidefoot{position:absolute;bottom:20px;left:16px;right:16px;color:#687386;font-size:11px;padding:12px;border:1px solid var(--line);border-radius:12px}.main{padding:28px 34px 45px;max-width:1400px;width:100%;margin:auto}.top{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:25px}.eyebrow{color:#9c93ff;text-transform:uppercase;letter-spacing:.18em;font-size:10px;font-weight:800}.top h1{font-size:31px;margin:5px 0 4px;letter-spacing:-.04em}.top p{margin:0;color:var(--muted)}.status{display:flex;align-items:center;gap:9px;border:1px solid var(--line);background:rgba(13,18,27,.75);padding:9px 12px;border-radius:999px;color:#b9c2d0;font-size:12px}.dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 14px var(--green)}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:18px}.step{border:1px solid var(--line);background:rgba(13,18,27,.72);border-radius:14px;padding:13px 15px;color:#6f7a8b}.step strong{display:block;color:#cbd3df;font-size:12px}.step.active{border-color:#38325f;background:linear-gradient(180deg,rgba(139,124,255,.12),rgba(13,18,27,.75))}.step.active strong{color:white}.layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px}.card{background:linear-gradient(180deg,rgba(17,24,36,.92),rgba(11,16,24,.92));border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow)}.card.pad{padding:20px}.cardhead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:17px}.cardhead h2,.cardhead h3{margin:0;font-size:15px}.sub{color:var(--muted);font-size:12px}.select{width:100%;background:#090e16;color:white;border:1px solid #293345;border-radius:11px;padding:12px;outline:none}.uploadgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.upload{min-height:245px;border:1px dashed #364154;border-radius:15px;padding:15px;position:relative;background:rgba(7,10,16,.42);overflow:hidden}.upload.ready{border-color:#3b7e6f}.uploadtop{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.tag{font-size:10px;color:#9ca7b7;border:1px solid var(--line);border-radius:999px;padding:4px 8px}.drop{height:185px;border-radius:12px;display:grid;place-items:center;text-align:center;background:rgba(255,255,255,.015);cursor:pointer;overflow:hidden}.drop:hover{background:rgba(139,124,255,.05)}.drop img{width:100%;height:100%;object-fit:contain}.drop input{display:none}.drop .placeholder{padding:20px;color:var(--muted)}.upload-icon{width:42px;height:42px;border-radius:12px;background:#171e2b;display:grid;place-items:center;margin:0 auto 9px;color:#a99fff;font-size:19px}.actions{display:flex;align-items:center;gap:12px;margin-top:15px}.readytext{font-size:12px;color:var(--muted);flex:1}.readytext b{color:#b8c1d0}.primary{border:0;border-radius:12px;padding:13px 19px;background:linear-gradient(135deg,var(--accent),#6254e9);color:white;font-weight:800;cursor:pointer;box-shadow:0 10px 30px rgba(139,124,255,.2)}.primary:disabled{opacity:.4;cursor:not-allowed;box-shadow:none}.ghost{border:1px solid var(--line);background:#0b1018;color:#bac3d1;border-radius:11px;padding:11px 14px;cursor:pointer}.result{margin-top:18px;display:none}.result.show{display:block}.signal{display:flex;justify-content:space-between;align-items:center;padding:19px;border-radius:16px;border:1px solid var(--line);background:#0b1018;margin-bottom:12px}.signal .big{font-size:28px;font-weight:900;letter-spacing:.02em}.buy .big{color:var(--green)}.sell .big{color:var(--red)}.neutral .big{color:var(--yellow)}.confidence{text-align:right}.confidence b{font-size:25px}.confidence span{display:block;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.1em}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{border:1px solid var(--line);background:#0b1018;border-radius:13px;padding:13px}.metric span{display:block;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.1em}.metric b{display:block;margin-top:5px;font-size:15px}.explain{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.block{border:1px solid var(--line);background:#0b1018;border-radius:13px;padding:14px}.block h4{margin:0 0 6px;font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#9ca7b7}.block p{margin:0;color:#cbd3df;white-space:pre-wrap}.history{display:none}.history.show{display:block}.historyrow{display:grid;grid-template-columns:80px 90px 1fr 80px;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);align-items:center}.historyrow:last-child{border-bottom:0}.smallpill{font-size:10px;border-radius:999px;padding:4px 7px;background:#171e2b;text-align:center}.help{color:var(--muted);font-size:12px}.sidecard{margin-bottom:14px}.check{display:flex;align-items:center;gap:9px;color:#aeb8c7;margin:10px 0}.check i{width:8px;height:8px;border-radius:50%;background:#566274}.check.on i{background:var(--green);box-shadow:0 0 10px var(--green)}.loader{display:none;align-items:center;gap:10px;color:#b9c2d0}.loader.show{display:flex}.spin{width:15px;height:15px;border:2px solid #30394b;border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.error{display:none;margin-top:12px;color:#ff9ba8;background:rgba(255,99,120,.07);border:1px solid rgba(255,99,120,.22);padding:12px;border-radius:12px}.error.show{display:block}@media(max-width:1050px){.app{grid-template-columns:1fr}.sidebar{display:none}.main{padding:22px 16px}.layout{grid-template-columns:1fr}.sidepanel{display:none}}@media(max-width:700px){.top{display:block}.status{display:inline-flex;margin-top:14px}.steps{grid-template-columns:1fr}.uploadgrid,.explain{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.actions{align-items:stretch;flex-direction:column}.primary,.ghost{width:100%}}
-</style></head>
+:root{
+  --bg:#070a10;
+  --panel:#0d121b;
+  --panel2:#111824;
+  --line:#202938;
+  --text:#f4f7fb;
+  --muted:#8994a6;
+  --accent:#8b7cff;
+  --accent2:#55d6be;
+  --green:#36d399;
+  --red:#ff6378;
+  --yellow:#f5c76a;
+  --shadow:0 18px 55px rgba(0,0,0,.35)
+}
+
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  background:
+    radial-gradient(circle at 80% -10%,rgba(139,124,255,.16),transparent 35%),
+    radial-gradient(circle at 0 35%,rgba(85,214,190,.08),transparent 28%),
+    var(--bg);
+  color:var(--text);
+  font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif
+}
+
+button,input,select{font:inherit}
+
+.app{
+  display:grid;
+  grid-template-columns:230px 1fr;
+  min-height:100vh
+}
+
+.sidebar{
+  border-right:1px solid var(--line);
+  background:rgba(8,11,17,.82);
+  backdrop-filter:blur(16px);
+  padding:25px 16px;
+  position:sticky;
+  top:0;
+  height:100vh
+}
+
+.brand{
+  display:flex;
+  align-items:center;
+  gap:11px;
+  padding:7px 10px 30px
+}
+
+.logo{
+  width:38px;
+  height:38px;
+  border-radius:12px;
+  background:linear-gradient(135deg,var(--accent),#4c3ed0);
+  display:grid;
+  place-items:center;
+  font-weight:900;
+  box-shadow:0 8px 28px rgba(139,124,255,.25)
+}
+
+.brand b{letter-spacing:.12em}
+
+.brand small{
+  display:block;
+  color:var(--muted);
+  font-size:10px;
+  margin-top:2px;
+  letter-spacing:.12em
+}
+
+.nav{display:grid;gap:7px}
+
+.nav button{
+  background:transparent;
+  border:0;
+  color:#aeb7c6;
+  text-align:left;
+  padding:12px 13px;
+  border-radius:11px;
+  cursor:pointer
+}
+
+.nav button.active,
+.nav button:hover{
+  background:#151b27;
+  color:white
+}
+
+.sidefoot{
+  position:absolute;
+  bottom:20px;
+  left:16px;
+  right:16px;
+  color:#687386;
+  font-size:11px;
+  padding:12px;
+  border:1px solid var(--line);
+  border-radius:12px
+}
+
+.main{
+  padding:28px 34px 45px;
+  max-width:1400px;
+  width:100%;
+  margin:auto
+}
+
+.top{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:20px;
+  margin-bottom:25px
+}
+
+.eyebrow{
+  color:#9c93ff;
+  text-transform:uppercase;
+  letter-spacing:.18em;
+  font-size:10px;
+  font-weight:800
+}
+
+.top h1{
+  font-size:31px;
+  margin:5px 0 4px;
+  letter-spacing:-.04em
+}
+
+.top p{
+  margin:0;
+  color:var(--muted)
+}
+
+.status{
+  display:flex;
+  align-items:center;
+  gap:9px;
+  border:1px solid var(--line);
+  background:rgba(13,18,27,.75);
+  padding:9px 12px;
+  border-radius:999px;
+  color:#b9c2d0;
+  font-size:12px
+}
+
+.dot{
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:var(--green);
+  box-shadow:0 0 14px var(--green)
+}
+
+.steps{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:9px;
+  margin-bottom:18px
+}
+
+.step{
+  border:1px solid var(--line);
+  background:rgba(13,18,27,.72);
+  border-radius:14px;
+  padding:13px 15px;
+  color:#6f7a8b
+}
+
+.step strong{
+  display:block;
+  color:#cbd3df;
+  font-size:12px
+}
+
+.step.active{
+  border-color:#38325f;
+  background:linear-gradient(
+    180deg,
+    rgba(139,124,255,.12),
+    rgba(13,18,27,.75)
+  )
+}
+
+.step.active strong{color:white}
+
+.layout{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 340px;
+  gap:18px
+}
+
+.card{
+  background:linear-gradient(
+    180deg,
+    rgba(17,24,36,.92),
+    rgba(11,16,24,.92)
+  );
+  border:1px solid var(--line);
+  border-radius:18px;
+  box-shadow:var(--shadow)
+}
+
+.card.pad{padding:20px}
+
+.cardhead{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+  margin-bottom:17px
+}
+
+.cardhead h2,
+.cardhead h3{
+  margin:0;
+  font-size:15px
+}
+
+.sub{
+  color:var(--muted);
+  font-size:12px
+}
+
+.select{
+  width:100%;
+  background:#090e16;
+  color:white;
+  border:1px solid #293345;
+  border-radius:11px;
+  padding:12px;
+  outline:none
+}
+
+.focusgrid{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:9px
+}
+
+.focus{
+  border:1px solid #293345;
+  background:#090e16;
+  color:#9ca7b7;
+  border-radius:11px;
+  padding:11px;
+  cursor:pointer;
+  font-weight:800
+}
+
+.focus.active{
+  border-color:#675bd8;
+  background:rgba(139,124,255,.12);
+  color:white
+}
+
+.uploadgrid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:14px
+}
+
+.upload{
+  min-height:245px;
+  border:1px dashed #364154;
+  border-radius:15px;
+  padding:15px;
+  position:relative;
+  background:rgba(7,10,16,.42);
+  overflow:hidden
+}
+
+.upload.ready{border-color:#3b7e6f}
+
+.uploadtop{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:10px
+}
+
+.tag{
+  font-size:10px;
+  color:#9ca7b7;
+  border:1px solid var(--line);
+  border-radius:999px;
+  padding:4px 8px
+}
+
+.drop{
+  height:185px;
+  border-radius:12px;
+  display:grid;
+  place-items:center;
+  text-align:center;
+  background:rgba(255,255,255,.015);
+  cursor:pointer;
+  overflow:hidden
+}
+
+.drop:hover{
+  background:rgba(139,124,255,.05)
+}
+
+.drop img{
+  width:100%;
+  height:100%;
+  object-fit:contain
+}
+
+.drop input{display:none}
+
+.drop .placeholder{
+  padding:20px;
+  color:var(--muted)
+}
+
+.upload-icon{
+  width:42px;
+  height:42px;
+  border-radius:12px;
+  background:#171e2b;
+  display:grid;
+  place-items:center;
+  margin:0 auto 9px;
+  color:#a99fff;
+  font-size:19px
+}
+
+.actions{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  margin-top:15px
+}
+
+.readytext{
+  font-size:12px;
+  color:var(--muted);
+  flex:1
+}
+
+.readytext b{color:#b8c1d0}
+
+.primary{
+  border:0;
+  border-radius:12px;
+  padding:13px 19px;
+  background:linear-gradient(135deg,var(--accent),#6254e9);
+  color:white;
+  font-weight:800;
+  cursor:pointer;
+  box-shadow:0 10px 30px rgba(139,124,255,.2)
+}
+
+.primary:disabled{
+  opacity:.4;
+  cursor:not-allowed;
+  box-shadow:none
+}
+
+.ghost{
+  border:1px solid var(--line);
+  background:#0b1018;
+  color:#bac3d1;
+  border-radius:11px;
+  padding:11px 14px;
+  cursor:pointer
+}
+
+.loader{
+  display:none;
+  align-items:center;
+  gap:10px;
+  color:#b9c2d0;
+  margin-top:15px
+}
+
+.loader.show{display:flex}
+
+.spin{
+  width:15px;
+  height:15px;
+  border:2px solid #30394b;
+  border-top-color:var(--accent);
+  border-radius:50%;
+  animation:spin .8s linear infinite
+}
+
+@keyframes spin{
+  to{transform:rotate(360deg)}
+}
+
+.error{
+  display:none;
+  margin-top:12px;
+  color:#ff9ba8;
+  background:rgba(255,99,120,.07);
+  border:1px solid rgba(255,99,120,.22);
+  padding:12px;
+  border-radius:12px
+}
+
+.error.show{display:block}
+
+.result{
+  margin-top:18px;
+  display:none
+}
+
+.result.show{display:block}
+
+.signal{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:19px;
+  border-radius:16px;
+  border:1px solid var(--line);
+  background:#0b1018;
+  margin-bottom:12px
+}
+
+.signal .big{
+  font-size:28px;
+  font-weight:900;
+  letter-spacing:.02em
+}
+
+.buy .big{color:var(--green)}
+.sell .big{color:var(--red)}
+.neutral .big{color:var(--yellow)}
+
+.confidence{text-align:right}
+
+.confidence b{font-size:25px}
+
+.confidence span{
+  display:block;
+  color:var(--muted);
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:.1em
+}
+
+.metrics{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:10px
+}
+
+.metric{
+  border:1px solid var(--line);
+  background:#0b1018;
+  border-radius:13px;
+  padding:13px
+}
+
+.metric span{
+  display:block;
+  color:var(--muted);
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:.1em
+}
+
+.metric b{
+  display:block;
+  margin-top:5px;
+  font-size:15px
+}
+
+.explain{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+  margin-top:10px
+}
+
+.block{
+  border:1px solid var(--line);
+  background:#0b1018;
+  border-radius:13px;
+  padding:14px
+}
+
+.block h4{
+  margin:0 0 6px;
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:.12em;
+  color:#9ca7b7
+}
+
+.block p{
+  margin:0;
+  color:#cbd3df;
+  white-space:pre-wrap
+}
+
+.methodlist{
+  display:flex;
+  flex-wrap:wrap;
+  gap:7px
+}
+
+.methodpill{
+  border:1px solid var(--line);
+  background:#111824;
+  border-radius:999px;
+  padding:5px 9px;
+  font-size:11px;
+  color:#cbd3df
+}
+
+.history{display:none}
+
+.history.show{display:block}
+
+.historyrow{
+  display:grid;
+  grid-template-columns:80px 90px 1fr 80px;
+  gap:12px;
+  padding:12px 0;
+  border-bottom:1px solid var(--line);
+  align-items:center
+}
+
+.historyrow:last-child{border-bottom:0}
+
+.smallpill{
+  font-size:10px;
+  border-radius:999px;
+  padding:4px 7px;
+  background:#171e2b;
+  text-align:center
+}
+
+.help{
+  color:var(--muted);
+  font-size:12px
+}
+
+.sidecard{margin-bottom:14px}
+
+.check{
+  display:flex;
+  align-items:center;
+  gap:9px;
+  color:#aeb8c7;
+  margin:10px 0
+}
+
+.check i{
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:#566274
+}
+
+.check.on i{
+  background:var(--green);
+  box-shadow:0 0 10px var(--green)
+}
+
+@media(max-width:1050px){
+  .app{grid-template-columns:1fr}
+  .sidebar{display:none}
+  .main{padding:22px 16px}
+  .layout{grid-template-columns:1fr}
+  .sidepanel{display:none}
+}
+
+@media(max-width:700px){
+  .top{display:block}
+  .status{
+    display:inline-flex;
+    margin-top:14px
+  }
+
+  .steps{grid-template-columns:1fr}
+
+  .uploadgrid,
+  .explain{
+    grid-template-columns:1fr
+  }
+
+  .metrics{
+    grid-template-columns:1fr 1fr
+  }
+
+  .focusgrid{
+    grid-template-columns:1fr
+  }
+
+  .actions{
+    align-items:stretch;
+    flex-direction:column
+  }
+
+  .primary,
+  .ghost{
+    width:100%
+  }
+}
+</style>
+</head>
+
 <body>
+
 <div class="app">
-<aside class="sidebar"><div class="brand"><div class="logo">L</div><div><b>LAMAR</b><small>TRADING BOT</small></div></div><div class="nav"><button class="active" data-view="dashboard">⌂ &nbsp; Dashboard</button><button data-view="analysis">＋ &nbsp; New Analysis</button><button data-view="history">◷ &nbsp; History</button></div><div class="sidefoot">AI chart intelligence<br><span>4H + 15M multi-timeframe analysis</span></div></aside>
+
+<aside class="sidebar">
+
+  <div class="brand">
+    <div class="logo">L</div>
+    <div>
+      <b>LAMAR</b>
+      <small>TRADING BOT</small>
+    </div>
+  </div>
+
+  <div class="nav">
+    <button class="active" data-view="dashboard">
+      ⌂ &nbsp; Dashboard
+    </button>
+
+    <button data-view="analysis">
+      ＋ &nbsp; New Analysis
+    </button>
+
+    <button data-view="history">
+      ◷ &nbsp; History
+    </button>
+  </div>
+
+  <div class="sidefoot">
+    AI chart intelligence<br>
+    <span>4H + 15M multi-timeframe analysis</span>
+  </div>
+
+</aside>
+
 <main class="main">
-<section class="top"><div><div class="eyebrow">LAMAR FOREX INTELLIGENCE</div><h1>Chart Analysis Workspace</h1><p>Upload the two preferred timeframes and let the engine evaluate the setup.</p></div><div class="status"><span class="dot"></span> System online</div></section>
-<div class="steps"><div class="step active"><strong>01 · Instrument</strong>Select the market</div><div class="step active"><strong>02 · Charts</strong>4H + 15M evidence</div><div class="step"><strong>03 · Analysis</strong>AI assessment</div></div>
+
+<section class="top">
+
+  <div>
+    <div class="eyebrow">LAMAR FOREX INTELLIGENCE</div>
+
+    <h1>Chart Analysis Workspace</h1>
+
+    <p>
+      Upload the two preferred timeframes and let the engine evaluate the setup.
+    </p>
+  </div>
+
+  <div class="status">
+    <span class="dot"></span>
+    System online
+  </div>
+
+</section>
+
+
+<div class="steps">
+
+  <div class="step active">
+    <strong>01 · Instrument</strong>
+    Select the market
+  </div>
+
+  <div class="step active">
+    <strong>02 · Charts</strong>
+    4H + 15M evidence
+  </div>
+
+  <div class="step">
+    <strong>03 · Analysis</strong>
+    AI assessment
+  </div>
+
+</div>
+
+
 <div id="dashboardView">
-<div class="layout"><div>
-<div class="card pad"><div class="cardhead"><div><h2>Market selection</h2><div class="sub">Choose the instrument shown in your screenshots.</div></div><span class="tag">LIVE SESSION</span></div><select id="pair" class="select"><option>EURUSD</option><option>GBPUSD</option><option>USDJPY</option><option>XAUUSD</option><option>GBPJPY</option><option>AUDUSD</option><option>USDCAD</option><option>USDCHF</option><option>EURGBP</option><option>BTCUSD</option></select></div>
-<div class="card pad" style="margin-top:15px"><div class="cardhead"><div><h2>Chart evidence</h2><div class="sub">Use clean screenshots with visible price scale and candles.</div></div><span id="readyBadge" class="tag">WAITING FOR CHARTS</span></div>
-<div class="uploadgrid">
-<div class="upload" id="up4"><div class="uploadtop"><b>4H · Higher timeframe</b><span class="tag">CONTEXT</span></div><label class="drop" for="h4"><div class="placeholder" id="ph4"><div class="upload-icon">↥</div><b>Upload 4H chart</b><br><span>PNG, JPG or WEBP</span></div><img id="img4" style="display:none"><input id="h4" type="file" accept="image/png,image/jpeg,image/webp"></label></div>
-<div class="upload" id="up15"><div class="uploadtop"><b>15M · Execution timeframe</b><span class="tag">CONFIRMATION</span></div><label class="drop" for="m15"><div class="placeholder" id="ph15"><div class="upload-icon">↥</div><b>Upload 15M chart</b><br><span>PNG, JPG or WEBP</span></div><img id="img15" style="display:none"><input id="m15" type="file" accept="image/png,image/jpeg,image/webp"></label></div>
+
+<div class="layout">
+
+<div>
+
+<!-- MARKET -->
+
+<div class="card pad">
+
+  <div class="cardhead">
+
+    <div>
+      <h2>Market selection</h2>
+      <div class="sub">
+        Choose the instrument shown in your screenshots.
+      </div>
+    </div>
+
+    <span class="tag">LIVE SESSION</span>
+
+  </div>
+
+  <select id="pair" class="select">
+
+    <option>EURUSD</option>
+    <option>GBPUSD</option>
+    <option>USDJPY</option>
+    <option>XAUUSD</option>
+    <option>GBPJPY</option>
+    <option>AUDUSD</option>
+    <option>USDCAD</option>
+    <option>USDCHF</option>
+    <option>EURGBP</option>
+    <option>BTCUSD</option>
+
+  </select>
+
 </div>
-<div class="actions"><div class="readytext" id="readyText"><b>Not ready.</b> Add both chart timeframes.</div><button class="ghost" id="clear">Clear</button><button class="primary" id="go" disabled>Analyze Chart →</button></div><div class="loader" id="loader"><span class="spin"></span><span>Reading structure, price levels and multi-timeframe context…</span></div><div class="error" id="error"></div>
+
+
+<!-- TRADE FOCUS -->
+
+<div class="card pad" style="margin-top:15px">
+
+  <div class="cardhead">
+
+    <div>
+      <h2>Trade focus</h2>
+
+      <div class="sub">
+        Tell the engine what type of setup you are looking for.
+      </div>
+    </div>
+
+    <span class="tag">ANALYSIS STYLE</span>
+
+  </div>
+
+  <div class="focusgrid">
+
+    <button class="focus" data-focus="SCALP">
+      SCALP
+    </button>
+
+    <button class="focus active" data-focus="DAY TRADE">
+      DAY TRADE
+    </button>
+
+    <button class="focus" data-focus="SWING">
+      SWING
+    </button>
+
+  </div>
+
 </div>
-<div class="result" id="result"><div class="signal neutral" id="signalBox"><div><div class="sub">TRADE DECISION</div><div class="big" id="signal">NO TRADE</div></div><div class="confidence"><b id="confidence">—%</b><span>analysis confidence</span></div></div><div class="metrics"><div class="metric"><span>Entry</span><b id="entry">—</b></div><div class="metric"><span>Stop loss</span><b id="sl">—</b></div><div class="metric"><span>Take profit 1</span><b id="tp1">—</b></div><div class="metric"><span>Risk / reward</span><b id="rr">—</b></div></div><div class="metrics" style="margin-top:10px"><div class="metric"><span>Take profit 2</span><b id="tp2">—</b></div><div class="metric"><span>Instrument</span><b id="instrument">—</b></div><div class="metric"><span>4H context</span><b id="htfShort">—</b></div><div class="metric"><span>15M confirmation</span><b id="ltfShort">—</b></div></div><div class="explain"><div class="block"><h4>4H context</h4><p id="htf">—</p></div><div class="block"><h4>15M confirmation</h4><p id="ltf">—</p></div><div class="block"><h4>Data analysis</h4><p id="data">—</p></div><div class="block"><h4>Explanation & warnings</h4><p id="explanation">—</p></div></div></div>
+
+
+<!-- CHARTS -->
+
+<div class="card pad" style="margin-top:15px">
+
+  <div class="cardhead">
+
+    <div>
+      <h2>Chart evidence</h2>
+
+      <div class="sub">
+        Use clean screenshots with visible price scale and candles.
+      </div>
+    </div>
+
+    <span id="readyBadge" class="tag">
+      WAITING FOR CHARTS
+    </span>
+
+  </div>
+
+
+  <div class="uploadgrid">
+
+    <div class="upload" id="up4">
+
+      <div class="uploadtop">
+
+        <b>4H · Higher timeframe</b>
+
+        <span class="tag">
+          CONTEXT
+        </span>
+
+      </div>
+
+      <label class="drop" for="h4">
+
+        <div class="placeholder" id="ph4">
+
+          <div class="upload-icon">↥</div>
+
+          <b>Upload 4H chart</b>
+
+          <br>
+
+          <span>PNG, JPG or WEBP</span>
+
+        </div>
+
+        <img id="img4" style="display:none">
+
+        <input
+          id="h4"
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+        >
+
+      </label>
+
+    </div>
+
+
+    <div class="upload" id="up15">
+
+      <div class="uploadtop">
+
+        <b>15M · Execution timeframe</b>
+
+        <span class="tag">
+          CONFIRMATION
+        </span>
+
+      </div>
+
+      <label class="drop" for="m15">
+
+        <div class="placeholder" id="ph15">
+
+          <div class="upload-icon">↥</div>
+
+          <b>Upload 15M chart</b>
+
+          <br>
+
+          <span>PNG, JPG or WEBP</span>
+
+        </div>
+
+        <img id="img15" style="display:none">
+
+        <input
+          id="m15"
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+        >
+
+      </label>
+
+    </div>
+
+  </div>
+
+
+  <div class="actions">
+
+    <div class="readytext" id="readyText">
+
+      <b>Not ready.</b>
+      Add both chart timeframes.
+
+    </div>
+
+    <button class="ghost" id="clear">
+      Clear
+    </button>
+
+    <button class="primary" id="go" disabled>
+      Analyze Chart →
+    </button>
+
+  </div>
+
+
+  <div class="loader" id="loader">
+
+    <span class="spin"></span>
+
+    <span id="loaderText">
+      Starting analysis…
+    </span>
+
+  </div>
+
+
+  <div class="error" id="error"></div>
+
 </div>
-<div class="sidepanel"><div class="card pad sidecard"><div class="cardhead"><h3>Analysis rules</h3></div><div class="check on"><i></i> Multi-timeframe alignment</div><div class="check on"><i></i> Visible price-level validation</div><div class="check on"><i></i> Conservative trade filtering</div><div class="check on"><i></i> No invented prices</div><p class="help">Confidence is an analysis-confidence score, not a guaranteed probability of profit.</p></div><div class="card pad"><div class="cardhead"><h3>Session</h3><span class="tag">SECURE</span></div><p class="help">Your AI credential stays on the server. Chart images are sent only when you press Analyze Chart.</p></div></div></div>
+
+
+<!-- RESULT -->
+
+<div class="result" id="result">
+
+  <div class="signal neutral" id="signalBox">
+
+    <div>
+
+      <div class="sub">
+        TRADE DECISION
+      </div>
+
+      <div class="big" id="signal">
+        NO TRADE
+      </div>
+
+    </div>
+
+    <div class="confidence">
+
+      <b id="confidence">
+        —
+      </b>
+
+      <span>
+        analysis confidence
+      </span>
+
+    </div>
+
+  </div>
+
+
+  <div class="metrics">
+
+    <div class="metric">
+      <span>Entry</span>
+      <b id="entry">—</b>
+    </div>
+
+    <div class="metric">
+      <span>Stop loss</span>
+      <b id="sl">—</b>
+    </div>
+
+    <div class="metric">
+      <span>Take profit 1</span>
+      <b id="tp1">—</b>
+    </div>
+
+    <div class="metric">
+      <span>Risk / reward</span>
+      <b id="rr">—</b>
+    </div>
+
+  </div>
+
+
+  <div class="metrics" style="margin-top:10px">
+
+    <div class="metric">
+      <span>Take profit 2</span>
+      <b id="tp2">—</b>
+    </div>
+
+    <div class="metric">
+      <span>Instrument</span>
+      <b id="instrument">—</b>
+    </div>
+
+    <div class="metric">
+      <span>Trend</span>
+      <b id="trend">—</b>
+    </div>
+
+    <div class="metric">
+      <span>Strength</span>
+      <b id="strength">—</b>
+    </div>
+
+  </div>
+
+
+  <div class="metrics" style="margin-top:10px">
+
+    <div class="metric">
+      <span>Trade focus</span>
+      <b id="focusResult">—</b>
+    </div>
+
+    <div class="metric">
+      <span>Duration</span>
+      <b id="duration">—</b>
+    </div>
+
+    <div class="metric">
+      <span>4H context</span>
+      <b id="htfShort">—</b>
+    </div>
+
+    <div class="metric">
+      <span>15M confirmation</span>
+      <b id="ltfShort">—</b>
+    </div>
+
+  </div>
+
+
+  <div class="explain">
+
+    <div class="block">
+
+      <h4>4H context</h4>
+
+      <p id="htf">—</p>
+
+    </div>
+
+
+    <div class="block">
+
+      <h4>15M confirmation</h4>
+
+      <p id="ltf">—</p>
+
+    </div>
+
+
+    <div class="block">
+
+      <h4>Data analysis</h4>
+
+      <p id="data">—</p>
+
+    </div>
+
+
+    <div class="block">
+
+      <h4>Explanation</h4>
+
+      <p id="explanation">—</p>
+
+    </div>
+
+
+    <div class="block">
+
+      <h4>Contributing methods</h4>
+
+      <div
+        id="contributing"
+        class="methodlist"
+      >
+        —
+      </div>
+
+    </div>
+
+
+    <div class="block">
+
+      <h4>Weak methods</h4>
+
+      <div
+        id="weak"
+        class="methodlist"
+      >
+        —
+      </div>
+
+    </div>
+
+
+    <div class="block">
+
+      <h4>Conflicting methods</h4>
+
+      <div
+        id="conflicting"
+        class="methodlist"
+      >
+        —
+      </div>
+
+    </div>
+
+
+    <div class="block">
+
+      <h4>News & fundamental risk</h4>
+
+      <p id="newsRisk">—</p>
+
+    </div>
+
+
+    <div class="block">
+
+      <h4>Warnings</h4>
+
+      <p id="warnings">—</p>
+
+    </div>
+
+  </div>
+
 </div>
-<div class="history" id="historyView"><div class="card pad"><div class="cardhead"><div><h2>Analysis history</h2><div class="sub">Saved locally on this browser from completed analyses.</div></div><button class="ghost" id="clearHistory">Clear history</button></div><div id="historyList" class="help">No analyses yet.</div></div></div>
-</main></div>
+
+</div>
+
+
+<!-- SIDE PANEL -->
+
+<div class="sidepanel">
+
+  <div class="card pad sidecard">
+
+    <div class="cardhead">
+      <h3>Analysis rules</h3>
+    </div>
+
+    <div class="check on">
+      <i></i>
+      Multi-timeframe alignment
+    </div>
+
+    <div class="check on">
+      <i></i>
+      Market structure
+    </div>
+
+    <div class="check on">
+      <i></i>
+      Liquidity analysis
+    </div>
+
+    <div class="check on">
+      <i></i>
+      Price action
+    </div>
+
+    <div class="check on">
+      <i></i>
+      SMC / OB / FVG
+    </div>
+
+    <div class="check on">
+      <i></i>
+      Fibonacci & premium/discount
+    </div>
+
+    <div class="check on">
+      <i></i>
+      Conservative trade filtering
+    </div>
+
+    <div class="check on">
+      <i></i>
+      No invented prices
+    </div>
+
+    <p class="help">
+      Confidence is an analysis-confidence score,
+      not a guaranteed probability of profit.
+    </p>
+
+  </div>
+
+
+  <div class="card pad">
+
+    <div class="cardhead">
+
+      <h3>Session</h3>
+
+      <span class="tag">
+        SECURE
+      </span>
+
+    </div>
+
+    <p class="help">
+      Your AI credential stays on the server.
+      Chart images are sent only when you press
+      Analyze Chart.
+    </p>
+
+  </div>
+
+</div>
+
+</div>
+
+</div>
+
+
+<!-- HISTORY -->
+
+<div class="history" id="historyView">
+
+  <div class="card pad">
+
+    <div class="cardhead">
+
+      <div>
+
+        <h2>Analysis history</h2>
+
+        <div class="sub">
+          Saved locally on this browser from completed analyses.
+        </div>
+
+      </div>
+
+      <button class="ghost" id="clearHistory">
+        Clear history
+      </button>
+
+    </div>
+
+    <div id="historyList" class="help">
+      No analyses yet.
+    </div>
+
+  </div>
+
+</div>
+
+</main>
+</div>
+
+
 <script>
-const $=s=>document.querySelector(s), h4=$('#h4'),m15=$('#m15'),go=$('#go'),result=$('#result'),loader=$('#loader'),error=$('#error');
-let lastFiles={h4:null,m15:null};
-function showPreview(input,img,ph,card){const f=input.files[0];if(!f)return;lastFiles[input===h4?'h4':'m15']=f;img.src=URL.createObjectURL(f);img.style.display='block';ph.style.display='none';card.classList.add('ready');updateReady()}
-function updateReady(){const ready=!!(h4.files[0]&&m15.files[0]);go.disabled=!ready;$('#readyBadge').textContent=ready?'READY TO ANALYZE':'WAITING FOR CHARTS';$('#readyText').innerHTML=ready?'<b>Ready.</b> Both timeframes are loaded.':'<b>Not ready.</b> Add both chart timeframes.'}
-h4.onchange=()=>showPreview(h4,$('#img4'),$('#ph4'),$('#up4'));m15.onchange=()=>showPreview(m15,$('#img15'),$('#ph15'),$('#up15'));
-function b64(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f)})}
-function val(x){return x===null||x===undefined||x===''?'—':x}
-function render(d){const s=String(d.signal||'NO TRADE').toUpperCase();const box=$('#signalBox');box.className='signal '+(s==='BUY'?'buy':s==='SELL'?'sell':'neutral');$('#signal').textContent=s;$('#confidence').textContent=val(d.confidence)+'%';$('#entry').textContent=val(d.entry);$('#sl').textContent=val(d.stop_loss);$('#tp1').textContent=val(d.take_profit_1);$('#tp2').textContent=val(d.take_profit_2);$('#rr').textContent=val(d.risk_reward);$('#instrument').textContent=val(d.instrument);$('#htfShort').textContent=val(d.higher_timeframe_context);$('#ltfShort').textContent=val(d.lower_timeframe_confirmation);$('#htf').textContent=val(d.higher_timeframe_context);$('#ltf').textContent=val(d.lower_timeframe_confirmation);$('#data').textContent=val(d.data_analysis);let warn=Array.isArray(d.warnings)?d.warnings.join('\n'):val(d.warnings);$('#explanation').textContent=(val(d.explanation))+(warn&&warn!=='—'?'\n\nWarnings:\n'+warn:'');result.classList.add('show');document.querySelectorAll('.step')[2].classList.add('active');saveHistory(d)}
-function saveHistory(d){let arr=[];try{arr=JSON.parse(localStorage.getItem('lamarHistory')||'[]')}catch{};arr.unshift({time:new Date().toLocaleString(),instrument:d.instrument,signal:d.signal,confidence:d.confidence});localStorage.setItem('lamarHistory',JSON.stringify(arr.slice(0,20)));renderHistory()}
-function renderHistory(){let arr=[];try{arr=JSON.parse(localStorage.getItem('lamarHistory')||'[]')}catch{};$('#historyList').innerHTML=arr.length?arr.map(x=>`<div class="historyrow"><span class="smallpill">${x.signal||'—'}</span><b>${x.instrument||'—'}</b><span class="help">${x.time||''}</span><span>${x.confidence??'—'}%</span></div>`).join(''):'No analyses yet.'}
-go.onclick=async()=>{error.classList.remove('show');result.classList.remove('show');loader.classList.add('show');go.disabled=true;try{const body={instrument:$('#pair').value,higher_timeframe_image:await b64(h4.files[0]),lower_timeframe_image:await b64(m15.files[0])};const r=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let d;try{d=await r.json()}catch{throw new Error('The server returned an invalid response. Check the Vercel deployment logs.')}if(!r.ok)throw new Error(d.error||'Analysis failed');render(d);result.scrollIntoView({behavior:'smooth',block:'start'})}catch(e){error.textContent=e.message;error.classList.add('show')}finally{loader.classList.remove('show');updateReady()}};
-$('#clear').onclick=()=>{h4.value='';m15.value='';$('#img4').style.display='none';$('#img15').style.display='none';$('#ph4').style.display='block';$('#ph15').style.display='block';$('#up4').classList.remove('ready');$('#up15').classList.remove('ready');result.classList.remove('show');error.classList.remove('show');updateReady()};
-$('#clearHistory').onclick=()=>{localStorage.removeItem('lamarHistory');renderHistory()};
-document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');const v=b.dataset.view;$('#dashboardView').style.display=v==='history'?'none':'block';$('#historyView').classList.toggle('show',v==='history');if(v==='analysis')window.scrollTo({top:250,behavior:'smooth'});if(v==='history')renderHistory()});
-renderHistory();updateReady();
-</script></body></html>
+
+const $ = s => document.querySelector(s);
+
+const h4 = $('#h4');
+const m15 = $('#m15');
+const go = $('#go');
+const result = $('#result');
+const loader = $('#loader');
+const loaderText = $('#loaderText');
+const error = $('#error');
+
+let tradeFocus = 'DAY TRADE';
+
+let pollingTimer = null;
+let currentJobId = null;
+
+
+/* ---------------------------------------------------------
+   FILE PREVIEW
+--------------------------------------------------------- */
+
+function showPreview(input, img, ph, card){
+
+  const f = input.files[0];
+
+  if(!f) return;
+
+  img.src = URL.createObjectURL(f);
+
+  img.style.display = 'block';
+
+  ph.style.display = 'none';
+
+  card.classList.add('ready');
+
+  updateReady();
+}
+
+
+/* ---------------------------------------------------------
+   READY STATE
+--------------------------------------------------------- */
+
+function updateReady(){
+
+  const ready =
+    !!(h4.files[0] && m15.files[0]);
+
+  go.disabled = !ready;
+
+  $('#readyBadge').textContent =
+    ready
+      ? 'READY TO ANALYZE'
+      : 'WAITING FOR CHARTS';
+
+  $('#readyText').innerHTML =
+    ready
+      ? '<b>Ready.</b> Both timeframes are loaded.'
+      : '<b>Not ready.</b> Add both chart timeframes.';
+}
+
+
+/* ---------------------------------------------------------
+   FILE INPUTS
+--------------------------------------------------------- */
+
+h4.onchange = () =>
+  showPreview(
+    h4,
+    $('#img4'),
+    $('#ph4'),
+    $('#up4')
+  );
+
+m15.onchange = () =>
+  showPreview(
+    m15,
+    $('#img15'),
+    $('#ph15'),
+    $('#up15')
+  );
+
+
+/* ---------------------------------------------------------
+   TRADE FOCUS
+--------------------------------------------------------- */
+
+document.querySelectorAll('.focus').forEach(button => {
+
+  button.onclick = () => {
+
+    document
+      .querySelectorAll('.focus')
+      .forEach(x =>
+        x.classList.remove('active')
+      );
+
+    button.classList.add('active');
+
+    tradeFocus = button.dataset.focus;
+  };
+
+});
+
+
+/* ---------------------------------------------------------
+   FILE -> BASE64 DATA URL
+--------------------------------------------------------- */
+
+function b64(file){
+
+  return new Promise((resolve,reject) => {
+
+    const reader = new FileReader();
+
+    reader.onload = () =>
+      resolve(reader.result);
+
+    reader.onerror = reject;
+
+    reader.readAsDataURL(file);
+
+  });
+
+}
+
+
+/* ---------------------------------------------------------
+   DISPLAY HELPERS
+--------------------------------------------------------- */
+
+function val(x){
+
+  if(
+    x === null ||
+    x === undefined ||
+    x === ''
+  ){
+    return '—';
+  }
+
+  return x;
+}
+
+
+function renderMethodList(elementId, values){
+
+  const element = $(elementId);
+
+  if(!Array.isArray(values) || values.length === 0){
+
+    element.textContent = '—';
+
+    return;
+  }
+
+  element.innerHTML = values
+    .map(
+      x =>
+        `<span class="methodpill">${escapeHtml(String(x))}</span>`
+    )
+    .join('');
+
+}
+
+
+function escapeHtml(value){
+
+  return value
+    .replaceAll('&','&amp;')
+    .replaceAll('<','&lt;')
+    .replaceAll('>','&gt;')
+    .replaceAll('"','&quot;')
+    .replaceAll("'","&#039;");
+
+}
+
+
+/* ---------------------------------------------------------
+   RENDER RESULT
+--------------------------------------------------------- */
+
+function render(d){
+
+  const s =
+    String(d.signal || 'NO TRADE')
+      .toUpperCase();
+
+  const box = $('#signalBox');
+
+  box.className =
+    'signal ' +
+    (
+      s === 'BUY'
+        ? 'buy'
+        : s === 'SELL'
+          ? 'sell'
+          : 'neutral'
+    );
+
+  $('#signal').textContent = s;
+
+  $('#confidence').textContent =
+    d.confidence === undefined ||
+    d.confidence === null
+      ? '—'
+      : `${d.confidence}%`;
+
+  $('#entry').textContent =
+    val(d.entry);
+
+  $('#sl').textContent =
+    val(d.stop_loss);
+
+  $('#tp1').textContent =
+    val(d.take_profit_1);
+
+  $('#tp2').textContent =
+    val(d.take_profit_2);
+
+  $('#rr').textContent =
+    val(d.risk_reward);
+
+  $('#instrument').textContent =
+    val(d.instrument);
+
+  $('#trend').textContent =
+    val(d.trend);
+
+  $('#strength').textContent =
+    val(d.strength);
+
+  $('#focusResult').textContent =
+    val(d.trade_focus);
+
+  $('#duration').textContent =
+    val(d.duration);
+
+  $('#htfShort').textContent =
+    val(d.higher_timeframe_context);
+
+  $('#ltfShort').textContent =
+    val(d.lower_timeframe_confirmation);
+
+  $('#htf').textContent =
+    val(d.higher_timeframe_context);
+
+  $('#ltf').textContent =
+    val(d.lower_timeframe_confirmation);
+
+  $('#data').textContent =
+    val(d.data_analysis);
+
+  $('#explanation').textContent =
+    val(d.explanation);
+
+  $('#newsRisk').textContent =
+    val(d.news_fundamental_risk);
+
+
+  const warnings =
+    Array.isArray(d.warnings)
+      ? d.warnings.join('\n')
+      : val(d.warnings);
+
+  $('#warnings').textContent =
+    warnings;
+
+
+  renderMethodList(
+    '#contributing',
+    d.contributing_methods
+  );
+
+  renderMethodList(
+    '#weak',
+    d.weak_methods
+  );
+
+  renderMethodList(
+    '#conflicting',
+    d.conflicting_methods
+  );
+
+
+  result.classList.add('show');
+
+  document
+    .querySelectorAll('.step')[2]
+    .classList.add('active');
+
+
+  saveHistory(d);
+
+}
+
+
+/* ---------------------------------------------------------
+   HISTORY
+--------------------------------------------------------- */
+
+function saveHistory(d){
+
+  let arr = [];
+
+  try{
+
+    arr =
+      JSON.parse(
+        localStorage.getItem('lamarHistory') || '[]'
+      );
+
+  }catch{
+
+    arr = [];
+
+  }
+
+
+  arr.unshift({
+
+    time:
+      new Date().toLocaleString(),
+
+    instrument:
+      d.instrument,
+
+    signal:
+      d.signal,
+
+    confidence:
+      d.confidence,
+
+    focus:
+      d.trade_focus
+
+  });
+
+
+  localStorage.setItem(
+    'lamarHistory',
+    JSON.stringify(
+      arr.slice(0,20)
+    )
+  );
+
+
+  renderHistory();
+
+}
+
+
+function renderHistory(){
+
+  let arr = [];
+
+  try{
+
+    arr =
+      JSON.parse(
+        localStorage.getItem('lamarHistory') || '[]'
+      );
+
+  }catch{
+
+    arr = [];
+
+  }
+
+
+  $('#historyList').innerHTML =
+    arr.length
+
+      ? arr.map(x => `
+
+          <div class="historyrow">
+
+            <span class="smallpill">
+              ${escapeHtml(
+                x.signal || '—'
+              )}
+            </span>
+
+            <b>
+              ${escapeHtml(
+                x.instrument || '—'
+              )}
+            </b>
+
+            <span class="help">
+              ${escapeHtml(
+                x.time || ''
+              )}
+            </span>
+
+            <span>
+              ${x.confidence ?? '—'}%
+            </span>
+
+          </div>
+
+        `).join('')
+
+      : 'No analyses yet.';
+
+}
+
+
+/* ---------------------------------------------------------
+   LOADING TEXT
+--------------------------------------------------------- */
+
+function setLoaderText(text){
+
+  loaderText.textContent = text;
+
+}
+
+
+/* ---------------------------------------------------------
+   START ANALYSIS
+--------------------------------------------------------- */
+
+go.onclick = async () => {
+
+  error.classList.remove('show');
+
+  result.classList.remove('show');
+
+  go.disabled = true;
+
+  loader.classList.add('show');
+
+  currentJobId = null;
+
+
+  try{
+
+    setLoaderText(
+      'Preparing your chart data…'
+    );
+
+
+    const body = {
+
+      instrument:
+        $('#pair').value,
+
+      trade_focus:
+        tradeFocus,
+
+      higher_timeframe_image:
+        await b64(h4.files[0]),
+
+      lower_timeframe_image:
+        await b64(m15.files[0])
+
+    };
+
+
+    setLoaderText(
+      'Sending charts to the analysis engine…'
+    );
+
+
+    const response =
+      await fetch(
+        '/api/analysis_submit',
+        {
+          method:'POST',
+
+          headers:{
+            'Content-Type':
+              'application/json'
+          },
+
+          body:
+            JSON.stringify(body)
+        }
+      );
+
+
+    let data;
+
+    try{
+
+      data =
+        await response.json();
+
+    }catch{
+
+      throw new Error(
+        'The server returned an invalid response.'
+      );
+
+    }
+
+
+    if(!response.ok){
+
+      throw new Error(
+        data.error ||
+        'The analysis could not be started.'
+      );
+
+    }
+
+
+    if(!data.job_id){
+
+      throw new Error(
+        'The analysis server did not return a valid job.'
+      );
+
+    }
+
+
+    currentJobId =
+      data.job_id;
+
+
+    setLoaderText(
+      'Analysis job started. Reading the charts…'
+    );
+
+
+    await pollAnalysis(currentJobId);
+
+
+  }catch(e){
+
+    showError(
+      e.message ||
+      'The analysis could not be completed.'
+    );
+
+  }
+
+};
+
+
+/* ---------------------------------------------------------
+   POLL ANALYSIS
+--------------------------------------------------------- */
+
+async function pollAnalysis(jobId){
+
+  const maxAttempts = 200;
+
+  let attempts = 0;
+
+  while(attempts < maxAttempts){
+
+    attempts++;
+
+
+    const response =
+      await fetch(
+        `/api/analysis_status?job_id=${encodeURIComponent(jobId)}`,
+        {
+          method:'GET',
+          cache:'no-store'
+        }
+      );
+
+
+    let data;
+
+    try{
+
+      data =
+        await response.json();
+
+    }catch{
+
+      throw new Error(
+        'The analysis server returned an invalid status response.'
+      );
+
+    }
+
+
+    if(
+      data.status === 'completed'
+    ){
+
+      setLoaderText(
+        'Analysis completed. Building your result…'
+      );
+
+      render(data);
+
+      result.scrollIntoView({
+        behavior:'smooth',
+        block:'start'
+      });
+
+      loader.classList.remove('show');
+
+      updateReady();
+
+      return;
+    }
+
+
+    if(
+      data.status === 'failed'
+    ){
+
+      throw new Error(
+        data.error ||
+        'The analysis failed.'
+      );
+
+    }
+
+
+    if(
+      data.status === 'retry'
+    ){
+
+      setLoaderText(
+        'Connection temporarily interrupted. Rechecking the analysis…'
+      );
+
+      await sleep(
+        Math.max(
+          3000,
+          Number(
+            data.poll_after_seconds || 5
+          ) * 1000
+        )
+      );
+
+      continue;
+    }
+
+
+    if(
+      data.status === 'queued' ||
+      data.status === 'in_progress'
+    ){
+
+      if(attempts < 5){
+
+        setLoaderText(
+          'Starting chart analysis…'
+        );
+
+      }else if(attempts < 15){
+
+        setLoaderText(
+          'Reading market structure and price action…'
+        );
+
+      }else if(attempts < 30){
+
+        setLoaderText(
+          'Evaluating liquidity, SMC, OB and FVG…'
+        );
+
+      }else if(attempts < 50){
+
+        setLoaderText(
+          'Checking Fibonacci and premium/discount…'
+        );
+
+      }else if(attempts < 80){
+
+        setLoaderText(
+          'Checking the complete evidence before deciding…'
+        );
+
+      }else{
+
+        setLoaderText(
+          'Finalizing the analysis…'
+        );
+
+      }
+
+
+      await sleep(
+        Math.max(
+          2500,
+          Number(
+            data.poll_after_seconds || 3
+          ) * 1000
+        )
+      );
+
+      continue;
+    }
+
+
+    if(!response.ok){
+
+      throw new Error(
+        data.error ||
+        'Unable to retrieve analysis status.'
+      );
+
+    }
+
+
+    throw new Error(
+      'The analysis server returned an unknown status.'
+    );
+
+  }
+
+
+  throw new Error(
+    'The analysis is taking longer than expected. Please try again.'
+  );
+
+}
+
+
+/* ---------------------------------------------------------
+   SLEEP
+--------------------------------------------------------- */
+
+function sleep(ms){
+
+  return new Promise(
+    resolve =>
+      setTimeout(resolve,ms)
+  );
+
+}
+
+
+/* ---------------------------------------------------------
+   ERROR
+--------------------------------------------------------- */
+
+function showError(message){
+
+  error.textContent =
+    message;
+
+  error.classList.add('show');
+
+  loader.classList.remove('show');
+
+  updateReady();
+
+}
+
+
+/* ---------------------------------------------------------
+   CLEAR CURRENT ANALYSIS
+--------------------------------------------------------- */
+
+$('#clear').onclick = () => {
+
+  if(pollingTimer){
+
+    clearTimeout(pollingTimer);
+
+    pollingTimer = null;
+
+  }
+
+  currentJobId = null;
+
+  h4.value = '';
+
+  m15.value = '';
+
+  $('#img4').style.display = 'none';
+
+  $('#img15').style.display = 'none';
+
+  $('#ph4').style.display = 'block';
+
+  $('#ph15').style.display = 'block';
+
+  $('#up4').classList.remove('ready');
+
+  $('#up15').classList.remove('ready');
+
+  result.classList.remove('show');
+
+  error.classList.remove('show');
+
+  loader.classList.remove('show');
+
+  document
+    .querySelectorAll('.step')[2]
+    .classList.remove('active');
+
+  updateReady();
+
+};
+
+
+/* ---------------------------------------------------------
+   CLEAR HISTORY
+--------------------------------------------------------- */
+
+$('#clearHistory').onclick = () => {
+
+  localStorage.removeItem(
+    'lamarHistory'
+  );
+
+  renderHistory();
+
+};
+
+
+/* ---------------------------------------------------------
+   NAVIGATION
+--------------------------------------------------------- */
+
+document
+  .querySelectorAll('.nav button')
+  .forEach(button => {
+
+    button.onclick = () => {
+
+      document
+        .querySelectorAll('.nav button')
+        .forEach(x =>
+          x.classList.remove('active')
+        );
+
+      button.classList.add('active');
+
+
+      const view =
+        button.dataset.view;
+
+
+      $('#dashboardView').style.display =
+        view === 'history'
+          ? 'none'
+          : 'block';
+
+
+      $('#historyView')
+        .classList
+        .toggle(
+          'show',
+          view === 'history'
+        );
+
+
+      if(view === 'analysis'){
+
+        window.scrollTo({
+          top:250,
+          behavior:'smooth'
+        });
+
+      }
+
+
+      if(view === 'history'){
+
+        renderHistory();
+
+      }
+
+    };
+
+  });
+
+
+/* ---------------------------------------------------------
+   INITIAL STATE
+--------------------------------------------------------- */
+
+renderHistory();
+
+updateReady();
+
+</script>
+
+</body>
+</html>
