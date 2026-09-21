@@ -1,178 +1,214 @@
 import json
+import os
 import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler
+from urllib.parse import parse_qs, urlparse
 
 from analysis_common import (
     OPENAI_URL,
     get_openai_key,
-    json_response,
     parse_completed_response,
     read_job_token,
 )
 
 
-def retrieve_openai_response(response_id):
-
+def retrieve_response(response_id):
     api_key = get_openai_key()
 
-    url = (
-        OPENAI_URL
-        + "/"
-        + response_id
-    )
+    url = OPENAI_URL + "/" + response_id
 
     request = urllib.request.Request(
         url,
         method="GET",
         headers={
             "Authorization": "Bearer " + api_key,
-            "Accept": "application/json"
-        }
+            "Accept": "application/json",
+        },
     )
 
     try:
-        with urllib.request.urlopen(
-            request,
-            timeout=30
-        ) as response:
-
-            response_body = (
-                response.read()
-                .decode("utf-8")
-            )
-
-            if response.status < 200 or response.status >= 300:
-                raise RuntimeError(
-                    "OpenAI retrieve returned HTTP "
-                    + str(response.status)
-                    + ": "
-                    + response_body
-                )
-
-            return json.loads(response_body)
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = response.read().decode("utf-8")
+            return response.status, json.loads(body)
 
     except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
 
-        error_body = (
-            exc.read()
-            .decode("utf-8", errors="replace")
-        )
-
-        if exc.code == 404:
-            raise RuntimeError(
-                "OpenAI could not find response ID "
-                + response_id
-                + ". HTTP 404. "
-                + error_body
-            )
-
-        if exc.code == 401:
-            raise RuntimeError(
-                "OpenAI authentication failed. "
-                "Check the Production OPENAI_API_KEY."
-            )
-
-        raise RuntimeError(
-            "OpenAI retrieve failed. HTTP "
-            + str(exc.code)
-            + ": "
-            + error_body
-        )
+        return exc.code, {
+            "error": {
+                "http_status": exc.code,
+                "message": body,
+            }
+        }
 
     except urllib.error.URLError as exc:
+        return 0, {
+            "error": {
+                "message": "Connection to OpenAI failed: " + str(exc.reason)
+            }
+        }
 
-        raise RuntimeError(
-            "Could not connect to OpenAI while checking "
-            "the analysis: "
-            + str(exc.reason)
+
+class handler(BaseHTTPRequestHandler):
+
+    def send_json(self, status_code, data):
+        body = json.dumps(
+            data,
+            ensure_ascii=False
+        ).encode("utf-8")
+
+        self.send_response(status_code)
+
+        self.send_header(
+            "Content-Type",
+            "application/json; charset=utf-8"
         )
 
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            "*"
+        )
 
-class handler:
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "GET, OPTIONS"
+        )
 
-    def __init__(self, request, context=None):
-        self.request = request
-        self.context = context
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type"
+        )
 
-    def __call__(self):
-        return self.handle()
+        self.send_header(
+            "Cache-Control",
+            "no-store, no-cache, must-revalidate"
+        )
 
-    def handle(self):
+        self.send_header(
+            "Content-Length",
+            str(len(body))
+        )
+
+        self.end_headers()
+
+        self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            "*"
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "GET, OPTIONS"
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type"
+        )
+
+        self.end_headers()
+
+    def do_GET(self):
 
         try:
-            method = getattr(
-                self.request,
-                "method",
-                "GET"
+            parsed = urlparse(self.path)
+
+            params = parse_qs(
+                parsed.query
             )
 
-            if method == "OPTIONS":
-                return {
-                    "statusCode": 204,
-                    "headers": {
-                        "Access-Control-Allow-Origin": "*",
-                        "Access-Control-Allow-Methods": "GET, OPTIONS",
-                        "Access-Control-Allow-Headers": "Content-Type"
-                    },
-                    "body": ""
-                }
+            job_values = params.get("job_id", [])
 
-            query = getattr(
-                self.request,
-                "query",
-                {}
-            )
+            if not job_values:
+                self.send_json(
+                    400,
+                    {
+                        "status": "failed",
+                        "error": "job_id is required"
+                    }
+                )
+                return
 
-            job_id = ""
-
-            if isinstance(query, dict):
-                job_id = str(
-                    query.get("job_id", "")
-                ).strip()
+            job_id = job_values[0].strip()
 
             if not job_id:
-                return {
-                    "statusCode": 400,
-                    "headers": {
-                        "Content-Type": "application/json",
-                        "Access-Control-Allow-Origin": "*"
-                    },
-                    "body": json.dumps({
+                self.send_json(
+                    400,
+                    {
                         "status": "failed",
-                        "error": "job_id is required."
-                    })
-                }
+                        "error": "job_id is empty"
+                    }
+                )
+                return
 
-            response_id, instrument, trade_focus = (
-                read_job_token(job_id)
+            response_id, instrument, trade_focus = read_job_token(
+                job_id
             )
 
-            response_data = retrieve_openai_response(
+            http_status, response_data = retrieve_response(
                 response_id
             )
 
+            # OpenAI returned an HTTP error.
+            if http_status != 200:
+
+                error_object = response_data.get(
+                    "error",
+                    {}
+                )
+
+                message = error_object.get(
+                    "message",
+                    "Unknown OpenAI error"
+                )
+
+                self.send_json(
+                    200,
+                    {
+                        "status": "failed",
+                        "error": (
+                            "OpenAI response lookup failed. "
+                            "HTTP "
+                            + str(http_status)
+                            + ". "
+                            + str(message)
+                        ),
+                        "response_id": response_id
+                    }
+                )
+
+                return
+
             openai_status = str(
-                response_data.get("status", "")
+                response_data.get(
+                    "status",
+                    ""
+                )
             ).lower().strip()
 
-            if openai_status in [
+            # Still processing.
+            if openai_status in (
                 "queued",
                 "in_progress",
                 "processing"
-            ]:
+            ):
 
-                return {
-                    "statusCode": 200,
-                    "headers": {
-                        "Content-Type": "application/json",
-                        "Cache-Control": "no-store",
-                        "Access-Control-Allow-Origin": "*"
-                    },
-                    "body": json.dumps({
+                self.send_json(
+                    200,
+                    {
                         "status": "in_progress"
-                    })
-                }
+                    }
+                )
 
+                return
+
+            # Successfully completed.
             if openai_status == "completed":
 
                 result = parse_completed_response(
@@ -181,148 +217,66 @@ class handler:
                     trade_focus
                 )
 
-                return {
-                    "statusCode": 200,
-                    "headers": {
-                        "Content-Type": "application/json",
-                        "Cache-Control": "no-store",
-                        "Access-Control-Allow-Origin": "*"
-                    },
-                    "body": json.dumps({
+                self.send_json(
+                    200,
+                    {
                         "status": "completed",
                         "result": result
-                    })
-                }
+                    }
+                )
 
-            if openai_status in [
+                return
+
+            # OpenAI finished unsuccessfully.
+            if openai_status in (
                 "failed",
                 "cancelled",
                 "canceled",
                 "incomplete",
                 "expired"
-            ]:
+            ):
 
-                error_information = (
+                error_value = (
                     response_data.get("error")
                     or response_data.get("incomplete_details")
-                    or {
-                        "message":
-                        "OpenAI analysis ended with status "
+                    or (
+                        "OpenAI analysis ended with status: "
                         + openai_status
+                    )
+                )
+
+                self.send_json(
+                    200,
+                    {
+                        "status": "failed",
+                        "error": error_value
                     }
                 )
 
-                return {
-                    "statusCode": 200,
-                    "headers": {
-                        "Content-Type": "application/json",
-                        "Cache-Control": "no-store",
-                        "Access-Control-Allow-Origin": "*"
-                    },
-                    "body": json.dumps({
-                        "status": "failed",
-                        "error": error_information
-                    })
-                }
+                return
 
-            return {
-                "statusCode": 200,
-                "headers": {
-                    "Content-Type": "application/json",
-                    "Cache-Control": "no-store",
-                    "Access-Control-Allow-Origin": "*"
-                },
-                "body": json.dumps({
-                    "status": "in_progress"
-                })
-            }
+            # Unknown OpenAI status.
+            self.send_json(
+                200,
+                {
+                    "status": "failed",
+                    "error": (
+                        "Unknown OpenAI response status: "
+                        + openai_status
+                    ),
+                    "response_id": response_id,
+                    "openai_response": response_data
+                }
+            )
 
         except Exception as exc:
 
-            error_text = str(exc)
-
-            return {
-                "statusCode": 200,
-                "headers": {
-                    "Content-Type": "application/json",
-                    "Cache-Control": "no-store",
-                    "Access-Control-Allow-Origin": "*"
-                },
-                "body": json.dumps({
+            # Always return JSON instead of allowing Vercel
+            # to generate its generic HTTP 500 page.
+            self.send_json(
+                200,
+                {
                     "status": "failed",
-                    "error": error_text
-                })
-            }
-
-
-# Vercel Python legacy handler compatibility.
-try:
-    from http.server import BaseHTTPRequestHandler
-
-    class VercelHandler(BaseHTTPRequestHandler):
-
-        def _run(self):
-            request_path = self.path
-
-            query = {}
-
-            if "?" in request_path:
-                query_string = request_path.split("?", 1)[1]
-
-                for part in query_string.split("&"):
-                    if "=" in part:
-                        key, value = part.split("=", 1)
-
-                        if key == "job_id":
-                            from urllib.parse import unquote
-                            query["job_id"] = unquote(value)
-
-            class RequestWrapper:
-                method = self.command
-                query = query
-
-            result = handler(RequestWrapper()).handle()
-
-            status_code = result.get(
-                "statusCode",
-                200
+                    "error": str(exc)
+                }
             )
-
-            headers = result.get(
-                "headers",
-                {}
-            )
-
-            body = result.get(
-                "body",
-                ""
-            )
-
-            self.send_response(status_code)
-
-            for key, value in headers.items():
-                self.send_header(
-                    key,
-                    str(value)
-                )
-
-            self.end_headers()
-
-            if body:
-                self.wfile.write(
-                    body.encode("utf-8")
-                )
-
-        def do_GET(self):
-            self._run()
-
-        def do_OPTIONS(self):
-            self._run()
-
-except Exception:
-    VercelHandler = None
-
-
-# Vercel expects `handler` to be exported.
-if VercelHandler is not None:
-    handler = VercelHandler
