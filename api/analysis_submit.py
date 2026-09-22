@@ -1,5 +1,4 @@
 import json
-import traceback
 from http.server import BaseHTTPRequestHandler
 
 from analysis_common import (
@@ -10,7 +9,7 @@ from analysis_common import (
     validate_instrument,
 )
 
-from user_security import (
+from api.user_security import (
     create_secure_job_token,
     extract_bearer_token,
     release_analysis_slot,
@@ -77,10 +76,9 @@ class handler(BaseHTTPRequestHandler):
                 body = json.loads(
                     raw_body.decode("utf-8")
                 )
-            except Exception as exc:
+            except Exception:
                 raise ValueError(
-                    "Request body must contain valid JSON: "
-                    + str(exc)
+                    "Request body must contain valid JSON."
                 )
 
             if not isinstance(body, dict):
@@ -126,16 +124,15 @@ class handler(BaseHTTPRequestHandler):
                         "daily_limit": 4
                     }
                 )
+
                 return
 
             try:
-                openai_response = (
-                    create_background_response(
-                        instrument=instrument,
-                        trade_focus=trade_focus,
-                        higher_image=higher_image,
-                        lower_image=lower_image
-                    )
+                openai_response = create_background_response(
+                    instrument=instrument,
+                    trade_focus=trade_focus,
+                    higher_image=higher_image,
+                    lower_image=lower_image
                 )
 
             except Exception:
@@ -180,17 +177,29 @@ class handler(BaseHTTPRequestHandler):
 
         except Exception as exc:
 
-            # TEMPORARY DIAGNOSTIC RESPONSE.
-            # This lets us see the actual Python failure.
-            traceback_text = traceback.format_exc()
+            message = str(exc)
+
+            status_code = 401
+
+            if (
+                "Request" in message
+                or "Instrument" in message
+                or "Trade focus" in message
+                or "image" in message
+            ):
+                status_code = 400
+
+            elif (
+                "OpenAI" in message
+                or "Unable" in message
+            ):
+                status_code = 500
 
             json_response(
                 self,
-                500,
+                status_code,
                 {
                     "status": "failed",
-                    "error": str(exc),
-                    "exception_type": type(exc).__name__,
-                    "traceback": traceback_text
+                    "error": message
                 }
             )
