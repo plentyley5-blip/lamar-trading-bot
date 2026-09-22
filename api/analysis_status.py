@@ -1,9 +1,21 @@
+import os
+import sys
 import json
 import urllib.error
 import urllib.request
 
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
+
+API_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
+
+if API_DIR not in sys.path:
+    sys.path.insert(
+        0,
+        API_DIR
+    )
 
 from analysis_common import (
     OPENAI_URL,
@@ -34,6 +46,7 @@ def retrieve_response(response_id):
         headers={
             "Authorization":
                 "Bearer " + api_key,
+
             "Accept":
                 "application/json",
         },
@@ -66,8 +79,11 @@ def retrieve_response(response_id):
             exc.code,
             {
                 "error": {
-                    "http_status": exc.code,
-                    "message": body
+                    "http_status":
+                        exc.code,
+
+                    "message":
+                        body
                 }
             }
         )
@@ -139,7 +155,9 @@ class handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
 
-        self.send_response(204)
+        self.send_response(
+            204
+        )
 
         self.send_header(
             "Access-Control-Allow-Origin",
@@ -179,7 +197,9 @@ class handler(BaseHTTPRequestHandler):
                 self.send_json(
                     401,
                     {
-                        "status": "failed",
+                        "status":
+                            "failed",
+
                         "error":
                             "Your account could not be identified."
                     }
@@ -205,7 +225,9 @@ class handler(BaseHTTPRequestHandler):
                 self.send_json(
                     400,
                     {
-                        "status": "failed",
+                        "status":
+                            "failed",
+
                         "error":
                             "job_id is required"
                     }
@@ -220,7 +242,9 @@ class handler(BaseHTTPRequestHandler):
                 self.send_json(
                     400,
                     {
-                        "status": "failed",
+                        "status":
+                            "failed",
+
                         "error":
                             "job_id is empty"
                     }
@@ -245,7 +269,9 @@ class handler(BaseHTTPRequestHandler):
                 self.send_json(
                     403,
                     {
-                        "status": "failed",
+                        "status":
+                            "failed",
+
                         "error":
                             "You are not authorized to access this analysis."
                     }
@@ -278,7 +304,9 @@ class handler(BaseHTTPRequestHandler):
                 self.send_json(
                     200,
                     {
-                        "status": "failed",
+                        "status":
+                            "failed",
+
                         "error":
                             "OpenAI response lookup failed. "
                             + "HTTP "
@@ -306,7 +334,8 @@ class handler(BaseHTTPRequestHandler):
                 self.send_json(
                     200,
                     {
-                        "status": "in_progress"
+                        "status":
+                            "in_progress"
                     }
                 )
 
@@ -323,8 +352,11 @@ class handler(BaseHTTPRequestHandler):
                 self.send_json(
                     200,
                     {
-                        "status": "completed",
-                        "result": result
+                        "status":
+                            "completed",
+
+                        "result":
+                            result
                     }
                 )
 
@@ -355,8 +387,11 @@ class handler(BaseHTTPRequestHandler):
                 self.send_json(
                     200,
                     {
-                        "status": "failed",
-                        "error": error_value
+                        "status":
+                            "failed",
+
+                        "error":
+                            error_value
                     }
                 )
 
@@ -365,7 +400,9 @@ class handler(BaseHTTPRequestHandler):
             self.send_json(
                 200,
                 {
-                    "status": "failed",
+                    "status":
+                        "failed",
+
                     "error":
                         "Unknown analysis status: "
                         + openai_status
@@ -376,15 +413,26 @@ class handler(BaseHTTPRequestHandler):
 
             message = str(exc)
 
-            status_code = 401
+            status_code = 500
 
-            if "job" in message.lower():
+            if (
+                "Authorization" in message
+                or "session" in message.lower()
+                or "token" in message.lower()
+            ):
+                status_code = 401
+
+            elif "job" in message.lower():
+
                 status_code = 400
 
             self.send_json(
                 status_code,
                 {
-                    "status": "failed",
-                    "error": message
+                    "status":
+                        "failed",
+
+                    "error":
+                        message
                 }
             )
