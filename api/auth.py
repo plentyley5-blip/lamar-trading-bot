@@ -2,826 +2,296 @@ import json
 import os
 import urllib.error
 import urllib.request
+import urllib.parse
 from http.server import BaseHTTPRequestHandler
 
-
-def supabase_url():
-    value = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
-
-    for suffix in (
-        "/rest/v1",
-        "/auth/v1",
-        "/storage/v1",
-    ):
-        if value.endswith(suffix):
-            value = value[: -len(suffix)]
-
-    return value
+from api.user_security import (
+    get_supabase_anon_key,
+    get_supabase_service_key,
+    get_supabase_url,
+    is_owner_user,
+    verify_access_token,
+)
 
 
-def supabase_key():
-    return os.environ.get(
-        "SUPABASE_SERVICE_ROLE_KEY",
-        ""
-    ).strip()
+def json_response(handler, status_code, payload):
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    handler.send_response(status_code)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+    handler.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    try:
+        handler.wfile.write(body)
+    except Exception:
+        pass
 
 
-def request_json(
-    method,
-    url,
-    body=None,
-    headers=None,
-):
-    request_headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-
+def _request(url, method="GET", payload=None, headers=None, timeout=20):
+    body = None
+    request_headers = {"Accept": "application/json"}
     if headers:
         request_headers.update(headers)
-
-    data = None
-
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
+    if payload is not None:
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        request_headers["Content-Type"] = "application/json"
 
     request = urllib.request.Request(
         url,
-        data=data,
-        method=method,
+        data=body,
         headers=request_headers,
+        method=method,
     )
 
     try:
-        with urllib.request.urlopen(
-            request,
-            timeout=30,
-        ) as response:
-
-            raw = response.read().decode(
-                "utf-8",
-                errors="replace",
-            )
-
-            if not raw:
-                return {}, response.status
-
-            try:
-                return json.loads(raw), response.status
-            except json.JSONDecodeError:
-                return {
-                    "raw": raw
-                }, response.status
-
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
-
-        raw = exc.read().decode(
-            "utf-8",
-            errors="replace",
-        )
-
+        raw = exc.read().decode("utf-8", errors="replace")
         try:
-            payload = json.loads(raw)
+            data = json.loads(raw)
         except Exception:
-            payload = {
-                "error": raw
-            }
-
-        return payload, exc.code
-
-    except urllib.error.URLError as exc:
-
-        raise RuntimeError(
-            "Unable to connect to Supabase: "
-            + str(exc.reason)
-        )
+            data = {"error": raw}
+        raise RuntimeError(json.dumps(data, ensure_ascii=False)) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError("The authentication service is temporarily unavailable.") from exc
 
 
-def supabase_headers():
-    key = supabase_key()
-
-    if not key:
-        raise RuntimeError(
-            "SUPABASE_SERVICE_ROLE_KEY is missing."
-        )
-
+def _service_headers():
+    key = get_supabase_service_key()
     return {
         "apikey": key,
         "Authorization": "Bearer " + key,
     }
 
 
-def json_response(
-    handler,
-    status,
-    payload,
-):
-    body = json.dumps(
-        payload,
-        ensure_ascii=False,
-    ).encode("utf-8")
-
-    handler.send_response(status)
-
-    handler.send_header(
-        "Content-Type",
-        "application/json; charset=utf-8",
-    )
-
-    handler.send_header(
-        "Access-Control-Allow-Origin",
-        "*",
-    )
-
-    handler.send_header(
-        "Access-Control-Allow-Methods",
-        "GET, POST, OPTIONS",
-    )
-
-    handler.send_header(
-        "Access-Control-Allow-Headers",
-        "Content-Type, Authorization",
-    )
-
-    handler.send_header(
-        "Cache-Control",
-        "no-store",
-    )
-
-    handler.send_header(
-        "Content-Length",
-        str(len(body)),
-    )
-
-    handler.end_headers()
-
-    handler.wfile.write(body)
+def _anon_headers():
+    key = get_supabase_anon_key()
+    return {
+        "apikey": key,
+    }
 
 
-def read_body(handler):
-    length = int(
-        handler.headers.get(
-            "Content-Length",
-            "0",
-        )
-    )
-
-    if length <= 0:
-        return {}
-
-    raw = handler.rfile.read(length)
-
-    try:
-        return json.loads(
-            raw.decode("utf-8")
-        )
-    except Exception:
-        raise ValueError(
-            "Invalid JSON request."
-        )
-
-
-def get_user_from_token(access_token):
+def _profile_row(user_id):
     url = (
-        supabase_url()
-        + "/auth/v1/user"
+        get_supabase_url()
+        + "/rest/v1/profiles?id=eq."
+        + urllib.parse.quote(str(user_id), safe="")
+        + "&select=id,full_name,email,daily_analysis_count,last_analysis_date,created_at"
+        + "&limit=1"
     )
-
-    payload, status = request_json(
-        "GET",
-        url,
-        headers={
-            "apikey": supabase_key(),
-            "Authorization": (
-                "Bearer "
-                + access_token
-            ),
-        },
-    )
-
-    if status != 200:
-        return None
-
-    if not isinstance(payload, dict):
-        return None
-
-    return payload
+    data = _request(url, headers=_service_headers())
+    if isinstance(data, list) and data:
+        return data[0]
+    return None
 
 
-def create_profile(
-    user_id,
-    full_name,
-    email,
-):
-    url = (
-        supabase_url()
-        + "/rest/v1/profiles"
-    )
+def _ensure_profile(user):
+    user_id = str(user.get("id", "")).strip()
+    email = str(user.get("email", "")).strip().lower()
+    if not user_id or not email:
+        raise RuntimeError("The authenticated user is incomplete.")
 
+    existing = _profile_row(user_id)
+    if existing:
+        return existing
+
+    metadata = user.get("user_metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    full_name = str(metadata.get("full_name", "")).strip() or email.split("@", 1)[0]
+
+    url = get_supabase_url() + "/rest/v1/profiles"
     payload = {
         "id": user_id,
         "full_name": full_name,
         "email": email,
         "daily_analysis_count": 0,
     }
-
-    result, status = request_json(
-        "POST",
-        url,
-        body=payload,
-        headers={
-            **supabase_headers(),
-            "Prefer": "resolution=merge-duplicates",
-        },
-    )
-
-    if status not in (200, 201, 204):
-        raise RuntimeError(
-            "Profile creation failed: "
-            + json.dumps(result)
-        )
-
-    return result
+    headers = _service_headers()
+    headers["Prefer"] = "return=representation"
+    data = _request(url, method="POST", payload=payload, headers=headers)
+    if isinstance(data, list) and data:
+        return data[0]
+    return payload
 
 
-def get_profile(user_id):
-    url = (
-        supabase_url()
-        + "/rest/v1/profiles"
-        + "?id=eq."
-        + user_id
-        + "&select=id,full_name,email,"
-        + "daily_analysis_count,"
-        + "last_analysis_date"
-    )
-
-    result, status = request_json(
-        "GET",
-        url,
-        headers=supabase_headers(),
-    )
-
-    if status != 200:
-        return None
-
-    if not isinstance(result, list):
-        return None
-
-    if not result:
-        return None
-
-    return result[0]
-
-
-def signup(
-    full_name,
-    email,
-    password,
-):
-    if len(full_name) < 2:
-        raise ValueError(
-            "Please enter your full name."
-        )
-
-    if len(email) < 5 or "@" not in email:
-        raise ValueError(
-            "Please enter a valid email address."
-        )
-
-    if len(password) < 6:
-        raise ValueError(
-            "Password must be at least 6 characters."
-        )
-
-    url = (
-        supabase_url()
-        + "/auth/v1/signup"
-    )
-
-    result, status = request_json(
-        "POST",
-        url,
-        body={
-            "email": email,
-            "password": password,
-            "data": {
-                "full_name": full_name,
-            },
-        },
-        headers={
-            "apikey": supabase_key(),
-        },
-    )
-
-    if status not in (200, 201):
-        message = (
-            result.get("msg")
-            or result.get("message")
-            or result.get("error_description")
-            or result.get("error")
-            or "Account creation failed."
-        )
-
-        raise RuntimeError(
-            str(message)
-        )
-
-    user = result.get("user")
-
-    if not user:
-        user = result
-
-    user_id = user.get("id")
-
-    if not user_id:
-        raise RuntimeError(
-            "Supabase did not return a user."
-        )
-
-    create_profile(
-        user_id=user_id,
-        full_name=full_name,
-        email=email,
-    )
-
-    session = result.get("session")
-
-    access_token = None
-    refresh_token = None
-
-    if isinstance(session, dict):
-        access_token = session.get(
-            "access_token"
-        )
-        refresh_token = session.get(
-            "refresh_token"
-        )
-
+def _profile_payload(user, profile):
+    owner = is_owner_user(user)
+    count = int(profile.get("daily_analysis_count", 0) or 0)
     return {
-        "id": user_id,
-        "email": email,
-        "full_name": full_name,
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "email_confirmation_required": (
-            access_token is None
-        ),
-    }
-
-
-def login(
-    email,
-    password,
-):
-    if not email or "@" not in email:
-        raise ValueError(
-            "Please enter a valid email address."
-        )
-
-    if not password:
-        raise ValueError(
-            "Please enter your password."
-        )
-
-    url = (
-        supabase_url()
-        + "/auth/v1/token"
-        + "?grant_type=password"
-    )
-
-    result, status = request_json(
-        "POST",
-        url,
-        body={
-            "email": email,
-            "password": password,
+        "user": {
+            "id": str(user.get("id", "")),
+            "email": str(user.get("email", "")),
+            "full_name": str(profile.get("full_name", "")),
         },
-        headers={
-            "apikey": supabase_key(),
-        },
-    )
-
-    if status != 200:
-        message = (
-            result.get("msg")
-            or result.get("message")
-            or result.get("error_description")
-            or result.get("error")
-            or "Login failed."
-        )
-
-        raise RuntimeError(
-            str(message)
-        )
-
-    access_token = result.get(
-        "access_token"
-    )
-
-    refresh_token = result.get(
-        "refresh_token"
-    )
-
-    user = result.get("user")
-
-    if not access_token or not user:
-        raise RuntimeError(
-            "Login succeeded but Supabase returned no session."
-        )
-
-    user_id = user.get("id")
-
-    profile = None
-
-    if user_id:
-        profile = get_profile(
-            user_id
-        )
-
-    if not profile:
-        metadata = user.get(
-            "user_metadata"
-        ) or {}
-
-        full_name = (
-            metadata.get("full_name")
-            or email.split("@")[0]
-        )
-
-        create_profile(
-            user_id=user_id,
-            full_name=full_name,
-            email=email,
-        )
-
-        profile = get_profile(
-            user_id
-        )
-
-    full_name = (
-        profile.get("full_name")
-        if profile
-        else email.split("@")[0]
-    )
-
-    daily_count = (
-        profile.get(
-            "daily_analysis_count",
-            0,
-        )
-        if profile
-        else 0
-    )
-
-    return {
-        "id": user_id,
-        "email": email,
-        "full_name": full_name,
-        "daily_analysis_count": daily_count,
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-    }
-
-
-def refresh(refresh_token):
-    if not refresh_token:
-        raise ValueError(
-            "Refresh token is required."
-        )
-
-    url = (
-        supabase_url()
-        + "/auth/v1/token"
-        + "?grant_type=refresh_token"
-    )
-
-    result, status = request_json(
-        "POST",
-        url,
-        body={
-            "refresh_token": refresh_token,
-        },
-        headers={
-            "apikey": supabase_key(),
-        },
-    )
-
-    if status != 200:
-        message = (
-            result.get("msg")
-            or result.get("message")
-            or result.get("error_description")
-            or result.get("error")
-            or "Session refresh failed."
-        )
-
-        raise RuntimeError(
-            str(message)
-        )
-
-    return {
-        "access_token": result.get(
-            "access_token"
-        ),
-        "refresh_token": result.get(
-            "refresh_token"
-        ),
-        "user": result.get("user"),
-    }
-
-
-def profile(access_token):
-    if not access_token:
-        raise ValueError(
-            "Access token is required."
-        )
-
-    user = get_user_from_token(
-        access_token
-    )
-
-    if not user:
-        raise RuntimeError(
-            "Your session has expired."
-        )
-
-    user_id = user.get("id")
-
-    if not user_id:
-        raise RuntimeError(
-            "Invalid user session."
-        )
-
-    data = get_profile(
-        user_id
-    )
-
-    if not data:
-        metadata = user.get(
-            "user_metadata"
-        ) or {}
-
-        full_name = (
-            metadata.get("full_name")
-            or user.get("email", "").split("@")[0]
-        )
-
-        create_profile(
-            user_id=user_id,
-            full_name=full_name,
-            email=user.get("email", ""),
-        )
-
-        data = get_profile(
-            user_id
-        )
-
-    return {
-        "id": user_id,
-        "email": user.get(
-            "email",
-            "",
-        ),
-        "full_name": (
-            data.get("full_name")
-            if data
-            else user.get(
-                "email",
-                "",
-            ).split("@")[0]
-        ),
-        "daily_analysis_count": (
-            data.get(
-                "daily_analysis_count",
-                0,
-            )
-            if data
-            else 0
-        ),
+        "profile": profile,
+        "is_owner": owner,
+        "daily_analysis_count": count,
+        "daily_limit": None if owner else 4,
+        "remaining": None if owner else max(0, 4 - count),
     }
 
 
 class handler(BaseHTTPRequestHandler):
-
     def do_OPTIONS(self):
-        json_response(
-            self,
-            204,
-            {},
-        )
+        json_response(self, 204, {})
 
     def do_GET(self):
-        json_response(
-            self,
-            200,
-            {
-                "success": True,
-                "service": "LM Analyzer authentication",
-                "message": "Authentication API is online.",
-            },
-        )
+        try:
+            user = verify_access_token(self.headers.get("Authorization", "").split(" ", 1)[1] if " " in str(self.headers.get("Authorization", "")) else "")
+            profile = _ensure_profile(user)
+            json_response(self, 200, _profile_payload(user, profile))
+        except ValueError as exc:
+            json_response(self, 401, {"error": str(exc)})
+        except RuntimeError as exc:
+            json_response(self, 503, {"error": str(exc)})
+        except Exception:
+            json_response(self, 500, {"error": "Profile request failed."})
 
     def do_POST(self):
-
         try:
-            body = read_body(self)
-
-            if not isinstance(body, dict):
-                raise ValueError(
-                    "Request body must be JSON."
-                )
-
-            action = str(
-                body.get("action", "")
-            ).strip().lower()
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 128 * 1024:
+                json_response(self, 400, {"error": "Invalid request."})
+                return
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
+            action = str(data.get("action", "")).strip().lower()
 
             if action == "signup":
+                email = str(data.get("email", "")).strip().lower()
+                password = str(data.get("password", ""))
+                full_name = str(data.get("full_name", "")).strip()
+                confirm_password = str(data.get("confirm_password", ""))
 
-                result = signup(
-                    full_name=str(
-                        body.get(
-                            "full_name",
-                            "",
-                        )
-                    ).strip(),
-                    email=str(
-                        body.get(
-                            "email",
-                            "",
-                        )
-                    ).strip().lower(),
-                    password=str(
-                        body.get(
-                            "password",
-                            "",
-                        )
-                    ),
-                )
+                if not full_name:
+                    raise ValueError("Full name is required.")
+                if not email or "@" not in email:
+                    raise ValueError("A valid email is required.")
+                if len(password) < 6:
+                    raise ValueError("Password must contain at least 6 characters.")
+                if password != confirm_password:
+                    raise ValueError("Passwords do not match.")
 
-                json_response(
-                    self,
-                    200,
-                    {
-                        "success": True,
-                        "message": (
-                            "Account created successfully."
-                        ),
-                        "user": {
-                            "id": result["id"],
-                            "email": result["email"],
-                            "full_name": result["full_name"],
-                        },
-                        "access_token": result[
-                            "access_token"
-                        ],
-                        "refresh_token": result[
-                            "refresh_token"
-                        ],
-                        "email_confirmation_required": (
-                            result[
-                                "email_confirmation_required"
-                            ]
-                        ),
+                signup_url = get_supabase_url() + "/auth/v1/signup"
+                user = _request(
+                    signup_url,
+                    method="POST",
+                    payload={
+                        "email": email,
+                        "password": password,
+                        "data": {"full_name": full_name},
                     },
+                    headers=_anon_headers(),
                 )
+
+                returned_user = user.get("user") if isinstance(user, dict) else None
+                if isinstance(returned_user, dict) and returned_user.get("id"):
+                    _ensure_profile(returned_user)
+
+                session = user.get("session") if isinstance(user, dict) else None
+                if isinstance(session, dict) and session.get("access_token"):
+                    json_response(
+                        self,
+                        200,
+                        {
+                            "user": returned_user,
+                            "access_token": session.get("access_token"),
+                            "refresh_token": session.get("refresh_token", ""),
+                        },
+                    )
+                else:
+                    json_response(
+                        self,
+                        200,
+                        {
+                            "message": "Account created. Please log in.",
+                            "user": returned_user,
+                        },
+                    )
                 return
 
             if action == "login":
+                email = str(data.get("email", "")).strip().lower()
+                password = str(data.get("password", ""))
+                if not email or not password:
+                    raise ValueError("Email and password are required.")
 
-                result = login(
-                    email=str(
-                        body.get(
-                            "email",
-                            "",
-                        )
-                    ).strip().lower(),
-                    password=str(
-                        body.get(
-                            "password",
-                            "",
-                        )
-                    ),
+                login_url = get_supabase_url() + "/auth/v1/token?grant_type=password"
+                session = _request(
+                    login_url,
+                    method="POST",
+                    payload={"email": email, "password": password},
+                    headers=_anon_headers(),
                 )
+                user = session.get("user")
+                if not isinstance(user, dict) or not user.get("id"):
+                    raise RuntimeError("Login succeeded without a valid user session.")
+                _ensure_profile(user)
 
                 json_response(
                     self,
                     200,
                     {
-                        "success": True,
-                        "message": "Login successful.",
-                        "user": {
-                            "id": result["id"],
-                            "email": result["email"],
-                            "full_name": result["full_name"],
-                            "daily_analysis_count": result[
-                                "daily_analysis_count"
-                            ],
-                        },
-                        "access_token": result[
-                            "access_token"
-                        ],
-                        "refresh_token": result[
-                            "refresh_token"
-                        ],
+                        "user": user,
+                        "access_token": session.get("access_token", ""),
+                        "refresh_token": session.get("refresh_token", ""),
+                        "expires_in": session.get("expires_in"),
                     },
                 )
                 return
 
             if action == "refresh":
+                refresh_token = str(data.get("refresh_token", "")).strip()
+                if not refresh_token:
+                    raise ValueError("Refresh token is required.")
 
-                result = refresh(
-                    str(
-                        body.get(
-                            "refresh_token",
-                            "",
-                        )
-                    ).strip()
+                refresh_url = get_supabase_url() + "/auth/v1/token?grant_type=refresh_token"
+                session = _request(
+                    refresh_url,
+                    method="POST",
+                    payload={"refresh_token": refresh_token},
+                    headers=_anon_headers(),
                 )
+                user = session.get("user")
+                if isinstance(user, dict) and user.get("id"):
+                    _ensure_profile(user)
 
                 json_response(
                     self,
                     200,
                     {
-                        "success": True,
-                        "access_token": result[
-                            "access_token"
-                        ],
-                        "refresh_token": result[
-                            "refresh_token"
-                        ],
-                        "user": result["user"],
+                        "user": user,
+                        "access_token": session.get("access_token", ""),
+                        "refresh_token": session.get("refresh_token", refresh_token),
+                        "expires_in": session.get("expires_in"),
                     },
                 )
                 return
 
             if action == "profile":
-
-                token = str(
-                    body.get(
-                        "access_token",
-                        "",
-                    )
-                ).strip()
-
-                result = profile(
-                    token
-                )
-
-                json_response(
-                    self,
-                    200,
-                    {
-                        "success": True,
-                        "user": result,
-                    },
-                )
+                auth = str(self.headers.get("Authorization", ""))
+                token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+                user = verify_access_token(token)
+                profile = _ensure_profile(user)
+                json_response(self, 200, _profile_payload(user, profile))
                 return
 
-            json_response(
-                self,
-                400,
-                {
-                    "success": False,
-                    "error": (
-                        "Invalid action. "
-                        "Use signup, login, "
-                        "refresh, or profile."
-                    ),
-                },
-            )
+            raise ValueError("Unknown authentication action.")
 
+        except json.JSONDecodeError:
+            json_response(self, 400, {"error": "Invalid request JSON."})
         except ValueError as exc:
-
-            json_response(
-                self,
-                400,
-                {
-                    "success": False,
-                    "error": str(exc),
-                },
-            )
-
+            json_response(self, 400, {"error": str(exc)})
         except RuntimeError as exc:
-
-            json_response(
-                self,
-                400,
-                {
-                    "success": False,
-                    "error": str(exc),
-                },
-            )
-
-        except Exception as exc:
-
-            json_response(
-                self,
-                500,
-                {
-                    "success": False,
-                    "error": (
-                        "Authentication server error: "
-                        + str(exc)
-                    ),
-                },
-            )
+            message = str(exc)
+            if "Invalid or expired session" in message:
+                json_response(self, 401, {"error": message})
+            else:
+                json_response(self, 503, {"error": message})
+        except Exception:
+            json_response(self, 500, {"error": "Authentication request failed."})
