@@ -1,4 +1,5 @@
 import json
+import traceback
 from http.server import BaseHTTPRequestHandler
 
 from analysis_common import (
@@ -24,7 +25,6 @@ MAX_REQUEST_BYTES = 25 * 1024 * 1024
 class handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
-
         json_response(
             self,
             204,
@@ -34,7 +34,6 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
 
         try:
-
             access_token = extract_bearer_token(
                 self.headers
             )
@@ -75,15 +74,13 @@ class handler(BaseHTTPRequestHandler):
             )
 
             try:
-
                 body = json.loads(
                     raw_body.decode("utf-8")
                 )
-
-            except Exception:
-
+            except Exception as exc:
                 raise ValueError(
-                    "Request body must contain valid JSON."
+                    "Request body must contain valid JSON: "
+                    + str(exc)
                 )
 
             if not isinstance(body, dict):
@@ -118,7 +115,6 @@ class handler(BaseHTTPRequestHandler):
             )
 
             if new_count == -1:
-
                 json_response(
                     self,
                     429,
@@ -130,11 +126,9 @@ class handler(BaseHTTPRequestHandler):
                         "daily_limit": 4
                     }
                 )
-
                 return
 
             try:
-
                 openai_response = (
                     create_background_response(
                         instrument=instrument,
@@ -145,11 +139,9 @@ class handler(BaseHTTPRequestHandler):
                 )
 
             except Exception:
-
                 release_analysis_slot(
                     user_id
                 )
-
                 raise
 
             response_id = str(
@@ -160,7 +152,6 @@ class handler(BaseHTTPRequestHandler):
             ).strip()
 
             if not response_id:
-
                 release_analysis_slot(
                     user_id
                 )
@@ -189,29 +180,17 @@ class handler(BaseHTTPRequestHandler):
 
         except Exception as exc:
 
-            status_code = 401
-
-            message = str(exc)
-
-            if (
-                "Request" in message
-                or "Instrument" in message
-                or "Trade focus" in message
-                or "image" in message
-            ):
-                status_code = 400
-
-            elif (
-                "OpenAI" in message
-                or "Unable" in message
-            ):
-                status_code = 500
+            # TEMPORARY DIAGNOSTIC RESPONSE.
+            # This lets us see the actual Python failure.
+            traceback_text = traceback.format_exc()
 
             json_response(
                 self,
-                status_code,
+                500,
                 {
                     "status": "failed",
-                    "error": message
+                    "error": str(exc),
+                    "exception_type": type(exc).__name__,
+                    "traceback": traceback_text
                 }
             )
