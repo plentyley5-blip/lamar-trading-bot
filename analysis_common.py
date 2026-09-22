@@ -59,7 +59,7 @@ DAY TRADE:
 Balance 4H structure with 15M confirmation.
 
 SWING:
-Prioritize 4H structure and use 15M only as supporting confirmation.
+Prioritize 4H structure and use 15M as supporting confirmation.
 
 Methods do not need unanimous agreement.
 
@@ -73,7 +73,8 @@ Return NO TRADE when:
 
 Never invent exact prices.
 
-Only provide exact entry, stop loss and targets when those levels are visible and technically defensible from the charts.
+Only provide exact entry, stop loss and targets when those levels are visible
+and technically defensible from the supplied charts.
 
 Never guarantee profit.
 
@@ -86,7 +87,8 @@ take_profit_1 = ""
 take_profit_2 = ""
 risk_reward = ""
 
-Keep every explanatory field concise but useful.
+Keep explanatory fields concise but useful.
+
 Return only the requested JSON.
 """
 
@@ -462,10 +464,10 @@ def make_user_prompt(
         + "Trade focus: "
         + trade_focus
         + "\n\n"
-        + "Chart 1 is the 4H timeframe.\n"
-        + "Chart 2 is the 15M timeframe.\n\n"
+        + "Chart 1 = 4H higher-timeframe context.\n"
+        + "Chart 2 = 15M confirmation and execution.\n\n"
         + "Analyze both charts together.\n"
-        + "Determine the current structure, liquidity, price action, "
+        + "Determine market structure, liquidity, price action, "
           "SMC conditions, Fibonacci/premium-discount context, "
           "confirmation, invalidation and trade quality.\n\n"
         + "Return BUY, SELL, or NO TRADE.\n"
@@ -479,7 +481,7 @@ def _send_openai_request(
     higher_image,
     lower_image,
     image_detail="low",
-    output_tokens=900
+    output_tokens=700
 ):
     payload = {
         "model": MODEL,
@@ -489,7 +491,7 @@ def _send_openai_request(
         "store": True,
 
         "reasoning": {
-            "effort": "low"
+            "effort": "none"
         },
 
         "instructions": SYSTEM_PROMPT,
@@ -609,13 +611,14 @@ def create_background_response(
     lower_image
 ):
     try:
+
         return _send_openai_request(
             instrument=instrument,
             trade_focus=trade_focus,
             higher_image=higher_image,
             lower_image=lower_image,
             image_detail="low",
-            output_tokens=900
+            output_tokens=700
         )
 
     except Exception as first_error:
@@ -635,7 +638,7 @@ def create_background_response(
             higher_image=higher_image,
             lower_image=lower_image,
             image_detail="low",
-            output_tokens=600
+            output_tokens=500
         )
 
 
