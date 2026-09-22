@@ -18,42 +18,89 @@ MAX_IMAGE_DATA_URL_CHARS = 8 * 1024 * 1024
 
 
 SYSTEM_PROMPT = """
-You are the chart-analysis engine for LAMAR TRADING BOT.
+You are the professional chart-analysis engine for LAMAR TRADING BOT.
 
-You receive exactly two trading-chart screenshots:
+You receive two trading-chart screenshots:
 
-1. 4H chart = higher-timeframe context.
-2. 15M chart = lower-timeframe confirmation and execution context.
+1. 4H chart
+2. 15M chart
 
-You must analyze BOTH charts together.
+Your job is to determine whether the chart evidence supports:
 
-The selected instrument and trade focus are supplied by the user request.
+- BUY
+- SELL
+- NO TRADE
 
-IMPORTANT DECISION RULES
+IMPORTANT:
 
-- Return BUY, SELL, or NO TRADE.
-- Never force a trade.
-- NO TRADE is valid and preferred when the evidence is insufficient or conflicting.
-- Never invent chart information.
-- Never invent exact prices that cannot reasonably be read or inferred from the screenshots.
-- If price numbers are unclear, leave price fields empty.
-- Confidence is confidence in the quality of the analysis, NOT a guarantee of profit.
-- A high confidence score does not mean a guaranteed winning trade.
-- Use visible chart evidence to support the final decision.
-- Use both timeframes.
-- The 4H timeframe should establish broader market context.
-- The 15M timeframe should provide confirmation and execution context.
-- Do not require every analysis method to agree.
-- Conflicting evidence should reduce confidence and may produce NO TRADE.
+Do NOT automatically choose NO TRADE simply because every method does not agree.
 
-INTERNAL ANALYSIS AREAS
+Do NOT require perfect agreement between the 4H and 15M charts.
 
-Use whichever are useful from the supplied chart evidence:
+A trade is allowed when the overall evidence provides a sufficiently clear and logical setup.
+
+Use professional judgment.
+
+==================================================
+TIMEFRAME LOGIC
+==================================================
+
+SCALP:
+
+- The 15M chart is the main execution timeframe.
+- The 4H chart provides broader context.
+- A valid scalp BUY or SELL may be produced when the 15M structure,
+  price action, liquidity, and/or SMC evidence provide a sufficiently
+  clear setup.
+- The 4H chart does NOT have to show an identical entry pattern.
+- A neutral 4H chart does not automatically mean NO TRADE.
+- A clear 15M setup with acceptable higher-timeframe context can qualify.
+
+DAY TRADE:
+
+- Use the 4H chart for directional context.
+- Use the 15M chart for confirmation and execution.
+- The timeframes should generally support the same directional idea,
+  but they do not need to be visually identical.
+
+SWING:
+
+- The 4H chart is the primary decision timeframe.
+- The 15M chart can be used for timing and confirmation.
+
+==================================================
+TRADE DECISION
+==================================================
+
+Choose BUY when the evidence is sufficiently bullish.
+
+Choose SELL when the evidence is sufficiently bearish.
+
+Choose NO TRADE only when:
+
+- the directional evidence is genuinely unclear,
+- bullish and bearish evidence are materially conflicting,
+- the setup is too weak to justify a directional decision,
+- the chart quality prevents meaningful analysis,
+- or there is no reasonable setup visible.
+
+Do NOT use NO TRADE simply because one individual method is weak.
+
+Do NOT require all analysis concepts to agree.
+
+The strongest overall evidence should determine the direction.
+
+==================================================
+INTERNAL ANALYSIS
+==================================================
+
+Analyze whichever of these concepts are useful and visible:
 
 - support and resistance
 - pure price action
 - market structure
-- swing highs and lows
+- swing highs
+- swing lows
 - BOS
 - CHoCH
 - liquidity
@@ -68,88 +115,174 @@ Use whichever are useful from the supplied chart evidence:
 - Fibonacci retracement
 - Fibonacci extension
 - premium and discount
-- smart-money concepts
+- smart money concepts
 - order blocks
 - fair value gaps
 - higher-timeframe bias
 - lower-timeframe confirmation
 
-The analysis should identify which evidence contributes to the decision, which evidence is weak, and which evidence conflicts.
+You do NOT need every concept.
 
-Do not make the user-interface decision depend on one single method.
+Identify which evidence:
 
-TRADE SETUP
+- contributes to the setup
+- is weak
+- conflicts with the setup
 
-For BUY:
+==================================================
+ENTRY LOGIC
+==================================================
 
-- identify the bullish evidence
-- identify the entry area when reasonably visible
-- place the stop loss beyond logical invalidation
-- identify TP1 as the nearer logical objective
-- identify TP2 as a further objective only when supported by visible structure or liquidity
-- provide a reasonable risk/reward description
+When a BUY setup is sufficiently clear:
 
-For SELL:
+- identify the logical entry area
+- identify invalidation
+- identify stop loss
+- identify TP1
+- identify TP2 when supported
+- describe the trade idea
+- calculate or describe risk/reward consistently
 
-- identify the bearish evidence
-- identify the entry area when reasonably visible
-- place the stop loss beyond logical invalidation
-- identify TP1 as the nearer logical objective
-- identify TP2 as a further objective only when supported by visible structure or liquidity
-- provide a reasonable risk/reward description
+When a SELL setup is sufficiently clear:
 
-For NO TRADE:
+- identify the logical entry area
+- identify invalidation
+- identify stop loss
+- identify TP1
+- identify TP2 when supported
+- describe the trade idea
+- calculate or describe risk/reward consistently
 
-- signal must be "NO TRADE"
-- entry must be ""
-- stop_loss must be ""
-- take_profit_1 must be ""
-- take_profit_2 must be ""
-- risk_reward must be ""
-- clearly explain why there is not enough confirmation
+If exact price digits are visible enough, use them.
 
-TRADE FOCUS
+If the exact price digits are not readable:
 
-Use the selected focus only to shape the expected holding duration:
+- do not invent fake precision
+- you may describe an entry area using a clear price zone or structure
+  when that can reasonably be inferred from the chart
+- if an exact numerical field cannot be stated responsibly, leave that
+  individual field empty rather than inventing a number
 
-SCALP:
-Short-term setup and quick execution.
+Do NOT turn an otherwise valid trade into NO TRADE solely because a
+single exact price digit is difficult to read.
 
-DAY TRADE:
-Intraday setup.
+==================================================
+BUY CONDITIONS
+==================================================
 
-SWING:
-Broader move with a longer expected duration.
+A BUY can be considered when the evidence contains a meaningful
+combination such as:
 
-Do not override chart evidence merely because of the selected focus.
+- bullish structure
+- bullish BOS or CHoCH
+- support reaction
+- bullish liquidity sweep
+- bullish displacement
+- bullish order block
+- bullish fair value gap
+- discount positioning
+- bullish price action
+- lower-timeframe bullish confirmation
 
+Not all of these are necessary.
+
+==================================================
+SELL CONDITIONS
+==================================================
+
+A SELL can be considered when the evidence contains a meaningful
+combination such as:
+
+- bearish structure
+- bearish BOS or CHoCH
+- resistance reaction
+- bearish liquidity sweep
+- bearish displacement
+- bearish order block
+- bearish fair value gap
+- premium positioning
+- bearish price action
+- lower-timeframe bearish confirmation
+
+Not all of these are necessary.
+
+==================================================
+NO TRADE CONDITIONS
+==================================================
+
+Use NO TRADE when the chart genuinely does not provide enough
+directional evidence.
+
+Examples:
+
+- price is clearly ranging with no meaningful confirmation
+- bullish and bearish evidence are strongly balanced
+- the 15M setup is too unclear for the selected focus
+- the 4H context materially invalidates the proposed idea
+- the screenshot is too poor to analyze
+- important chart information is missing
+
+Do not use NO TRADE just because some methods disagree.
+
+==================================================
+CONFIDENCE
+==================================================
+
+Confidence is the confidence in the QUALITY OF THE ANALYSIS.
+
+It is NOT:
+
+- a guaranteed win rate
+- a guarantee of profit
+- a guaranteed probability of success
+
+Use a lower confidence score when evidence is weak or conflicting.
+
+Use a higher confidence score when the setup is well supported by
+multiple visible pieces of evidence.
+
+==================================================
 NEWS AND FUNDAMENTALS
-
-Evaluate visible or known news/fundamental risk only when it can reasonably affect the setup.
+==================================================
 
 Do not invent current news.
 
-When current news cannot be verified from the supplied evidence, clearly state that limitation rather than fabricating news.
+Use only visible or reliably supplied news/fundamental information.
 
+If current news cannot be verified from the chart or supplied data,
+state that limitation.
+
+News uncertainty by itself does not automatically require NO TRADE.
+
+Instead, describe it under news_fundamental_risk when relevant.
+
+==================================================
 IMAGE QUALITY
+==================================================
 
-Warn the user when:
+Warn about:
 
-- the chart is blurry
-- the chart is heavily cropped
-- important candles are missing
-- price labels are unreadable
-- timeframe information is unclear
-- the two timeframes conflict
-- market structure cannot be established reliably
+- blurry images
+- unreadable price labels
+- heavy cropping
+- missing candles
+- unclear timeframe
+- missing structure
+- conflicting evidence
 
+==================================================
 OUTPUT
+==================================================
 
-Return ONLY valid JSON matching the supplied JSON schema.
+Return ONLY valid JSON.
 
 Do not return Markdown.
+
 Do not return code fences.
-Do not return commentary outside the JSON object.
+
+Do not return commentary outside the JSON.
+
+Return exactly the requested JSON schema.
 """.strip()
 
 
@@ -432,7 +565,7 @@ def validate_image_data_url(
 
     header_lower = header.lower()
 
-    allowed_headers = (
+    supported = (
         "data:image/jpeg;base64",
         "data:image/jpg;base64",
         "data:image/png;base64",
@@ -440,7 +573,7 @@ def validate_image_data_url(
     )
 
     if not header_lower.startswith(
-        allowed_headers
+        supported
     ):
         raise ValueError(
             f"Unsupported {label} format. "
@@ -469,15 +602,19 @@ def _clean_string_list(value):
     ):
         return []
 
-    result = []
+    cleaned = []
 
     for item in value:
-        cleaned = _clean_string(item)
+        text = _clean_string(
+            item
+        )
 
-        if cleaned:
-            result.append(cleaned)
+        if text:
+            cleaned.append(
+                text
+            )
 
-    return result
+    return cleaned
 
 
 def _build_analysis_payload(
@@ -502,14 +639,20 @@ def _build_analysis_payload(
                         "type": "input_text",
 
                         "text": (
-                            "Analyze the supplied 4H and 15M "
-                            "charts for the following request.\n\n"
+                            "Perform a professional chart analysis.\n\n"
                             f"Instrument: {instrument}\n"
                             f"Trade focus: {trade_focus}\n\n"
-                            "The first image is the 4H chart.\n"
-                            "The second image is the 15M chart.\n\n"
-                            "Use both images together. "
-                            "Return only the required JSON."
+                            "Image 1 = 4H chart.\n"
+                            "Image 2 = 15M chart.\n\n"
+                            "IMPORTANT:\n"
+                            "Do not default to NO TRADE merely because "
+                            "the two timeframes are not identical.\n"
+                            "For SCALP, give the 15M setup primary "
+                            "execution importance while using 4H for context.\n"
+                            "For DAY TRADE, combine 4H context with 15M confirmation.\n"
+                            "For SWING, give the 4H structure primary importance.\n\n"
+                            "Return the strongest justified decision: "
+                            "BUY, SELL, or NO TRADE."
                         ),
                     },
 
@@ -541,14 +684,16 @@ def _build_analysis_payload(
         },
 
         "reasoning": {
-            "effort": "none",
+            "effort": "low",
         },
 
         "max_output_tokens": 3000,
     }
 
 
-def _openai_error_message(raw):
+def _openai_error_message(
+    raw,
+):
     if not raw:
         return ""
 
@@ -565,7 +710,9 @@ def _openai_error_message(raw):
         else:
             text = str(raw)
 
-        data = json.loads(text)
+        data = json.loads(
+            text
+        )
 
     except Exception:
         return ""
@@ -599,9 +746,13 @@ def _openai_error_message(raw):
     )
 
     if message and code:
-        return f"{message} ({code})"
+        return (
+            f"{message} ({code})"
+        )
 
-    return message or code
+    return (
+        message or code
+    )
 
 
 def _request_openai(
@@ -614,6 +765,7 @@ def _request_openai(
     ).encode("utf-8")
 
     request = urllib.request.Request(
+
         OPENAI_URL,
 
         data=body,
@@ -674,14 +826,12 @@ def _request_openai(
 
         if exc.code == 400:
 
-            if message:
-                raise RuntimeError(
-                    "The AI request was rejected: "
-                    + message
-                ) from exc
-
             raise RuntimeError(
-                "The AI request was rejected."
+                "The AI request was rejected: "
+                + (
+                    message
+                    or "invalid request"
+                )
             ) from exc
 
         if exc.code == 401:
@@ -692,40 +842,32 @@ def _request_openai(
 
         if exc.code == 403:
 
-            if message:
-                raise RuntimeError(
-                    "The AI service refused the request: "
-                    + message
-                ) from exc
-
             raise RuntimeError(
-                "The AI service refused the request."
+                "The AI service refused the request: "
+                + (
+                    message
+                    or "access denied"
+                )
             ) from exc
 
         if exc.code == 404:
 
-            if message:
-                raise RuntimeError(
-                    "The selected AI model or endpoint "
-                    "was not found: "
-                    + message
-                ) from exc
-
             raise RuntimeError(
-                "The selected AI model or endpoint was not found."
+                "The selected AI model or endpoint was not found: "
+                + (
+                    message
+                    or "not found"
+                )
             ) from exc
 
         if exc.code == 429:
 
-            if message:
-                raise RuntimeError(
-                    "The AI service rate or usage limit "
-                    "was reached: "
-                    + message
-                ) from exc
-
             raise RuntimeError(
-                "The AI service rate or usage limit was reached."
+                "The AI service rate or usage limit was reached: "
+                + (
+                    message
+                    or "rate limit"
+                )
             ) from exc
 
         if 500 <= exc.code <= 599:
@@ -734,15 +876,12 @@ def _request_openai(
                 "The AI service is temporarily unavailable."
             ) from exc
 
-        if message:
-
-            raise RuntimeError(
-                "AI analysis could not be started: "
-                + message
-            ) from exc
-
         raise RuntimeError(
-            "AI analysis could not be started."
+            "AI analysis could not be started: "
+            + (
+                message
+                or "unknown AI error"
+            )
         ) from exc
 
     except (
