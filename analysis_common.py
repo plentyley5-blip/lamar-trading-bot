@@ -1,6 +1,3 @@
-import base64
-import hashlib
-import hmac
 import json
 import os
 import time
@@ -10,395 +7,345 @@ import urllib.request
 
 OPENAI_URL = "https://api.openai.com/v1/responses"
 
-MODEL = "gpt-5.6-luna"
+MODEL = (
+    os.getenv(
+        "OPENAI_MODEL",
+        "gpt-5.6-luna",
+    ).strip()
+    or "gpt-5.6-luna"
+)
 
-JOB_TTL_SECONDS = 15 * 60
+MAX_IMAGE_DATA_URL_CHARS = 8 * 1024 * 1024
 
 
 SYSTEM_PROMPT = """
-You are LM ANALYZER, a professional multi-timeframe trading-chart analysis engine.
+You are the vision analysis engine for LAMAR TRADING BOT.
 
-Analyze the supplied 4H and 15M charts for the supplied instrument and trade focus:
-SCALP, DAY TRADE, or SWING.
+You analyze two supplied trading-chart screenshots for the selected instrument:
 
-Return exactly one signal:
-BUY
-SELL
-NO TRADE
+1. A 4H chart for higher-timeframe context.
+2. A 15M chart for lower-timeframe confirmation and execution context.
 
-Use visible evidence from both charts and consider:
+Return ONLY JSON that exactly matches the supplied schema.
+
+CORE RULES
+
+- Use BOTH screenshots together.
+- Never make the final decision from only one timeframe.
+- Be conservative.
+- A valid NO TRADE decision is preferred over a forced setup.
+- Never invent an exact price level that is not reasonably visible or inferable from the supplied charts.
+- If price digits are unclear, leave exact price fields empty.
+- If missing information prevents a reliable setup, return NO TRADE.
+- Confidence is an analysis-confidence score, NOT a guaranteed probability of profit.
+- For NO TRADE, entry, stop_loss, take_profit_1, take_profit_2, and risk_reward MUST be empty strings.
+- For BUY or SELL, provide concrete levels only when they can be reasonably read from the screenshots.
+- Explain the decision using visible chart evidence.
+- The selected trade focus is context only and must not override chart evidence.
+
+INTERNAL ANALYSIS
+
+Evaluate the chart evidence using these concepts when useful:
 
 - support and resistance
 - pure price action
 - market structure
-- BOS and CHoCH
-- liquidity and liquidity sweeps
-- smart money concepts
-- order blocks
-- fair value gaps / imbalances
-- Fibonacci
-- premium and discount
+- BOS
+- CHoCH
+- liquidity
+- liquidity sweeps
 - displacement
 - inducement
 - mitigation
 - invalidation
-- higher-timeframe context
+- Fibonacci retracement
+- Fibonacci extension
+- premium and discount
+- smart-money concepts
+- order blocks
+- fair value gaps
+- higher-timeframe bias
 - lower-timeframe confirmation
+- visible news or fundamental-risk information
 
-Do not merely list methods.
-Explain the important visible evidence and how it supports, weakens, or conflicts with the setup.
+Do not require every concept to agree.
 
-TIMEFRAME RULES:
-4H = higher-timeframe context and directional structure.
-15M = confirmation and execution context.
+Identify:
 
-SCALP:
-Prioritize 15M confirmation while respecting 4H context.
+- evidence contributing to the setup
+- evidence that is weak
+- evidence that conflicts
+- whether the higher and lower timeframes agree
 
-DAY TRADE:
-Balance 4H structure with 15M confirmation.
+Do not present internal methods as the main UI trading categories.
+Explain them as evidence supporting or weakening the analysis.
 
-SWING:
-Prioritize 4H structure and use 15M as supporting confirmation.
+TRADE SETUP RULES
 
-Methods do not need unanimous agreement.
+For BUY or SELL:
 
-Return NO TRADE when:
-- the charts are unclear or unreadable
-- the market is structurally ambiguous
-- the 4H and 15M conflict without a defensible resolution
-- there is no technically defensible entry
-- a valid stop loss cannot be established
-- a reasonable target cannot be established
+- Make the trade idea clear.
+- Use the higher timeframe to establish directional context.
+- Use the 15M chart for confirmation and execution context.
+- Keep the stop loss beyond the invalidation area.
+- TP1 should be the nearer logical objective.
+- TP2 should be a further logical objective only when supported by visible structure or liquidity.
+- Risk/reward must be consistent with the supplied levels.
+- Duration should match the selected trade focus and visible market structure.
+- Do not manufacture precision when the chart does not support it.
 
-Never invent exact prices.
-
-Only provide exact entry, stop loss and targets when those levels are visible
-and technically defensible from the supplied charts.
-
-Never guarantee profit.
-
-Confidence is an analysis-confidence score, NOT a probability of profit.
+NO TRADE RULES
 
 For NO TRADE:
-entry = ""
-stop_loss = ""
-take_profit_1 = ""
-take_profit_2 = ""
-risk_reward = ""
 
-Keep explanatory fields concise but useful.
+- signal must be NO TRADE
+- entry must be an empty string
+- stop_loss must be an empty string
+- take_profit_1 must be an empty string
+- take_profit_2 must be an empty string
+- risk_reward must be an empty string
+- explain clearly why a trade is not justified
 
-Return only the requested JSON.
-"""
+IMAGE QUALITY
+
+Mention warnings when:
+
+- chart quality is poor
+- price numbers cannot be read clearly
+- chart is heavily cropped
+- important market context is missing
+- the two timeframes conflict
+- the visible structure is ambiguous
+
+The final response must be valid JSON matching the schema exactly.
+""".strip()
 
 
 OUTPUT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
+
     "properties": {
         "signal": {
             "type": "string",
             "enum": [
                 "BUY",
                 "SELL",
-                "NO TRADE"
-            ]
+                "NO TRADE",
+            ],
         },
 
         "confidence": {
-            "type": "number",
+            "type": "integer",
             "minimum": 0,
-            "maximum": 100
-        },
-
-        "strength": {
-            "type": "string",
-            "enum": [
-                "VERY STRONG",
-                "STRONG",
-                "MODERATE",
-                "WEAK"
-            ]
+            "maximum": 100,
         },
 
         "instrument": {
-            "type": "string"
-        },
-
-        "trade_focus": {
             "type": "string",
-            "enum": [
-                "SCALP",
-                "DAY TRADE",
-                "SWING"
-            ]
         },
 
         "trend": {
             "type": "string",
-            "enum": [
-                "BULLISH",
-                "BEARISH",
-                "RANGE",
-                "UNCLEAR"
-            ]
         },
 
         "trade_idea": {
-            "type": "string"
-        },
-
-        "entry": {
-            "type": "string"
-        },
-
-        "stop_loss": {
-            "type": "string"
-        },
-
-        "take_profit_1": {
-            "type": "string"
-        },
-
-        "take_profit_2": {
-            "type": "string"
-        },
-
-        "risk_reward": {
-            "type": "string"
-        },
-
-        "duration": {
-            "type": "string"
+            "type": "string",
         },
 
         "higher_timeframe_context": {
-            "type": "string"
+            "type": "string",
         },
 
         "lower_timeframe_confirmation": {
-            "type": "string"
+            "type": "string",
+        },
+
+        "entry": {
+            "type": "string",
+        },
+
+        "stop_loss": {
+            "type": "string",
+        },
+
+        "take_profit_1": {
+            "type": "string",
+        },
+
+        "take_profit_2": {
+            "type": "string",
+        },
+
+        "risk_reward": {
+            "type": "string",
+        },
+
+        "duration": {
+            "type": "string",
         },
 
         "data_analysis": {
-            "type": "string"
+            "type": "string",
         },
 
         "explanation": {
-            "type": "string"
+            "type": "string",
         },
 
         "contributing_methods": {
             "type": "array",
             "items": {
-                "type": "string"
-            }
+                "type": "string",
+            },
         },
 
         "weak_methods": {
             "type": "array",
             "items": {
-                "type": "string"
-            }
+                "type": "string",
+            },
         },
 
         "conflicting_methods": {
             "type": "array",
             "items": {
-                "type": "string"
-            }
+                "type": "string",
+            },
         },
 
         "news_fundamental_risk": {
-            "type": "string"
+            "type": "string",
         },
 
         "warnings": {
             "type": "array",
             "items": {
-                "type": "string"
-            }
-        }
+                "type": "string",
+            },
+        },
     },
 
     "required": [
         "signal",
         "confidence",
-        "strength",
         "instrument",
-        "trade_focus",
         "trend",
         "trade_idea",
+        "higher_timeframe_context",
+        "lower_timeframe_confirmation",
         "entry",
         "stop_loss",
         "take_profit_1",
         "take_profit_2",
         "risk_reward",
         "duration",
-        "higher_timeframe_context",
-        "lower_timeframe_confirmation",
         "data_analysis",
         "explanation",
         "contributing_methods",
         "weak_methods",
         "conflicting_methods",
         "news_fundamental_risk",
-        "warnings"
-    ]
+        "warnings",
+    ],
 }
 
 
-def now():
-    return int(time.time())
+ALLOWED_INSTRUMENTS = {
+    "EURUSD",
+    "GBPUSD",
+    "USDJPY",
+    "XAUUSD",
+    "GBPJPY",
+    "AUDUSD",
+    "USDCAD",
+    "USDCHF",
+    "EURGBP",
+    "BTCUSD",
+}
 
 
-def get_openai_key():
-    key = os.environ.get(
-        "OPENAI_API_KEY",
-        ""
-    ).strip()
-
-    if not key:
-        raise RuntimeError(
-            "OPENAI_API_KEY is missing from Vercel Production."
-        )
-
-    return key
+ALLOWED_FOCUSES = {
+    "SCALP",
+    "DAY TRADE",
+    "SWING",
+}
 
 
-def token_key():
-    return get_openai_key().encode("utf-8")
-
-
-def create_job_token(
-    response_id,
-    instrument,
-    trade_focus
+def json_response(
+    handler,
+    status,
+    payload,
+    extra_headers=None,
 ):
-    payload = {
-        "response_id": response_id,
-        "instrument": instrument,
-        "trade_focus": trade_focus,
-        "created_at": now()
-    }
-
     raw = json.dumps(
         payload,
+        ensure_ascii=False,
         separators=(",", ":"),
-        sort_keys=True
     ).encode("utf-8")
 
-    signature = hmac.new(
-        token_key(),
-        raw,
-        hashlib.sha256
-    ).digest()
+    handler.send_response(status)
 
-    encoded_payload = (
-        base64.urlsafe_b64encode(raw)
-        .decode("ascii")
-        .rstrip("=")
+    handler.send_header(
+        "Content-Type",
+        "application/json; charset=utf-8",
     )
 
-    encoded_signature = (
-        base64.urlsafe_b64encode(signature)
-        .decode("ascii")
-        .rstrip("=")
+    handler.send_header(
+        "Access-Control-Allow-Origin",
+        "*",
     )
 
-    return (
-        encoded_payload
-        + "."
-        + encoded_signature
+    handler.send_header(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization",
     )
 
+    handler.send_header(
+        "Access-Control-Allow-Methods",
+        "GET, POST, OPTIONS",
+    )
 
-def read_job_token(token):
+    handler.send_header(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate",
+    )
+
+    handler.send_header(
+        "Content-Length",
+        str(len(raw)),
+    )
+
+    if extra_headers:
+        for key, value in extra_headers.items():
+            handler.send_header(
+                key,
+                str(value),
+            )
+
+    handler.end_headers()
+
     try:
-        parts = token.split(".", 1)
+        handler.wfile.write(raw)
+    except Exception:
+        pass
 
-        if len(parts) != 2:
-            raise ValueError(
-                "Invalid job token."
-            )
 
-        raw_part = parts[0]
-        signature_part = parts[1]
-
-        raw = base64.urlsafe_b64decode(
-            raw_part
-            + "=" * (-len(raw_part) % 4)
-        )
-
-        supplied_signature = (
-            base64.urlsafe_b64decode(
-                signature_part
-                + "=" * (-len(signature_part) % 4)
-            )
-        )
-
-        expected_signature = hmac.new(
-            token_key(),
-            raw,
-            hashlib.sha256
-        ).digest()
-
-        if not hmac.compare_digest(
-            supplied_signature,
-            expected_signature
-        ):
-            raise ValueError(
-                "Invalid job token signature."
-            )
-
-        data = json.loads(
-            raw.decode("utf-8")
-        )
-
-        created_at = int(
-            data["created_at"]
-        )
-
-        if now() - created_at > JOB_TTL_SECONDS:
-            raise ValueError(
-                "Analysis job has expired."
-            )
-
-        return (
-            str(
-                data["response_id"]
-            ).strip(),
-
-            str(
-                data["instrument"]
-            ).strip(),
-
-            str(
-                data["trade_focus"]
-            ).strip()
-        )
-
-    except Exception as exc:
-        raise ValueError(
-            "Invalid analysis job: "
-            + str(exc)
-        )
+def api_key():
+    return os.getenv(
+        "OPENAI_API_KEY",
+        "",
+    ).strip()
 
 
 def validate_instrument(value):
     instrument = str(
         value or ""
-    ).strip()
+    ).strip().upper()
 
-    if not instrument:
+    if instrument not in ALLOWED_INSTRUMENTS:
         raise ValueError(
-            "Instrument is required."
-        )
-
-    if len(instrument) > 50:
-        raise ValueError(
-            "Instrument name is too long."
+            "Invalid instrument. Select a supported instrument."
         )
 
     return instrument
@@ -406,16 +353,12 @@ def validate_instrument(value):
 
 def validate_focus(value):
     focus = str(
-        value or ""
+        value or "DAY TRADE"
     ).strip().upper()
 
-    if focus not in {
-        "SCALP",
-        "DAY TRADE",
-        "SWING"
-    }:
+    if focus not in ALLOWED_FOCUSES:
         raise ValueError(
-            "Trade focus must be SCALP, DAY TRADE, or SWING."
+            "Invalid trade focus."
         )
 
     return focus
@@ -423,305 +366,473 @@ def validate_focus(value):
 
 def validate_image_data_url(
     value,
-    name
+    label,
 ):
-    if not isinstance(
-        value,
-        str
-    ):
+    if not isinstance(value, str):
         raise ValueError(
-            name + " must be an image."
+            f"A valid {label} is required."
         )
 
-    if not value.startswith(
+    image = value.strip()
+
+    if not image.startswith(
         "data:image/"
     ):
         raise ValueError(
-            name + " is not a valid image."
+            f"A valid {label} is required."
         )
 
-    if ";base64," not in value:
+    if len(image) > MAX_IMAGE_DATA_URL_CHARS:
         raise ValueError(
-            name + " is not base64 encoded."
+            f"{label} is too large. "
+            "Please use a smaller chart screenshot."
         )
 
-    if len(value) > 12 * 1024 * 1024:
+    header, separator, encoded = image.partition(",")
+
+    if not separator or not encoded:
         raise ValueError(
-            name + " is too large."
+            f"A valid {label} is required."
         )
 
-    return value
-
-
-def make_user_prompt(
-    instrument,
-    trade_focus
-):
-    return (
-        "Instrument: "
-        + instrument
-        + "\n"
-        + "Trade focus: "
-        + trade_focus
-        + "\n\n"
-        + "Chart 1 = 4H higher-timeframe context.\n"
-        + "Chart 2 = 15M confirmation and execution.\n\n"
-        + "Analyze both charts together.\n"
-        + "Determine market structure, liquidity, price action, "
-          "SMC conditions, Fibonacci/premium-discount context, "
-          "confirmation, invalidation and trade quality.\n\n"
-        + "Return BUY, SELL, or NO TRADE.\n"
-        + "Never invent exact prices."
+    supported_headers = (
+        "data:image/jpeg;base64",
+        "data:image/jpg;base64",
+        "data:image/png;base64",
+        "data:image/webp;base64",
     )
 
+    if not header.lower().startswith(
+        supported_headers
+    ):
+        raise ValueError(
+            f"Unsupported {label} format. "
+            "Use JPG, PNG, or WEBP."
+        )
 
-def _send_openai_request(
+    if len(encoded) < 100:
+        raise ValueError(
+            f"The {label} appears to be empty or invalid."
+        )
+
+    return image
+
+
+def _clean_string(value):
+    if value is None:
+        return ""
+
+    return str(value).strip()
+
+
+def _clean_string_list(value):
+    if not isinstance(
+        value,
+        list,
+    ):
+        return []
+
+    cleaned = []
+
+    for item in value:
+        text = _clean_string(item)
+
+        if text:
+            cleaned.append(text)
+
+    return cleaned
+
+
+def _build_analysis_payload(
     instrument,
     trade_focus,
     higher_image,
     lower_image,
-    image_detail="low",
-    output_tokens=700
 ):
-    payload = {
+    return {
         "model": MODEL,
 
         "background": True,
-
-        "store": True,
-
-        "reasoning": {
-            "effort": "none"
-        },
 
         "instructions": SYSTEM_PROMPT,
 
         "input": [
             {
                 "role": "user",
+
                 "content": [
                     {
                         "type": "input_text",
-                        "text": make_user_prompt(
-                            instrument,
-                            trade_focus
-                        )
+
+                        "text": (
+                            f"Instrument: {instrument}.\n"
+                            f"Trade focus: {trade_focus}.\n"
+                            "Image 1 is the 4H chart.\n"
+                            "Image 2 is the 15M chart.\n"
+                            "Analyze both together and "
+                            "return the requested JSON."
+                        ),
                     },
 
                     {
                         "type": "input_image",
                         "image_url": higher_image,
-                        "detail": image_detail
+                        "detail": "high",
                     },
 
                     {
                         "type": "input_image",
                         "image_url": lower_image,
-                        "detail": image_detail
-                    }
-                ]
+                        "detail": "high",
+                    },
+                ],
             }
         ],
 
         "text": {
             "format": {
                 "type": "json_schema",
+
                 "name": "lamar_trade_analysis",
+
                 "strict": True,
-                "schema": OUTPUT_SCHEMA
+
+                "schema": OUTPUT_SCHEMA,
             }
         },
 
-        "max_output_tokens": output_tokens
+        "max_output_tokens": 2200,
     }
 
-    body = json.dumps(
+
+def _openai_error_message(raw):
+    if not raw:
+        return ""
+
+    if isinstance(
+        raw,
+        str,
+    ):
+        raw = raw.encode("utf-8")
+
+    try:
+        data = json.loads(
+            raw.decode(
+                "utf-8",
+                errors="replace",
+            )
+        )
+
+    except Exception:
+        return ""
+
+    if not isinstance(
+        data,
+        dict,
+    ):
+        return ""
+
+    error = data.get(
+        "error"
+    )
+
+    if not isinstance(
+        error,
+        dict,
+    ):
+        return ""
+
+    message = _clean_string(
+        error.get("message")
+    )
+
+    code = _clean_string(
+        error.get("code")
+    )
+
+    if message and code:
+        return (
+            f"{message} ({code})"
+        )
+
+    return message or code
+
+
+def _request_openai(
+    payload,
+    key,
+):
+    raw_body = json.dumps(
         payload,
-        separators=(",", ":")
+        separators=(",", ":"),
     ).encode("utf-8")
 
     request = urllib.request.Request(
+
         OPENAI_URL,
-        data=body,
-        method="POST",
+
+        data=raw_body,
+
         headers={
-            "Authorization":
-                "Bearer " + get_openai_key(),
+            "Authorization": (
+                "Bearer " + key
+            ),
 
             "Content-Type":
                 "application/json",
 
             "Accept":
-                "application/json"
-        }
+                "application/json",
+        },
+
+        method="POST",
     )
 
     try:
+
         with urllib.request.urlopen(
             request,
-            timeout=55
+            timeout=60,
         ) as response:
 
-            response_body = (
-                response.read()
-                .decode(
-                    "utf-8",
-                    errors="replace"
-                )
+            response_raw = (
+                response
+                .read()
+                .decode("utf-8")
             )
 
             return json.loads(
-                response_body
+                response_raw
             )
 
     except urllib.error.HTTPError as exc:
 
-        error_body = (
-            exc.read()
-            .decode(
-                "utf-8",
-                errors="replace"
-            )
+        raw = b""
+
+        try:
+            raw = exc.read()
+        except Exception:
+            pass
+
+        message = _openai_error_message(
+            raw
         )
 
-        error = RuntimeError(
-            "OpenAI HTTP "
-            + str(exc.code)
-            + ": "
-            + error_body
-        )
+        if exc.code == 401:
 
-        error.openai_status = exc.code
-        error.openai_body = error_body
+            raise RuntimeError(
+                "The server API credential "
+                "was rejected by the AI service."
+            ) from exc
 
-        raise error
+        if exc.code == 429:
 
-    except urllib.error.URLError as exc:
+            if message:
+
+                raise RuntimeError(
+                    "The AI service rate or "
+                    "usage limit was reached: "
+                    + message
+                ) from exc
+
+            raise RuntimeError(
+                "The AI service rate or usage "
+                "limit was reached."
+            ) from exc
+
+        if 500 <= exc.code <= 599:
+
+            raise RuntimeError(
+                "The AI service is temporarily "
+                "unavailable."
+            ) from exc
+
+        if message:
+
+            raise RuntimeError(
+                "AI analysis could not be started: "
+                + message
+            ) from exc
 
         raise RuntimeError(
-            "Unable to connect to OpenAI: "
-            + str(exc.reason)
-        )
+            "AI analysis could not be started."
+        ) from exc
+
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+    ) as exc:
+
+        raise RuntimeError(
+            "The AI analysis service could not "
+            "be reached."
+        ) from exc
 
 
 def create_background_response(
     instrument,
     trade_focus,
     higher_image,
-    lower_image
+    lower_image,
 ):
-    try:
+    key = api_key()
 
-        return _send_openai_request(
-            instrument=instrument,
-            trade_focus=trade_focus,
-            higher_image=higher_image,
-            lower_image=lower_image,
-            image_detail="low",
-            output_tokens=700
+    if not key:
+        raise RuntimeError(
+            "OPENAI_API_KEY is missing from Vercel."
         )
 
-    except Exception as first_error:
+    instrument = validate_instrument(
+        instrument
+    )
 
-        status = getattr(
-            first_error,
-            "openai_status",
-            None
-        )
+    trade_focus = validate_focus(
+        trade_focus
+    )
 
-        if status != 429:
-            raise
+    higher_image = validate_image_data_url(
+        higher_image,
+        "4H chart",
+    )
 
-        return _send_openai_request(
-            instrument=instrument,
-            trade_focus=trade_focus,
-            higher_image=higher_image,
-            lower_image=lower_image,
-            image_detail="low",
-            output_tokens=500
-        )
+    lower_image = validate_image_data_url(
+        lower_image,
+        "15M chart",
+    )
+
+    payload = _build_analysis_payload(
+        instrument=instrument,
+        trade_focus=trade_focus,
+        higher_image=higher_image,
+        lower_image=lower_image,
+    )
+
+    return _request_openai(
+        payload,
+        key,
+    )
 
 
 def extract_output_text(
-    response_data
+    response_data,
 ):
+    if not isinstance(
+        response_data,
+        dict,
+    ):
+        raise RuntimeError(
+            "The AI service returned an invalid response."
+        )
+
+    direct = response_data.get(
+        "output_text"
+    )
+
+    if (
+        isinstance(direct, str)
+        and direct.strip()
+    ):
+        return direct.strip()
+
     output = response_data.get(
-        "output"
+        "output",
+        [],
     )
 
     if isinstance(
         output,
-        list
+        list,
     ):
-        pieces = []
 
         for item in output:
 
             if not isinstance(
                 item,
-                dict
+                dict,
             ):
                 continue
 
-            content = item.get(
-                "content"
+            content_items = item.get(
+                "content",
+                [],
             )
 
             if not isinstance(
-                content,
-                list
+                content_items,
+                list,
             ):
                 continue
 
-            for part in content:
+            for content in content_items:
 
                 if not isinstance(
-                    part,
-                    dict
+                    content,
+                    dict,
                 ):
                     continue
 
-                text = part.get(
+                if (
+                    content.get("type")
+                    != "output_text"
+                ):
+                    continue
+
+                text = content.get(
                     "text"
                 )
 
-                if isinstance(
-                    text,
-                    str
-                ):
-                    pieces.append(
-                        text
+                if (
+                    isinstance(
+                        text,
+                        str,
                     )
+                    and text.strip()
+                ):
+                    return text.strip()
 
-        if pieces:
-            return "\n".join(
-                pieces
-            ).strip()
-
-    output_text = response_data.get(
-        "output_text"
+    raise RuntimeError(
+        "The model returned no analysis text."
     )
 
-    if isinstance(
-        output_text,
-        str
-    ) and output_text.strip():
 
-        return output_text.strip()
+def clean_json_text(text):
+    cleaned = str(
+        text or ""
+    ).strip()
 
-    raise ValueError(
-        "OpenAI completed the analysis "
-        "but returned no text."
-    )
+    if cleaned.startswith(
+        "```"
+    ):
+
+        lines = cleaned.splitlines()
+
+        if lines:
+            lines = lines[1:]
+
+        if (
+            lines
+            and lines[-1].strip()
+            == "```"
+        ):
+            lines = lines[:-1]
+
+        cleaned = (
+            "\n".join(lines)
+            .strip()
+        )
+
+    return cleaned
 
 
 def parse_completed_response(
     response_data,
     instrument,
-    trade_focus
+    trade_focus="DAY TRADE",
 ):
-    text = extract_output_text(
-        response_data
+    text = clean_json_text(
+        extract_output_text(
+            response_data
+        )
     )
 
     try:
@@ -730,142 +841,250 @@ def parse_completed_response(
             text
         )
 
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
 
-        cleaned = text.strip()
-
-        if cleaned.startswith(
-            "```"
-        ):
-            cleaned = (
-                cleaned
-                .replace(
-                    "```json",
-                    "",
-                    1
-                )
-                .replace(
-                    "```",
-                    "",
-                    1
-                )
-                .strip()
-            )
-
-        result = json.loads(
-            cleaned
-        )
+        raise RuntimeError(
+            "The model returned an invalid "
+            "analysis format."
+        ) from exc
 
     if not isinstance(
         result,
-        dict
+        dict,
     ):
-        raise ValueError(
-            "Analysis result is not a JSON object."
+        raise RuntimeError(
+            "The model returned an invalid "
+            "analysis object."
         )
 
-    result["instrument"] = instrument
-    result["trade_focus"] = trade_focus
-
-    signal = str(
-        result.get(
-            "signal",
-            ""
-        )
-    ).upper().strip()
+    signal = _clean_string(
+        result.get("signal")
+    ).upper()
 
     if signal not in {
         "BUY",
         "SELL",
-        "NO TRADE"
+        "NO TRADE",
     }:
-        raise ValueError(
-            "Analysis returned an invalid signal."
-        )
+
+        signal = "NO TRADE"
 
     result["signal"] = signal
 
-    try:
-        confidence = float(
-            result.get(
-                "confidence",
-                0
-            )
-        )
-    except Exception:
-        confidence = 0
+    result["instrument"] = (
+        _clean_string(
+            instrument
+        ).upper()
+    )
 
-    confidence = max(
-        0,
-        min(
-            100,
-            confidence
+    result["trend"] = (
+        _clean_string(
+            result.get("trend")
         )
     )
 
-    result["confidence"] = confidence
+    result["trade_idea"] = (
+        _clean_string(
+            result.get("trade_idea")
+        )
+    )
+
+    result[
+        "higher_timeframe_context"
+    ] = _clean_string(
+        result.get(
+            "higher_timeframe_context"
+        )
+    )
+
+    result[
+        "lower_timeframe_confirmation"
+    ] = _clean_string(
+        result.get(
+            "lower_timeframe_confirmation"
+        )
+    )
+
+    result["entry"] = (
+        _clean_string(
+            result.get("entry")
+        )
+    )
+
+    result["stop_loss"] = (
+        _clean_string(
+            result.get("stop_loss")
+        )
+    )
+
+    result["take_profit_1"] = (
+        _clean_string(
+            result.get(
+                "take_profit_1"
+            )
+        )
+    )
+
+    result["take_profit_2"] = (
+        _clean_string(
+            result.get(
+                "take_profit_2"
+            )
+        )
+    )
+
+    result["risk_reward"] = (
+        _clean_string(
+            result.get(
+                "risk_reward"
+            )
+        )
+    )
+
+    result["duration"] = (
+        _clean_string(
+            result.get(
+                "duration"
+            )
+        )
+    )
+
+    result["data_analysis"] = (
+        _clean_string(
+            result.get(
+                "data_analysis"
+            )
+        )
+    )
+
+    result["explanation"] = (
+        _clean_string(
+            result.get(
+                "explanation"
+            )
+        )
+    )
+
+    result[
+        "news_fundamental_risk"
+    ] = _clean_string(
+        result.get(
+            "news_fundamental_risk"
+        )
+    )
+
+    try:
+
+        confidence = int(
+            result.get(
+                "confidence",
+                0,
+            )
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        confidence = 0
+
+    result["confidence"] = max(
+        0,
+        min(
+            100,
+            confidence,
+        ),
+    )
+
+    result[
+        "contributing_methods"
+    ] = _clean_string_list(
+        result.get(
+            "contributing_methods"
+        )
+    )
+
+    result[
+        "weak_methods"
+    ] = _clean_string_list(
+        result.get(
+            "weak_methods"
+        )
+    )
+
+    result[
+        "conflicting_methods"
+    ] = _clean_string_list(
+        result.get(
+            "conflicting_methods"
+        )
+    )
+
+    result[
+        "warnings"
+    ] = _clean_string_list(
+        result.get(
+            "warnings"
+        )
+    )
 
     if signal == "NO TRADE":
 
         result["entry"] = ""
-
         result["stop_loss"] = ""
-
         result["take_profit_1"] = ""
-
         result["take_profit_2"] = ""
-
         result["risk_reward"] = ""
 
     return result
 
 
-def json_response(
-    handler,
-    status_code,
-    payload
-):
-    body = json.dumps(
-        payload,
-        ensure_ascii=False
-    ).encode("utf-8")
+def classify_error_body(raw):
+    if not raw:
+        return "", ""
 
-    handler.send_response(
-        status_code
+    if isinstance(
+        raw,
+        str,
+    ):
+        raw = raw.encode(
+            "utf-8"
+        )
+
+    try:
+
+        data = json.loads(
+            raw.decode(
+                "utf-8",
+                errors="replace",
+            )
+        )
+
+    except Exception:
+        return "", ""
+
+    if not isinstance(
+        data,
+        dict,
+    ):
+        return "", ""
+
+    error = data.get(
+        "error"
     )
 
-    handler.send_header(
-        "Content-Type",
-        "application/json; charset=utf-8"
-    )
+    if not isinstance(
+        error,
+        dict,
+    ):
+        return "", ""
 
-    handler.send_header(
-        "Access-Control-Allow-Origin",
-        "*"
-    )
-
-    handler.send_header(
-        "Access-Control-Allow-Methods",
-        "GET, POST, OPTIONS"
-    )
-
-    handler.send_header(
-        "Access-Control-Allow-Headers",
-        "Content-Type, Authorization"
-    )
-
-    handler.send_header(
-        "Cache-Control",
-        "no-store, no-cache, must-revalidate"
-    )
-
-    handler.send_header(
-        "Content-Length",
-        str(len(body))
-    )
-
-    handler.end_headers()
-
-    handler.wfile.write(
-        body
+    return (
+        _clean_string(
+            error.get("code")
+        ),
+        _clean_string(
+            error.get("message")
+        ),
     )
