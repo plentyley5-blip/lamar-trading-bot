@@ -9,7 +9,7 @@ from analysis_common import (
     validate_instrument,
 )
 
-from api.user_security import (
+from user_security import (
     create_secure_job_token,
     extract_bearer_token,
     release_analysis_slot,
@@ -24,6 +24,7 @@ MAX_REQUEST_BYTES = 25 * 1024 * 1024
 class handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
+
         json_response(
             self,
             204,
@@ -33,6 +34,7 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
 
         try:
+
             access_token = extract_bearer_token(
                 self.headers
             )
@@ -73,15 +75,19 @@ class handler(BaseHTTPRequestHandler):
             )
 
             try:
+
                 body = json.loads(
                     raw_body.decode("utf-8")
                 )
+
             except Exception:
+
                 raise ValueError(
                     "Request body must contain valid JSON."
                 )
 
             if not isinstance(body, dict):
+
                 raise ValueError(
                     "Request body must be a JSON object."
                 )
@@ -113,32 +119,44 @@ class handler(BaseHTTPRequestHandler):
             )
 
             if new_count == -1:
+
                 json_response(
                     self,
                     429,
                     {
-                        "status": "limit_reached",
+                        "status":
+                            "limit_reached",
+
                         "error":
                             "You have used all 4 analyses for today.",
-                        "analyses_today": 4,
-                        "daily_limit": 4
+
+                        "analyses_today":
+                            4,
+
+                        "daily_limit":
+                            4
                     }
                 )
 
                 return
 
             try:
-                openai_response = create_background_response(
-                    instrument=instrument,
-                    trade_focus=trade_focus,
-                    higher_image=higher_image,
-                    lower_image=lower_image
+
+                openai_response = (
+                    create_background_response(
+                        instrument=instrument,
+                        trade_focus=trade_focus,
+                        higher_image=higher_image,
+                        lower_image=lower_image
+                    )
                 )
 
             except Exception:
+
                 release_analysis_slot(
                     user_id
                 )
+
                 raise
 
             response_id = str(
@@ -149,6 +167,7 @@ class handler(BaseHTTPRequestHandler):
             ).strip()
 
             if not response_id:
+
                 release_analysis_slot(
                     user_id
                 )
@@ -168,10 +187,17 @@ class handler(BaseHTTPRequestHandler):
                 self,
                 202,
                 {
-                    "status": "queued",
-                    "job_id": job_token,
-                    "analyses_today": new_count,
-                    "daily_limit": 4
+                    "status":
+                        "queued",
+
+                    "job_id":
+                        job_token,
+
+                    "analyses_today":
+                        new_count,
+
+                    "daily_limit":
+                        4
                 }
             )
 
@@ -187,19 +213,24 @@ class handler(BaseHTTPRequestHandler):
                 or "Trade focus" in message
                 or "image" in message
             ):
+
                 status_code = 400
 
             elif (
                 "OpenAI" in message
                 or "Unable" in message
             ):
+
                 status_code = 500
 
             json_response(
                 self,
                 status_code,
                 {
-                    "status": "failed",
-                    "error": message
+                    "status":
+                        "failed",
+
+                    "error":
+                        message
                 }
             )
