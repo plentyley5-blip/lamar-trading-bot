@@ -1,6 +1,5 @@
 import json
 import os
-import time
 import urllib.error
 import urllib.request
 
@@ -19,41 +18,49 @@ MAX_IMAGE_DATA_URL_CHARS = 8 * 1024 * 1024
 
 
 SYSTEM_PROMPT = """
-You are the vision analysis engine for LAMAR TRADING BOT.
+You are the chart-analysis engine for LAMAR TRADING BOT.
 
-You analyze two supplied trading-chart screenshots for the selected instrument:
+You receive exactly two trading-chart screenshots:
 
-1. A 4H chart for higher-timeframe context.
-2. A 15M chart for lower-timeframe confirmation and execution context.
+1. 4H chart = higher-timeframe context.
+2. 15M chart = lower-timeframe confirmation and execution context.
 
-Return ONLY JSON that exactly matches the supplied schema.
+You must analyze BOTH charts together.
 
-CORE RULES
+The selected instrument and trade focus are supplied by the user request.
 
-- Use BOTH screenshots together.
-- Never make the final decision from only one timeframe.
-- Be conservative.
-- A valid NO TRADE decision is preferred over a forced setup.
-- Never invent an exact price level that is not reasonably visible or inferable from the supplied charts.
-- If price digits are unclear, leave exact price fields empty.
-- If missing information prevents a reliable setup, return NO TRADE.
-- Confidence is an analysis-confidence score, NOT a guaranteed probability of profit.
-- For NO TRADE, entry, stop_loss, take_profit_1, take_profit_2, and risk_reward MUST be empty strings.
-- For BUY or SELL, provide concrete levels only when they can be reasonably read from the screenshots.
-- Explain the decision using visible chart evidence.
-- The selected trade focus is context only and must not override chart evidence.
+IMPORTANT DECISION RULES
 
-INTERNAL ANALYSIS
+- Return BUY, SELL, or NO TRADE.
+- Never force a trade.
+- NO TRADE is valid and preferred when the evidence is insufficient or conflicting.
+- Never invent chart information.
+- Never invent exact prices that cannot reasonably be read or inferred from the screenshots.
+- If price numbers are unclear, leave price fields empty.
+- Confidence is confidence in the quality of the analysis, NOT a guarantee of profit.
+- A high confidence score does not mean a guaranteed winning trade.
+- Use visible chart evidence to support the final decision.
+- Use both timeframes.
+- The 4H timeframe should establish broader market context.
+- The 15M timeframe should provide confirmation and execution context.
+- Do not require every analysis method to agree.
+- Conflicting evidence should reduce confidence and may produce NO TRADE.
 
-Evaluate the chart evidence using these concepts when useful:
+INTERNAL ANALYSIS AREAS
+
+Use whichever are useful from the supplied chart evidence:
 
 - support and resistance
 - pure price action
 - market structure
+- swing highs and lows
 - BOS
 - CHoCH
 - liquidity
+- equal highs
+- equal lows
 - liquidity sweeps
+- stop hunts
 - displacement
 - inducement
 - mitigation
@@ -66,58 +73,83 @@ Evaluate the chart evidence using these concepts when useful:
 - fair value gaps
 - higher-timeframe bias
 - lower-timeframe confirmation
-- visible news or fundamental-risk information
 
-Do not require every concept to agree.
+The analysis should identify which evidence contributes to the decision, which evidence is weak, and which evidence conflicts.
 
-Identify:
+Do not make the user-interface decision depend on one single method.
 
-- evidence contributing to the setup
-- evidence that is weak
-- evidence that conflicts
-- whether the higher and lower timeframes agree
+TRADE SETUP
 
-Do not present internal methods as the main UI trading categories.
-Explain them as evidence supporting or weakening the analysis.
+For BUY:
 
-TRADE SETUP RULES
+- identify the bullish evidence
+- identify the entry area when reasonably visible
+- place the stop loss beyond logical invalidation
+- identify TP1 as the nearer logical objective
+- identify TP2 as a further objective only when supported by visible structure or liquidity
+- provide a reasonable risk/reward description
 
-For BUY or SELL:
+For SELL:
 
-- Make the trade idea clear.
-- Use the higher timeframe to establish directional context.
-- Use the 15M chart for confirmation and execution context.
-- Keep the stop loss beyond the invalidation area.
-- TP1 should be the nearer logical objective.
-- TP2 should be a further logical objective only when supported by visible structure or liquidity.
-- Risk/reward must be consistent with the supplied levels.
-- Duration should match the selected trade focus and visible market structure.
-- Do not manufacture precision when the chart does not support it.
-
-NO TRADE RULES
+- identify the bearish evidence
+- identify the entry area when reasonably visible
+- place the stop loss beyond logical invalidation
+- identify TP1 as the nearer logical objective
+- identify TP2 as a further objective only when supported by visible structure or liquidity
+- provide a reasonable risk/reward description
 
 For NO TRADE:
 
-- signal must be NO TRADE
-- entry must be an empty string
-- stop_loss must be an empty string
-- take_profit_1 must be an empty string
-- take_profit_2 must be an empty string
-- risk_reward must be an empty string
-- explain clearly why a trade is not justified
+- signal must be "NO TRADE"
+- entry must be ""
+- stop_loss must be ""
+- take_profit_1 must be ""
+- take_profit_2 must be ""
+- risk_reward must be ""
+- clearly explain why there is not enough confirmation
+
+TRADE FOCUS
+
+Use the selected focus only to shape the expected holding duration:
+
+SCALP:
+Short-term setup and quick execution.
+
+DAY TRADE:
+Intraday setup.
+
+SWING:
+Broader move with a longer expected duration.
+
+Do not override chart evidence merely because of the selected focus.
+
+NEWS AND FUNDAMENTALS
+
+Evaluate visible or known news/fundamental risk only when it can reasonably affect the setup.
+
+Do not invent current news.
+
+When current news cannot be verified from the supplied evidence, clearly state that limitation rather than fabricating news.
 
 IMAGE QUALITY
 
-Mention warnings when:
+Warn the user when:
 
-- chart quality is poor
-- price numbers cannot be read clearly
-- chart is heavily cropped
-- important market context is missing
+- the chart is blurry
+- the chart is heavily cropped
+- important candles are missing
+- price labels are unreadable
+- timeframe information is unclear
 - the two timeframes conflict
-- the visible structure is ambiguous
+- market structure cannot be established reliably
 
-The final response must be valid JSON matching the schema exactly.
+OUTPUT
+
+Return ONLY valid JSON matching the supplied JSON schema.
+
+Do not return Markdown.
+Do not return code fences.
+Do not return commentary outside the JSON object.
 """.strip()
 
 
@@ -278,7 +310,7 @@ def json_response(
     payload,
     extra_headers=None,
 ):
-    raw = json.dumps(
+    body = json.dumps(
         payload,
         ensure_ascii=False,
         separators=(",", ":"),
@@ -313,7 +345,7 @@ def json_response(
 
     handler.send_header(
         "Content-Length",
-        str(len(raw)),
+        str(len(body)),
     )
 
     if extra_headers:
@@ -326,7 +358,7 @@ def json_response(
     handler.end_headers()
 
     try:
-        handler.wfile.write(raw)
+        handler.wfile.write(body)
     except Exception:
         pass
 
@@ -368,7 +400,10 @@ def validate_image_data_url(
     value,
     label,
 ):
-    if not isinstance(value, str):
+    if not isinstance(
+        value,
+        str,
+    ):
         raise ValueError(
             f"A valid {label} is required."
         )
@@ -395,22 +430,24 @@ def validate_image_data_url(
             f"A valid {label} is required."
         )
 
-    supported_headers = (
+    header_lower = header.lower()
+
+    allowed_headers = (
         "data:image/jpeg;base64",
         "data:image/jpg;base64",
         "data:image/png;base64",
         "data:image/webp;base64",
     )
 
-    if not header.lower().startswith(
-        supported_headers
+    if not header_lower.startswith(
+        allowed_headers
     ):
         raise ValueError(
             f"Unsupported {label} format. "
             "Use JPG, PNG, or WEBP."
         )
 
-    if len(encoded) < 100:
+    if len(encoded.strip()) < 100:
         raise ValueError(
             f"The {label} appears to be empty or invalid."
         )
@@ -432,15 +469,15 @@ def _clean_string_list(value):
     ):
         return []
 
-    cleaned = []
+    result = []
 
     for item in value:
-        text = _clean_string(item)
+        cleaned = _clean_string(item)
 
-        if text:
-            cleaned.append(text)
+        if cleaned:
+            result.append(cleaned)
 
-    return cleaned
+    return result
 
 
 def _build_analysis_payload(
@@ -465,12 +502,14 @@ def _build_analysis_payload(
                         "type": "input_text",
 
                         "text": (
-                            f"Instrument: {instrument}.\n"
-                            f"Trade focus: {trade_focus}.\n"
-                            "Image 1 is the 4H chart.\n"
-                            "Image 2 is the 15M chart.\n"
-                            "Analyze both together and "
-                            "return the requested JSON."
+                            "Analyze the supplied 4H and 15M "
+                            "charts for the following request.\n\n"
+                            f"Instrument: {instrument}\n"
+                            f"Trade focus: {trade_focus}\n\n"
+                            "The first image is the 4H chart.\n"
+                            "The second image is the 15M chart.\n\n"
+                            "Use both images together. "
+                            "Return only the required JSON."
                         ),
                     },
 
@@ -501,7 +540,11 @@ def _build_analysis_payload(
             }
         },
 
-        "max_output_tokens": 2200,
+        "reasoning": {
+            "effort": "none",
+        },
+
+        "max_output_tokens": 3000,
     }
 
 
@@ -509,19 +552,20 @@ def _openai_error_message(raw):
     if not raw:
         return ""
 
-    if isinstance(
-        raw,
-        str,
-    ):
-        raw = raw.encode("utf-8")
-
     try:
-        data = json.loads(
-            raw.decode(
+
+        if isinstance(
+            raw,
+            bytes,
+        ):
+            text = raw.decode(
                 "utf-8",
                 errors="replace",
             )
-        )
+        else:
+            text = str(raw)
+
+        data = json.loads(text)
 
     except Exception:
         return ""
@@ -543,17 +587,19 @@ def _openai_error_message(raw):
         return ""
 
     message = _clean_string(
-        error.get("message")
+        error.get(
+            "message"
+        )
     )
 
     code = _clean_string(
-        error.get("code")
+        error.get(
+            "code"
+        )
     )
 
     if message and code:
-        return (
-            f"{message} ({code})"
-        )
+        return f"{message} ({code})"
 
     return message or code
 
@@ -562,21 +608,19 @@ def _request_openai(
     payload,
     key,
 ):
-    raw_body = json.dumps(
+    body = json.dumps(
         payload,
         separators=(",", ":"),
     ).encode("utf-8")
 
     request = urllib.request.Request(
-
         OPENAI_URL,
 
-        data=raw_body,
+        data=body,
 
         headers={
-            "Authorization": (
-                "Bearer " + key
-            ),
+            "Authorization":
+                "Bearer " + key,
 
             "Content-Type":
                 "application/json",
@@ -592,18 +636,28 @@ def _request_openai(
 
         with urllib.request.urlopen(
             request,
-            timeout=60,
+            timeout=90,
         ) as response:
 
-            response_raw = (
+            raw = (
                 response
                 .read()
                 .decode("utf-8")
             )
 
-            return json.loads(
-                response_raw
+            data = json.loads(
+                raw
             )
+
+            if not isinstance(
+                data,
+                dict,
+            ):
+                raise RuntimeError(
+                    "The AI service returned an invalid response."
+                )
+
+            return data
 
     except urllib.error.HTTPError as exc:
 
@@ -618,33 +672,66 @@ def _request_openai(
             raw
         )
 
+        if exc.code == 400:
+
+            if message:
+                raise RuntimeError(
+                    "The AI request was rejected: "
+                    + message
+                ) from exc
+
+            raise RuntimeError(
+                "The AI request was rejected."
+            ) from exc
+
         if exc.code == 401:
 
             raise RuntimeError(
-                "The server API credential "
-                "was rejected by the AI service."
+                "The server AI API key was rejected."
+            ) from exc
+
+        if exc.code == 403:
+
+            if message:
+                raise RuntimeError(
+                    "The AI service refused the request: "
+                    + message
+                ) from exc
+
+            raise RuntimeError(
+                "The AI service refused the request."
+            ) from exc
+
+        if exc.code == 404:
+
+            if message:
+                raise RuntimeError(
+                    "The selected AI model or endpoint "
+                    "was not found: "
+                    + message
+                ) from exc
+
+            raise RuntimeError(
+                "The selected AI model or endpoint was not found."
             ) from exc
 
         if exc.code == 429:
 
             if message:
-
                 raise RuntimeError(
-                    "The AI service rate or "
-                    "usage limit was reached: "
+                    "The AI service rate or usage limit "
+                    "was reached: "
                     + message
                 ) from exc
 
             raise RuntimeError(
-                "The AI service rate or usage "
-                "limit was reached."
+                "The AI service rate or usage limit was reached."
             ) from exc
 
         if 500 <= exc.code <= 599:
 
             raise RuntimeError(
-                "The AI service is temporarily "
-                "unavailable."
+                "The AI service is temporarily unavailable."
             ) from exc
 
         if message:
@@ -664,8 +751,13 @@ def _request_openai(
     ) as exc:
 
         raise RuntimeError(
-            "The AI analysis service could not "
-            "be reached."
+            "The AI analysis service could not be reached."
+        ) from exc
+
+    except json.JSONDecodeError as exc:
+
+        raise RuntimeError(
+            "The AI service returned invalid JSON."
         ) from exc
 
 
@@ -724,81 +816,99 @@ def extract_output_text(
             "The AI service returned an invalid response."
         )
 
-    direct = response_data.get(
+    output_text = response_data.get(
         "output_text"
     )
 
     if (
-        isinstance(direct, str)
-        and direct.strip()
+        isinstance(
+            output_text,
+            str,
+        )
+        and output_text.strip()
     ):
-        return direct.strip()
+        return output_text.strip()
 
     output = response_data.get(
         "output",
         [],
     )
 
-    if isinstance(
+    if not isinstance(
         output,
         list,
     ):
+        raise RuntimeError(
+            "The AI service returned no analysis output."
+        )
 
-        for item in output:
+    for item in output:
+
+        if not isinstance(
+            item,
+            dict,
+        ):
+            continue
+
+        content = item.get(
+            "content",
+            [],
+        )
+
+        if not isinstance(
+            content,
+            list,
+        ):
+            continue
+
+        for part in content:
 
             if not isinstance(
-                item,
+                part,
                 dict,
             ):
                 continue
 
-            content_items = item.get(
-                "content",
-                [],
+            part_type = str(
+                part.get(
+                    "type",
+                    "",
+                )
             )
 
-            if not isinstance(
-                content_items,
-                list,
-            ):
+            if part_type not in {
+                "output_text",
+                "text",
+            }:
                 continue
 
-            for content in content_items:
+            text = part.get(
+                "text"
+            )
 
-                if not isinstance(
-                    content,
-                    dict,
-                ):
-                    continue
-
-                if (
-                    content.get("type")
-                    != "output_text"
-                ):
-                    continue
-
-                text = content.get(
-                    "text"
+            if (
+                isinstance(
+                    text,
+                    str,
                 )
-
-                if (
-                    isinstance(
-                        text,
-                        str,
-                    )
-                    and text.strip()
-                ):
-                    return text.strip()
+                and text.strip()
+            ):
+                return text.strip()
 
     raise RuntimeError(
         "The model returned no analysis text."
     )
 
 
-def clean_json_text(text):
+def clean_json_text(
+    text,
+):
     cleaned = str(
         text or ""
     ).strip()
+
+    if not cleaned:
+        return ""
 
     if cleaned.startswith(
         "```"
@@ -816,10 +926,9 @@ def clean_json_text(text):
         ):
             lines = lines[:-1]
 
-        cleaned = (
-            "\n".join(lines)
-            .strip()
-        )
+        cleaned = "\n".join(
+            lines
+        ).strip()
 
     return cleaned
 
@@ -844,8 +953,7 @@ def parse_completed_response(
     except json.JSONDecodeError as exc:
 
         raise RuntimeError(
-            "The model returned an invalid "
-            "analysis format."
+            "The model returned an invalid analysis format."
         ) from exc
 
     if not isinstance(
@@ -853,20 +961,23 @@ def parse_completed_response(
         dict,
     ):
         raise RuntimeError(
-            "The model returned an invalid "
-            "analysis object."
+            "The model returned an invalid analysis object."
         )
 
-    signal = _clean_string(
-        result.get("signal")
-    ).upper()
+    signal = (
+        _clean_string(
+            result.get(
+                "signal"
+            )
+        )
+        .upper()
+    )
 
     if signal not in {
         "BUY",
         "SELL",
         "NO TRADE",
     }:
-
         signal = "NO TRADE"
 
     result["signal"] = signal
@@ -877,15 +988,15 @@ def parse_completed_response(
         ).upper()
     )
 
-    result["trend"] = (
-        _clean_string(
-            result.get("trend")
+    result["trend"] = _clean_string(
+        result.get(
+            "trend"
         )
     )
 
-    result["trade_idea"] = (
-        _clean_string(
-            result.get("trade_idea")
+    result["trade_idea"] = _clean_string(
+        result.get(
+            "trade_idea"
         )
     )
 
@@ -905,63 +1016,51 @@ def parse_completed_response(
         )
     )
 
-    result["entry"] = (
-        _clean_string(
-            result.get("entry")
+    result["entry"] = _clean_string(
+        result.get(
+            "entry"
         )
     )
 
-    result["stop_loss"] = (
-        _clean_string(
-            result.get("stop_loss")
+    result["stop_loss"] = _clean_string(
+        result.get(
+            "stop_loss"
         )
     )
 
-    result["take_profit_1"] = (
-        _clean_string(
-            result.get(
-                "take_profit_1"
-            )
+    result["take_profit_1"] = _clean_string(
+        result.get(
+            "take_profit_1"
         )
     )
 
-    result["take_profit_2"] = (
-        _clean_string(
-            result.get(
-                "take_profit_2"
-            )
+    result["take_profit_2"] = _clean_string(
+        result.get(
+            "take_profit_2"
         )
     )
 
-    result["risk_reward"] = (
-        _clean_string(
-            result.get(
-                "risk_reward"
-            )
+    result["risk_reward"] = _clean_string(
+        result.get(
+            "risk_reward"
         )
     )
 
-    result["duration"] = (
-        _clean_string(
-            result.get(
-                "duration"
-            )
+    result["duration"] = _clean_string(
+        result.get(
+            "duration"
         )
     )
 
-    result["data_analysis"] = (
-        _clean_string(
-            result.get(
-                "data_analysis"
-            )
+    result["data_analysis"] = _clean_string(
+        result.get(
+            "data_analysis"
         )
     )
 
-    result["explanation"] = (
-        _clean_string(
-            result.get(
-                "explanation"
-            )
+    result["explanation"] = _clean_string(
+        result.get(
+            "explanation"
         )
     )
 
@@ -1038,53 +1137,3 @@ def parse_completed_response(
         result["risk_reward"] = ""
 
     return result
-
-
-def classify_error_body(raw):
-    if not raw:
-        return "", ""
-
-    if isinstance(
-        raw,
-        str,
-    ):
-        raw = raw.encode(
-            "utf-8"
-        )
-
-    try:
-
-        data = json.loads(
-            raw.decode(
-                "utf-8",
-                errors="replace",
-            )
-        )
-
-    except Exception:
-        return "", ""
-
-    if not isinstance(
-        data,
-        dict,
-    ):
-        return "", ""
-
-    error = data.get(
-        "error"
-    )
-
-    if not isinstance(
-        error,
-        dict,
-    ):
-        return "", ""
-
-    return (
-        _clean_string(
-            error.get("code")
-        ),
-        _clean_string(
-            error.get("message")
-        ),
-    )
