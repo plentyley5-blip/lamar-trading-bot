@@ -5,6 +5,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -53,16 +54,7 @@ def get_openai_key_for_signing():
     return value.encode("utf-8")
 
 
-def verify_access_token(access_token):
-
-    token = str(
-        access_token or ""
-    ).strip()
-
-    if not token:
-        raise ValueError(
-            "Authorization token is required."
-        )
+def _get_user_with_access_token(access_token):
 
     url = (
         get_supabase_url()
@@ -74,7 +66,7 @@ def verify_access_token(access_token):
         method="GET",
         headers={
             "Authorization":
-                "Bearer " + token,
+                "Bearer " + access_token,
 
             "apikey":
                 get_supabase_service_key(),
@@ -84,37 +76,126 @@ def verify_access_token(access_token):
         },
     )
 
-    try:
+    with urllib.request.urlopen(
+        request,
+        timeout=20
+    ) as response:
 
-        with urllib.request.urlopen(
-            request,
-            timeout=20
-        ) as response:
+        body = response.read().decode(
+            "utf-8"
+        )
 
-            body = response.read().decode(
-                "utf-8"
+        user = json.loads(body)
+
+        user_id = str(
+            user.get("id", "")
+        ).strip()
+
+        if not user_id:
+            raise ValueError(
+                "Supabase returned no user ID."
             )
 
-            user = json.loads(body)
+        return user
 
-            user_id = str(
-                user.get("id", "")
-            ).strip()
 
-            if not user_id:
-                raise ValueError(
-                    "Supabase returned no user ID."
-                )
+def _refresh_access_token(refresh_token):
 
-            return user
+    url = (
+        get_supabase_url()
+        + "/auth/v1/token"
+        + "?grant_type=refresh_token"
+    )
 
-    except urllib.error.HTTPError as exc:
+    payload = urllib.parse.urlencode(
+        {
+            "refresh_token":
+                refresh_token
+        }
+    ).encode("utf-8")
 
-        exc.read()
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        method="POST",
+        headers={
+            "apikey":
+                get_supabase_service_key(),
 
+            "Content-Type":
+                "application/x-www-form-urlencoded",
+
+            "Accept":
+                "application/json",
+        },
+    )
+
+    with urllib.request.urlopen(
+        request,
+        timeout=20
+    ) as response:
+
+        body = response.read().decode(
+            "utf-8"
+        )
+
+        data = json.loads(body)
+
+        access_token = str(
+            data.get(
+                "access_token",
+                ""
+            )
+        ).strip()
+
+        if not access_token:
+            raise ValueError(
+                "Supabase returned no refreshed access token."
+            )
+
+        return _get_user_with_access_token(
+            access_token
+        )
+
+
+def verify_access_token(access_token):
+
+    token = str(
+        access_token or ""
+    ).strip()
+
+    if not token:
         raise ValueError(
-            "Invalid or expired login session."
-        ) from exc
+            "Authorization token is required."
+        )
+
+    # Normal Supabase access token.
+    try:
+
+        return _get_user_with_access_token(
+            token
+        )
+
+    except urllib.error.HTTPError as access_error:
+
+        if access_error.code != 401:
+            raise RuntimeError(
+                "Unable to verify your login session."
+            ) from access_error
+
+        # If the supplied value is not a valid access
+        # token, try treating it as a refresh token.
+        try:
+
+            return _refresh_access_token(
+                token
+            )
+
+        except Exception as refresh_error:
+
+            raise ValueError(
+                "Invalid or expired login session."
+            ) from refresh_error
 
     except urllib.error.URLError as exc:
 
@@ -206,9 +287,9 @@ def reserve_analysis_slot(user_id):
                 "utf-8"
             )
 
-            value = json.loads(body)
-
-            return int(value)
+            return int(
+                json.loads(body)
+            )
 
     except urllib.error.HTTPError as exc:
 
