@@ -10,66 +10,84 @@ import urllib.request
 
 OPENAI_URL = "https://api.openai.com/v1/responses"
 
-# Keep the same model.
 MODEL = "gpt-5.6-luna"
 
-# The job token is intentionally short-lived.
 JOB_TTL_SECONDS = 15 * 60
 
 
 SYSTEM_PROMPT = """
-You are LM ANALYZER, a professional chart-analysis engine.
+You are LM ANALYZER, a professional multi-timeframe trading-chart analysis engine.
 
-Analyze the supplied 4H and 15M charts for the supplied instrument and trade
-focus: SCALP, DAY TRADE, or SWING.
+Analyze the supplied 4H and 15M charts for the supplied instrument and trade focus:
+SCALP, DAY TRADE, or SWING.
 
-Return BUY, SELL, or NO TRADE.
+Return exactly one signal:
+BUY
+SELL
+NO TRADE
 
-Use genuine multi-timeframe technical analysis:
-- support/resistance
+Use visible evidence from both charts and consider:
+
+- support and resistance
 - pure price action
 - market structure
 - BOS and CHoCH
 - liquidity and liquidity sweeps
-- SMC
+- smart money concepts
 - order blocks
-- fair value gaps/imbalances
+- fair value gaps / imbalances
 - Fibonacci
-- premium/discount
+- premium and discount
 - displacement
 - inducement
-- mitigation/invalidation
+- mitigation
+- invalidation
 - higher-timeframe context
 - lower-timeframe confirmation
 
-Do not merely name methods. Explain how the visible evidence supports or
-conflicts with the setup.
+Do not merely list methods.
+Explain the important visible evidence and how it supports, weakens, or conflicts with the setup.
 
-The 4H chart provides higher-timeframe context.
-The 15M chart provides confirmation and execution context.
+TIMEFRAME RULES:
+4H = higher-timeframe context and directional structure.
+15M = confirmation and execution context.
 
-SCALP emphasizes 15M confirmation.
-DAY TRADE balances 4H and 15M.
-SWING emphasizes 4H structure.
+SCALP:
+Prioritize 15M confirmation while respecting 4H context.
+
+DAY TRADE:
+Balance 4H structure with 15M confirmation.
+
+SWING:
+Prioritize 4H structure and use 15M only as supporting confirmation.
 
 Methods do not need unanimous agreement.
 
-Return NO TRADE when the charts are unclear, unreadable, structurally
-conflicting without resolution, or when a defensible entry, SL and target
-cannot be established.
+Return NO TRADE when:
+- the charts are unclear or unreadable
+- the market is structurally ambiguous
+- the 4H and 15M conflict without a defensible resolution
+- there is no technically defensible entry
+- a valid stop loss cannot be established
+- a reasonable target cannot be established
 
 Never invent exact prices.
+
+Only provide exact entry, stop loss and targets when those levels are visible and technically defensible from the charts.
+
 Never guarantee profit.
-Confidence is an analysis-confidence score, not a probability of profit.
+
+Confidence is an analysis-confidence score, NOT a probability of profit.
 
 For NO TRADE:
-entry=""
-stop_loss=""
-take_profit_1=""
-take_profit_2=""
-risk_reward=""
+entry = ""
+stop_loss = ""
+take_profit_1 = ""
+take_profit_2 = ""
+risk_reward = ""
 
-Only return the requested JSON.
+Keep every explanatory field concise but useful.
+Return only the requested JSON.
 """
 
 
@@ -79,13 +97,19 @@ OUTPUT_SCHEMA = {
     "properties": {
         "signal": {
             "type": "string",
-            "enum": ["BUY", "SELL", "NO TRADE"]
+            "enum": [
+                "BUY",
+                "SELL",
+                "NO TRADE"
+            ]
         },
+
         "confidence": {
             "type": "number",
             "minimum": 0,
             "maximum": 100
         },
+
         "strength": {
             "type": "string",
             "enum": [
@@ -95,9 +119,11 @@ OUTPUT_SCHEMA = {
                 "WEAK"
             ]
         },
+
         "instrument": {
             "type": "string"
         },
+
         "trade_focus": {
             "type": "string",
             "enum": [
@@ -106,6 +132,7 @@ OUTPUT_SCHEMA = {
                 "SWING"
             ]
         },
+
         "trend": {
             "type": "string",
             "enum": [
@@ -115,60 +142,76 @@ OUTPUT_SCHEMA = {
                 "UNCLEAR"
             ]
         },
+
         "trade_idea": {
             "type": "string"
         },
+
         "entry": {
             "type": "string"
         },
+
         "stop_loss": {
             "type": "string"
         },
+
         "take_profit_1": {
             "type": "string"
         },
+
         "take_profit_2": {
             "type": "string"
         },
+
         "risk_reward": {
             "type": "string"
         },
+
         "duration": {
             "type": "string"
         },
+
         "higher_timeframe_context": {
             "type": "string"
         },
+
         "lower_timeframe_confirmation": {
             "type": "string"
         },
+
         "data_analysis": {
             "type": "string"
         },
+
         "explanation": {
             "type": "string"
         },
+
         "contributing_methods": {
             "type": "array",
             "items": {
                 "type": "string"
             }
         },
+
         "weak_methods": {
             "type": "array",
             "items": {
                 "type": "string"
             }
         },
+
         "conflicting_methods": {
             "type": "array",
             "items": {
                 "type": "string"
             }
         },
+
         "news_fundamental_risk": {
             "type": "string"
         },
+
         "warnings": {
             "type": "array",
             "items": {
@@ -176,6 +219,7 @@ OUTPUT_SCHEMA = {
             }
         }
     },
+
     "required": [
         "signal",
         "confidence",
@@ -208,7 +252,10 @@ def now():
 
 
 def get_openai_key():
-    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    key = os.environ.get(
+        "OPENAI_API_KEY",
+        ""
+    ).strip()
 
     if not key:
         raise RuntimeError(
@@ -222,7 +269,11 @@ def token_key():
     return get_openai_key().encode("utf-8")
 
 
-def create_job_token(response_id, instrument, trade_focus):
+def create_job_token(
+    response_id,
+    instrument,
+    trade_focus
+):
     payload = {
         "response_id": response_id,
         "instrument": instrument,
@@ -254,7 +305,11 @@ def create_job_token(response_id, instrument, trade_focus):
         .rstrip("=")
     )
 
-    return encoded_payload + "." + encoded_signature
+    return (
+        encoded_payload
+        + "."
+        + encoded_signature
+    )
 
 
 def read_job_token(token):
@@ -262,16 +317,23 @@ def read_job_token(token):
         parts = token.split(".", 1)
 
         if len(parts) != 2:
-            raise ValueError("Invalid job token.")
+            raise ValueError(
+                "Invalid job token."
+            )
 
-        raw_part, signature_part = parts
+        raw_part = parts[0]
+        signature_part = parts[1]
 
         raw = base64.urlsafe_b64decode(
-            raw_part + "=" * (-len(raw_part) % 4)
+            raw_part
+            + "=" * (-len(raw_part) % 4)
         )
 
-        supplied_signature = base64.urlsafe_b64decode(
-            signature_part + "=" * (-len(signature_part) % 4)
+        supplied_signature = (
+            base64.urlsafe_b64decode(
+                signature_part
+                + "=" * (-len(signature_part) % 4)
+            )
         )
 
         expected_signature = hmac.new(
@@ -302,19 +364,30 @@ def read_job_token(token):
             )
 
         return (
-            str(data["response_id"]).strip(),
-            str(data["instrument"]).strip(),
-            str(data["trade_focus"]).strip()
+            str(
+                data["response_id"]
+            ).strip(),
+
+            str(
+                data["instrument"]
+            ).strip(),
+
+            str(
+                data["trade_focus"]
+            ).strip()
         )
 
     except Exception as exc:
         raise ValueError(
-            "Invalid analysis job: " + str(exc)
+            "Invalid analysis job: "
+            + str(exc)
         )
 
 
 def validate_instrument(value):
-    instrument = str(value or "").strip()
+    instrument = str(
+        value or ""
+    ).strip()
 
     if not instrument:
         raise ValueError(
@@ -330,7 +403,9 @@ def validate_instrument(value):
 
 
 def validate_focus(value):
-    focus = str(value or "").strip().upper()
+    focus = str(
+        value or ""
+    ).strip().upper()
 
     if focus not in {
         "SCALP",
@@ -344,13 +419,21 @@ def validate_focus(value):
     return focus
 
 
-def validate_image_data_url(value, name):
-    if not isinstance(value, str):
+def validate_image_data_url(
+    value,
+    name
+):
+    if not isinstance(
+        value,
+        str
+    ):
         raise ValueError(
             name + " must be an image."
         )
 
-    if not value.startswith("data:image/"):
+    if not value.startswith(
+        "data:image/"
+    ):
         raise ValueError(
             name + " is not a valid image."
         )
@@ -368,21 +451,26 @@ def validate_image_data_url(value, name):
     return value
 
 
-def make_user_prompt(instrument, trade_focus):
-    return f"""
-Instrument: {instrument}
-Trade focus: {trade_focus}
-
-Analyze both supplied charts:
-1. 4H = higher-timeframe context
-2. 15M = confirmation and execution
-
-Identify the strongest technically supported setup.
-
-If evidence is insufficient, return NO TRADE.
-
-Do not invent prices.
-"""
+def make_user_prompt(
+    instrument,
+    trade_focus
+):
+    return (
+        "Instrument: "
+        + instrument
+        + "\n"
+        + "Trade focus: "
+        + trade_focus
+        + "\n\n"
+        + "Chart 1 is the 4H timeframe.\n"
+        + "Chart 2 is the 15M timeframe.\n\n"
+        + "Analyze both charts together.\n"
+        + "Determine the current structure, liquidity, price action, "
+          "SMC conditions, Fibonacci/premium-discount context, "
+          "confirmation, invalidation and trade quality.\n\n"
+        + "Return BUY, SELL, or NO TRADE.\n"
+        + "Never invent exact prices."
+    )
 
 
 def _send_openai_request(
@@ -391,12 +479,18 @@ def _send_openai_request(
     higher_image,
     lower_image,
     image_detail="low",
-    output_tokens=1200
+    output_tokens=900
 ):
     payload = {
         "model": MODEL,
+
         "background": True,
+
         "store": True,
+
+        "reasoning": {
+            "effort": "low"
+        },
 
         "instructions": SYSTEM_PROMPT,
 
@@ -411,11 +505,13 @@ def _send_openai_request(
                             trade_focus
                         )
                     },
+
                     {
                         "type": "input_image",
                         "image_url": higher_image,
                         "detail": image_detail
                     },
+
                     {
                         "type": "input_image",
                         "image_url": lower_image,
@@ -434,8 +530,6 @@ def _send_openai_request(
             }
         },
 
-        # Reduced from 3000.
-        # This includes reasoning/output allocation.
         "max_output_tokens": output_tokens
     }
 
@@ -449,14 +543,18 @@ def _send_openai_request(
         data=body,
         method="POST",
         headers={
-            "Authorization": "Bearer " + get_openai_key(),
-            "Content-Type": "application/json",
-            "Accept": "application/json"
+            "Authorization":
+                "Bearer " + get_openai_key(),
+
+            "Content-Type":
+                "application/json",
+
+            "Accept":
+                "application/json"
         }
     )
 
     try:
-
         with urllib.request.urlopen(
             request,
             timeout=55
@@ -464,7 +562,10 @@ def _send_openai_request(
 
             response_body = (
                 response.read()
-                .decode("utf-8")
+                .decode(
+                    "utf-8",
+                    errors="replace"
+                )
             )
 
             return json.loads(
@@ -481,8 +582,6 @@ def _send_openai_request(
             )
         )
 
-        # Preserve the actual HTTP status so the caller
-        # can perform a controlled fallback.
         error = RuntimeError(
             "OpenAI HTTP "
             + str(exc.code)
@@ -509,28 +608,14 @@ def create_background_response(
     higher_image,
     lower_image
 ):
-    """
-    First attempt:
-        low-detail images
-        1200 output tokens
-
-    If OpenAI rejects the request for rate limiting,
-    make one smaller attempt.
-
-    We deliberately do NOT perform repeated rapid retries.
-    OpenAI says unsuccessful requests also contribute to
-    rate limits.
-    """
-
     try:
-
         return _send_openai_request(
             instrument=instrument,
             trade_focus=trade_focus,
             higher_image=higher_image,
             lower_image=lower_image,
             image_detail="low",
-            output_tokens=1200
+            output_tokens=900
         )
 
     except Exception as first_error:
@@ -544,49 +629,66 @@ def create_background_response(
         if status != 429:
             raise
 
-        # Smaller fallback.
         return _send_openai_request(
             instrument=instrument,
             trade_focus=trade_focus,
             higher_image=higher_image,
             lower_image=lower_image,
             image_detail="low",
-            output_tokens=700
+            output_tokens=600
         )
 
 
-def extract_output_text(response_data):
+def extract_output_text(
+    response_data
+):
     output = response_data.get(
         "output"
     )
 
-    if isinstance(output, list):
-
+    if isinstance(
+        output,
+        list
+    ):
         pieces = []
 
         for item in output:
 
-            if not isinstance(item, dict):
+            if not isinstance(
+                item,
+                dict
+            ):
                 continue
 
             content = item.get(
                 "content"
             )
 
-            if not isinstance(content, list):
+            if not isinstance(
+                content,
+                list
+            ):
                 continue
 
             for part in content:
 
-                if not isinstance(part, dict):
+                if not isinstance(
+                    part,
+                    dict
+                ):
                     continue
 
                 text = part.get(
                     "text"
                 )
 
-                if isinstance(text, str):
-                    pieces.append(text)
+                if isinstance(
+                    text,
+                    str
+                ):
+                    pieces.append(
+                        text
+                    )
 
         if pieces:
             return "\n".join(
@@ -605,7 +707,8 @@ def extract_output_text(response_data):
         return output_text.strip()
 
     raise ValueError(
-        "OpenAI completed the analysis but returned no text."
+        "OpenAI completed the analysis "
+        "but returned no text."
     )
 
 
@@ -619,6 +722,7 @@ def parse_completed_response(
     )
 
     try:
+
         result = json.loads(
             text
         )
@@ -678,11 +782,36 @@ def parse_completed_response(
 
     result["signal"] = signal
 
+    try:
+        confidence = float(
+            result.get(
+                "confidence",
+                0
+            )
+        )
+    except Exception:
+        confidence = 0
+
+    confidence = max(
+        0,
+        min(
+            100,
+            confidence
+        )
+    )
+
+    result["confidence"] = confidence
+
     if signal == "NO TRADE":
+
         result["entry"] = ""
+
         result["stop_loss"] = ""
+
         result["take_profit_1"] = ""
+
         result["take_profit_2"] = ""
+
         result["risk_reward"] = ""
 
     return result
