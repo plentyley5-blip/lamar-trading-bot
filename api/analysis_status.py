@@ -1,40 +1,318 @@
+import base64
+import hashlib
+import hmac
 import json
+import os
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 from analysis_common import (
-    GEMINI_URL,
-    api_key,
     json_response,
-    parse_completed_response,
 )
 
 from api.user_security import (
-    read_secure_job_token,
+    extract_bearer_token,
+    verify_access_token,
 )
 
 
-def retrieve_response(
-    interaction_id,
-    key,
+# ============================================================
+# JOB TOKEN
+# ============================================================
+
+JOB_TTL_SECONDS = 15 * 60
+
+
+def _job_secret():
+    secret = os.getenv(
+        "JOB_TOKEN_SECRET",
+        "",
+    ).strip()
+
+    if not secret:
+
+        secret = os.getenv(
+            "GEMINI_API_KEY",
+            "",
+        ).strip()
+
+    if not secret:
+
+        raise RuntimeError(
+            "JOB_TOKEN_SECRET or GEMINI_API_KEY is missing from Vercel."
+        )
+
+    return secret.encode(
+        "utf-8"
+    )
+
+
+def _read_job_token(
+    token,
 ):
+    try:
+
+        parts = str(
+            token or ""
+        ).split(
+            ".",
+            1,
+        )
+
+        if len(parts) != 2:
+
+            raise ValueError(
+                "Invalid analysis job."
+            )
+
+        encoded_payload = parts[0]
+        encoded_signature = parts[1]
+
+        raw = (
+            base64.urlsafe_b64decode(
+                encoded_payload
+                + "="
+                * (
+                    -len(
+                        encoded_payload
+                    )
+                    % 4
+                )
+            )
+        )
+
+        supplied_signature = (
+            base64.urlsafe_b64decode(
+                encoded_signature
+                + "="
+                * (
+                    -len(
+                        encoded_signature
+                    )
+                    % 4
+                )
+            )
+        )
+
+        expected_signature = hmac.new(
+            _job_secret(),
+            raw,
+            hashlib.sha256,
+        ).digest()
+
+        if not hmac.compare_digest(
+            supplied_signature,
+            expected_signature,
+        ):
+
+            raise ValueError(
+                "Invalid analysis job signature."
+            )
+
+        payload = json.loads(
+            raw.decode(
+                "utf-8"
+            )
+        )
+
+        if not isinstance(
+            payload,
+            dict,
+        ):
+
+            raise ValueError(
+                "Invalid analysis job."
+            )
+
+        created_at = int(
+            payload.get(
+                "created_at",
+                0,
+            )
+        )
+
+        if (
+            created_at <= 0
+            or time.time() - created_at
+            > JOB_TTL_SECONDS
+        ):
+
+            raise ValueError(
+                "Analysis job has expired."
+            )
+
+        job_nonce = str(
+            payload.get(
+                "job_nonce",
+                "",
+            )
+        ).strip()
+
+        instrument = str(
+            payload.get(
+                "instrument",
+                "",
+            )
+        ).strip()
+
+        trade_focus = str(
+            payload.get(
+                "trade_focus",
+                "",
+            )
+        ).strip()
+
+        user_id = str(
+            payload.get(
+                "user_id",
+                "",
+            )
+        ).strip()
+
+        if (
+            not job_nonce
+            or not instrument
+            or not user_id
+        ):
+
+            raise ValueError(
+                "Invalid analysis job."
+            )
+
+        return (
+            job_nonce,
+            instrument,
+            trade_focus,
+            user_id,
+        )
+
+    except ValueError:
+        raise
+
+    except Exception as exc:
+
+        raise ValueError(
+            "Invalid analysis job."
+        ) from exc
+
+
+# ============================================================
+# SUPABASE
+# ============================================================
+
+def _supabase_url():
+    url = os.getenv(
+        "SUPABASE_URL",
+        "",
+    ).strip().rstrip("/")
+
+    if not url:
+
+        raise RuntimeError(
+            "SUPABASE_URL is missing from Vercel."
+        )
+
+    for suffix in (
+        "/rest/v1",
+        "/auth/v1",
+        "/storage/v1",
+    ):
+
+        if url.endswith(
+            suffix
+        ):
+
+            url = url[
+                :-len(suffix)
+            ]
+
+    return url
+
+
+def _supabase_service_key():
+    key = os.getenv(
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "",
+    ).strip()
+
+    if not key:
+
+        raise RuntimeError(
+            "SUPABASE_SERVICE_ROLE_KEY is missing from Vercel."
+        )
+
+    return key
+
+
+def _supabase_headers():
+    key = _supabase_service_key()
+
+    return {
+        "apikey":
+            key,
+
+        "Authorization":
+            "Bearer " + key,
+
+        "Accept":
+            "application/json",
+    }
+
+
+# ============================================================
+# RESULT RETRIEVAL
+# ============================================================
+
+def _load_completed_job(
+    user_id,
+    job_nonce,
+    instrument,
+    trade_focus,
+):
+    unique_instrument = (
+        instrument
+        + "|"
+        + job_nonce
+    )
+
+    query = (
+
+        _supabase_url()
+        + "/rest/v1/analysis_jobs?"
+
+        + "user_id=eq."
+        + urllib.parse.quote(
+            str(user_id),
+            safe="",
+        )
+
+        + "&instrument=eq."
+        + urllib.parse.quote(
+            unique_instrument,
+            safe="",
+        )
+
+        + "&trade_focus=eq."
+        + urllib.parse.quote(
+            str(trade_focus),
+            safe="",
+        )
+
+        + "&select=openai_response_id,created_at"
+
+        + "&limit=1"
+    )
+
     request = urllib.request.Request(
 
-        f"{GEMINI_URL}/{interaction_id}",
+        query,
 
-        headers={
-            "x-goog-api-key":
-                key,
-
-            "Accept":
-                "application/json",
-
-            "Api-Revision":
-                "2026-05-20",
-        },
+        headers=_supabase_headers(),
 
         method="GET",
     )
@@ -43,81 +321,31 @@ def retrieve_response(
 
         with urllib.request.urlopen(
             request,
-            timeout=30,
+            timeout=20,
         ) as response:
 
             raw = (
                 response
                 .read()
-                .decode("utf-8")
+                .decode(
+                    "utf-8"
+                )
             )
 
-            return json.loads(
+            rows = json.loads(
                 raw
             )
 
     except urllib.error.HTTPError as exc:
 
-        raw = ""
-
-        try:
-            raw = exc.read().decode(
-                "utf-8",
-                errors="replace",
-            )
-        except Exception:
-            pass
-
-        try:
-
-            data = json.loads(
-                raw
-            )
-
-            if isinstance(
-                data,
-                dict,
-            ):
-
-                error = data.get(
-                    "error"
-                )
-
-                if isinstance(
-                    error,
-                    dict,
-                ):
-
-                    message = str(
-                        error.get(
-                            "message",
-                            "",
-                        )
-                    ).strip()
-
-                    if message:
-                        raise RuntimeError(
-                            "Gemini: " + message
-                        )
-
-        except RuntimeError:
-            raise
-
-        except Exception:
-            pass
-
-        if exc.code == 401:
-            raise RuntimeError(
-                "The Gemini API key was rejected."
-            )
-
-        if exc.code == 429:
-            raise RuntimeError(
-                "Gemini rate limit or quota reached."
-            )
+        raw = exc.read().decode(
+            "utf-8",
+            errors="replace",
+        )
 
         raise RuntimeError(
-            "The Gemini analysis result could not be retrieved."
+            "Supabase could not retrieve the analysis result: "
+            + raw
         ) from exc
 
     except (
@@ -126,11 +354,148 @@ def retrieve_response(
     ) as exc:
 
         raise RuntimeError(
-            "Gemini is temporarily unavailable."
+            "Supabase is temporarily unavailable."
         ) from exc
 
+    if not isinstance(
+        rows,
+        list,
+    ) or not rows:
 
-def extract_job_token(
+        return None
+
+    row = rows[0]
+
+    if not isinstance(
+        row,
+        dict,
+    ):
+
+        return None
+
+    result_blob = str(
+        row.get(
+            "openai_response_id",
+            "",
+        )
+    ).strip()
+
+    if not result_blob:
+
+        return None
+
+    try:
+
+        decoded = (
+            base64.urlsafe_b64decode(
+                result_blob
+                + "="
+                * (
+                    -len(
+                        result_blob
+                    )
+                    % 4
+                )
+            )
+            .decode(
+                "utf-8"
+            )
+        )
+
+        result = json.loads(
+            decoded
+        )
+
+    except Exception as exc:
+
+        raise RuntimeError(
+            "The stored analysis result is invalid."
+        ) from exc
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+
+        raise RuntimeError(
+            "The stored analysis result is invalid."
+        )
+
+    return result
+
+
+# ============================================================
+# OPTIONAL SESSION CHECK
+# ============================================================
+
+def _check_optional_session(
+    handler,
+    token_user_id,
+):
+    """
+    The signed job token is the authorization for the short-lived job.
+
+    If Android supplies a valid current Supabase token, verify that
+    it belongs to the same user.
+
+    If the Supabase access token is expired, do NOT reject the
+    already-authorized short-lived job. This prevents the exact
+    'invalid/expired session' problem during analysis polling.
+    """
+
+    auth_header = str(
+        handler.headers.get(
+            "Authorization",
+            "",
+        )
+    ).strip()
+
+    if not auth_header:
+        return
+
+    try:
+
+        access_token = (
+            extract_bearer_token(
+                handler
+            )
+        )
+
+        user = verify_access_token(
+            access_token
+        )
+
+        current_user_id = str(
+            user.get(
+                "id",
+                "",
+            )
+        ).strip()
+
+        if (
+            current_user_id
+            and current_user_id
+            != token_user_id
+        ):
+
+            raise PermissionError(
+                "This analysis job does not belong to this user."
+            )
+
+    except PermissionError:
+        raise
+
+    except Exception:
+        # An expired session does not invalidate the already-signed
+        # analysis job.
+        return
+
+
+# ============================================================
+# JOB TOKEN FROM URL
+# ============================================================
+
+def _extract_job_token(
     handler,
 ):
     parsed = urlparse(
@@ -141,57 +506,19 @@ def extract_job_token(
         parsed.query
     )
 
+    token = values.get(
+        "job_id",
+        [""],
+    )[0]
+
     return str(
-        values.get(
-            "job_id",
-            [""],
-        )[0]
+        token
     ).strip()
 
 
-def extract_failure_reason(
-    response,
-):
-    errors = response.get(
-        "errors"
-    )
-
-    if isinstance(
-        errors,
-        list,
-    ):
-
-        messages = []
-
-        for error in errors:
-
-            if not isinstance(
-                error,
-                dict,
-            ):
-                continue
-
-            message = str(
-                error.get(
-                    "message",
-                    "",
-                )
-            ).strip()
-
-            if message:
-                messages.append(
-                    message
-                )
-
-        if messages:
-            return "; ".join(
-                messages
-            )
-
-    return (
-        "The Gemini analysis did not complete."
-    )
-
+# ============================================================
+# HANDLER
+# ============================================================
 
 class handler(
     BaseHTTPRequestHandler
@@ -213,23 +540,10 @@ class handler(
 
         try:
 
-            key = api_key()
-
-            if not key:
-
-                json_response(
-                    self,
-                    500,
-                    {
-                        "error":
-                            "GEMINI_API_KEY is missing from Vercel."
-                    },
+            job_token = (
+                _extract_job_token(
+                    self
                 )
-
-                return
-
-            job_token = extract_job_token(
-                self
             )
 
             if not job_token:
@@ -246,102 +560,68 @@ class handler(
                 return
 
             (
-                interaction_id,
+                job_nonce,
                 instrument,
                 trade_focus,
-                user_id,
-            ) = read_secure_job_token(
+                token_user_id,
+            ) = _read_job_token(
                 job_token
             )
 
-            if not user_id:
+            # ------------------------------------------------
+            # Optional session check.
+            #
+            # Expired Supabase sessions are deliberately ignored
+            # for an already-authorized short-lived job.
+            # ------------------------------------------------
+
+            try:
+
+                _check_optional_session(
+                    self,
+                    token_user_id,
+                )
+
+            except PermissionError as exc:
 
                 json_response(
                     self,
-                    400,
+                    403,
                     {
                         "error":
-                            "Invalid analysis job."
+                            str(exc)
                     },
                 )
 
                 return
 
-            interaction = retrieve_response(
-                interaction_id,
-                key,
+            # ------------------------------------------------
+            # Retrieve completed result from Supabase.
+            # ------------------------------------------------
+
+            result = _load_completed_job(
+
+                user_id=
+                    token_user_id,
+
+                job_nonce=
+                    job_nonce,
+
+                instrument=
+                    instrument,
+
+                trade_focus=
+                    trade_focus,
             )
 
-            status = str(
-                interaction.get(
-                    "status",
-                    "in_progress",
-                )
-            ).strip()
-
-            if status in {
-                "queued",
-                "in_progress",
-            }:
+            if result is None:
 
                 json_response(
                     self,
-                    200,
+                    404,
                     {
-                        "status":
-                            status,
-
-                        "poll_after_seconds":
-                            2,
-                    },
-                )
-
-                return
-
-            if status == "completed":
-
-                result = (
-                    parse_completed_response(
-                        interaction,
-                        instrument,
-                        trade_focus,
-                    )
-                )
-
-                json_response(
-                    self,
-                    200,
-                    {
-                        "status":
-                            "completed",
-
-                        "result":
-                            result,
-                    },
-                )
-
-                return
-
-            if status in {
-                "failed",
-                "cancelled",
-            }:
-
-                reason = (
-                    extract_failure_reason(
-                        interaction
-                    )
-                )
-
-                json_response(
-                    self,
-                    200,
-                    {
-                        "status":
-                            "failed",
-
                         "error":
-                            reason,
+                            "Analysis job was not found."
                     },
                 )
 
@@ -352,10 +632,10 @@ class handler(
                 200,
                 {
                     "status":
-                        "in_progress",
+                        "completed",
 
-                    "poll_after_seconds":
-                        3,
+                    "result":
+                        result,
                 },
             )
 
@@ -374,13 +654,10 @@ class handler(
 
             json_response(
                 self,
-                200,
+                503,
                 {
-                    "status":
-                        "failed",
-
                     "error":
-                        str(exc),
+                        str(exc)
                 },
             )
 
@@ -388,11 +665,8 @@ class handler(
 
             json_response(
                 self,
-                200,
+                500,
                 {
-                    "status":
-                        "failed",
-
                     "error":
                         "Analysis status request failed: "
                         + str(exc),
