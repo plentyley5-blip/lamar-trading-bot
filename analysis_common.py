@@ -6,155 +6,254 @@ import urllib.request
 
 
 # ============================================================
-# GEMINI STANDARD GENERATECONTENT API
+# GEMINI CONFIGURATION
 # ============================================================
 
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 GEMINI_GENERATE_URL = (
     "https://generativelanguage.googleapis.com/v1beta/"
-    "models/gemini-3.8-flash:generateContent"
+    "models/gemini-3.5-flash-lite:generateContent"
 )
 
 MAX_IMAGE_DATA_URL_CHARS = 8 * 1024 * 1024
 
 
 # ============================================================
-# ANALYSIS PROMPT
+# SYSTEM PROMPT
 # ============================================================
 
 SYSTEM_PROMPT = """
 You are the professional chart-analysis engine for LAMAR TRADING BOT.
 
-You receive two trading-chart screenshots:
+You receive exactly two trading screenshots:
 
-1. 4H chart
-2. 15M chart
+IMAGE 1 = 4H chart
+IMAGE 2 = 15M chart
 
-Your job is to determine whether the evidence supports:
+The selected instrument and trade focus are supplied separately.
+
+Your task is to analyze both charts and produce exactly one decision:
 
 BUY
 SELL
 NO TRADE
 
-IMPORTANT:
+==================================================
+CORE DECISION RULE
+==================================================
 
-Do not automatically choose NO TRADE.
+Do NOT automatically choose NO TRADE.
 
-Do not require every trading method to agree.
+Do NOT require every trading method to agree.
 
-Do not require perfect agreement between the 4H and 15M charts.
+Do NOT require the 4H and 15M charts to show identical structures.
 
-Use the selected trade focus appropriately.
+Use the strongest overall visible evidence.
+
+A BUY is allowed when the overall evidence is sufficiently bullish.
+
+A SELL is allowed when the overall evidence is sufficiently bearish.
+
+Use NO TRADE only when the evidence is genuinely too unclear,
+too weak, materially conflicting, or the chart quality prevents
+a responsible directional setup.
+
+==================================================
+TIMEFRAME LOGIC
+==================================================
 
 SCALP:
+
 - 15M is the primary execution timeframe.
 - 4H provides broader context.
-- A valid scalp BUY or SELL can exist when the 15M setup is sufficiently
-  clear and the 4H does not clearly invalidate it.
+- A valid scalp BUY or SELL can exist from a sufficiently clear
+  15M setup even if the 4H chart is neutral.
+- The 4H chart should not clearly invalidate the setup.
 
 DAY TRADE:
-- 4H provides broader directional context.
+
+- 4H provides broader market context.
 - 15M provides confirmation and execution.
 
 SWING:
-- 4H is the primary structural timeframe.
-- 15M may assist with timing.
 
-Analyze whichever visible evidence is useful:
+- 4H is the primary structural timeframe.
+- 15M may assist with entry timing.
+
+==================================================
+ANALYSIS METHODS
+==================================================
+
+Use whichever are supported by visible chart evidence:
 
 - support and resistance
-- price action
+- pure price action
 - market structure
 - swing highs
 - swing lows
-- BOS
-- CHoCH
+- break of structure
+- change of character
 - liquidity
 - equal highs
 - equal lows
 - liquidity sweeps
+- stop hunts
 - displacement
 - inducement
 - mitigation
 - invalidation
-- Fibonacci
+- Fibonacci retracement
+- Fibonacci extension
 - premium and discount
 - smart money concepts
 - order blocks
 - fair value gaps
-- higher timeframe bias
-- lower timeframe confirmation
+- higher-timeframe bias
+- lower-timeframe confirmation
 
-Not every method is required.
+Do NOT require every method.
 
-Choose BUY when the overall visible evidence is sufficiently bullish.
+Identify:
 
-Choose SELL when the overall visible evidence is sufficiently bearish.
+- contributing evidence
+- weak evidence
+- conflicting evidence
 
-Choose NO TRADE only when the evidence is genuinely unclear, too weak,
-materially conflicting, or the chart quality prevents a responsible setup.
+==================================================
+BUY
+==================================================
 
-Do not force a trade merely to provide a signal.
+A BUY may be selected when a meaningful combination of bullish evidence
+is visible.
 
-ENTRY:
+Examples include:
 
-For BUY or SELL, identify a logical entry area.
+- bullish market structure
+- bullish break of structure
+- bullish change of character
+- support reaction
+- bullish liquidity sweep
+- bullish displacement
+- bullish order block
+- bullish fair value gap
+- discount positioning
+- bullish price action
+- lower-timeframe bullish confirmation
 
-STOP LOSS:
+Not all are required.
 
-Place it beyond the logical invalidation area.
+==================================================
+SELL
+==================================================
 
-TP1:
+A SELL may be selected when a meaningful combination of bearish evidence
+is visible.
 
-Use the nearer logical target.
+Examples include:
 
-TP2:
+- bearish market structure
+- bearish break of structure
+- bearish change of character
+- resistance reaction
+- bearish liquidity sweep
+- bearish displacement
+- bearish order block
+- bearish fair value gap
+- premium positioning
+- bearish price action
+- lower-timeframe bearish confirmation
 
-Use a further logical target only when supported by visible structure,
-liquidity, or price objectives.
+Not all are required.
 
-RISK/REWARD:
+==================================================
+ENTRY
+==================================================
 
-Make it consistent with the entry, stop loss, and targets.
+For BUY or SELL:
 
-PRICE PRECISION:
-
-Use exact prices only when they are reasonably visible or inferable.
+Provide a logical entry level or entry area when the chart supports it.
 
 Do not invent false precision.
 
-If the exact numerical value cannot responsibly be determined, leave
-that individual field empty.
+If exact price digits are clearly visible, use them.
 
-NO TRADE:
+If exact digits are not clearly readable, use a reasonable level or zone
+when that can be inferred responsibly.
 
-For NO TRADE, entry, stop loss, TP1, TP2, and risk/reward must be empty.
+==================================================
+STOP LOSS
+==================================================
 
-NEWS:
+Place the stop beyond the logical invalidation area.
+
+==================================================
+TAKE PROFITS
+==================================================
+
+TP1 should be the nearer logical objective.
+
+TP2 should be a further logical objective when supported by visible
+structure, liquidity, or another clear price objective.
+
+==================================================
+RISK / REWARD
+==================================================
+
+Keep the risk/reward description consistent with the proposed entry,
+stop loss, and targets.
+
+==================================================
+NO TRADE
+==================================================
+
+Use NO TRADE when:
+
+- directional evidence is genuinely unclear
+- bullish and bearish evidence are materially balanced
+- the setup is too weak
+- the chart quality prevents reliable analysis
+- important information is missing
+- the proposed idea is materially invalidated
+
+Do NOT use NO TRADE merely because one method is weak.
+
+==================================================
+NEWS
+==================================================
 
 Do not invent current news.
 
-If current news cannot be verified, state that limitation.
+Only discuss news or fundamentals that are visible or reliably supplied.
 
-CONFIDENCE:
+If current news cannot be verified, say so.
 
-Confidence measures confidence in the quality of the analysis.
+==================================================
+CONFIDENCE
+==================================================
 
-It is NOT a guaranteed probability of winning.
+Confidence is confidence in the quality of the chart analysis.
 
-It is NOT a guarantee of profit.
+It is NOT:
 
-Return only JSON matching the supplied schema.
+- guaranteed win rate
+- guaranteed probability of profit
+- guarantee of success
 
-Do not return Markdown.
-Do not return code fences.
-Do not return commentary outside JSON.
+==================================================
+OUTPUT
+==================================================
+
+Return ONLY valid JSON matching the supplied schema.
+
+No Markdown.
+No code fences.
+No commentary outside JSON.
 """.strip()
 
 
 # ============================================================
-# JSON SCHEMA
+# OUTPUT SCHEMA
 # ============================================================
 
 OUTPUT_SCHEMA = {
@@ -289,7 +388,7 @@ OUTPUT_SCHEMA = {
 
 
 # ============================================================
-# VALIDATION
+# ALLOWED VALUES
 # ============================================================
 
 ALLOWED_INSTRUMENTS = {
@@ -311,6 +410,10 @@ ALLOWED_FOCUSES = {
     "SWING",
 }
 
+
+# ============================================================
+# JSON RESPONSE
+# ============================================================
 
 def json_response(
     handler,
@@ -357,7 +460,9 @@ def json_response(
     )
 
     if extra_headers:
+
         for key, value in extra_headers.items():
+
             handler.send_header(
                 key,
                 str(value),
@@ -371,6 +476,10 @@ def json_response(
         pass
 
 
+# ============================================================
+# GEMINI API KEY
+# ============================================================
+
 def api_key():
     key = os.getenv(
         "GEMINI_API_KEY",
@@ -378,6 +487,7 @@ def api_key():
     ).strip()
 
     if not key:
+
         raise RuntimeError(
             "GEMINI_API_KEY is missing from Vercel."
         )
@@ -385,12 +495,19 @@ def api_key():
     return key
 
 
-def validate_instrument(value):
+# ============================================================
+# VALIDATION
+# ============================================================
+
+def validate_instrument(
+    value,
+):
     instrument = str(
         value or ""
     ).strip().upper()
 
     if instrument not in ALLOWED_INSTRUMENTS:
+
         raise ValueError(
             "Invalid instrument. Select a supported instrument."
         )
@@ -398,12 +515,15 @@ def validate_instrument(value):
     return instrument
 
 
-def validate_focus(value):
+def validate_focus(
+    value,
+):
     focus = str(
         value or "DAY TRADE"
     ).strip().upper()
 
     if focus not in ALLOWED_FOCUSES:
+
         raise ValueError(
             "Invalid trade focus."
         )
@@ -419,6 +539,7 @@ def validate_image_data_url(
         value,
         str,
     ):
+
         raise ValueError(
             f"A valid {label} is required."
         )
@@ -428,11 +549,16 @@ def validate_image_data_url(
     if not image.startswith(
         "data:image/"
     ):
+
         raise ValueError(
             f"A valid {label} is required."
         )
 
-    if len(image) > MAX_IMAGE_DATA_URL_CHARS:
+    if (
+        len(image)
+        > MAX_IMAGE_DATA_URL_CHARS
+    ):
+
         raise ValueError(
             f"{label} is too large."
         )
@@ -441,12 +567,16 @@ def validate_image_data_url(
         image.partition(",")
     )
 
-    if not separator or not encoded:
+    if (
+        not separator
+        or not encoded
+    ):
+
         raise ValueError(
             f"A valid {label} is required."
         )
 
-    allowed = (
+    allowed_headers = (
         "data:image/jpeg;base64",
         "data:image/jpg;base64",
         "data:image/png;base64",
@@ -454,25 +584,31 @@ def validate_image_data_url(
     )
 
     if not header.lower().startswith(
-        allowed
+        allowed_headers
     ):
+
         raise ValueError(
-            f"Unsupported {label} format."
+            f"Unsupported {label} format. "
+            "Use JPG, PNG, or WEBP."
         )
 
     encoded = encoded.strip()
 
     if len(encoded) < 100:
+
         raise ValueError(
             f"The {label} appears to be empty."
         )
 
     try:
+
         base64.b64decode(
             encoded,
             validate=True,
         )
+
     except Exception as exc:
+
         raise ValueError(
             f"The {label} contains invalid image data."
         ) from exc
@@ -481,7 +617,75 @@ def validate_image_data_url(
 
 
 # ============================================================
-# GEMINI REQUEST
+# GEMINI ERROR PARSING
+# ============================================================
+
+def _gemini_error_message(
+    raw,
+):
+    if not raw:
+        return ""
+
+    try:
+
+        if isinstance(
+            raw,
+            bytes,
+        ):
+
+            raw = raw.decode(
+                "utf-8",
+                errors="replace",
+            )
+
+        data = json.loads(
+            raw
+        )
+
+    except Exception:
+        return ""
+
+    if not isinstance(
+        data,
+        dict,
+    ):
+        return ""
+
+    error = data.get(
+        "error"
+    )
+
+    if not isinstance(
+        error,
+        dict,
+    ):
+        return ""
+
+    message = str(
+        error.get(
+            "message",
+            "",
+        )
+    ).strip()
+
+    status = str(
+        error.get(
+            "status",
+            "",
+        )
+    ).strip()
+
+    if message and status:
+
+        return (
+            f"{message} ({status})"
+        )
+
+    return message or status
+
+
+# ============================================================
+# STANDARD GEMINI GENERATECONTENT
 # ============================================================
 
 def create_background_response(
@@ -491,11 +695,12 @@ def create_background_response(
     lower_image,
 ):
     """
-    Compatibility name retained because analysis_submit.py
-    already calls this function.
+    Compatibility function name.
 
-    This no longer uses the Interactions API or any Agent.
-    It uses the standard Gemini generateContent endpoint.
+    Despite the old name, this no longer uses a background
+    Interactions/Agent request.
+
+    It uses the standard Gemini generateContent API directly.
     """
 
     key = api_key()
@@ -519,26 +724,29 @@ def create_background_response(
     )
 
     def image_part(
-        data_url
+        image_data_url,
     ):
         header, separator, encoded = (
-            data_url.partition(",")
+            image_data_url.partition(",")
         )
 
         if not separator:
             raise ValueError(
-                "Invalid image data."
+                "Invalid chart image."
             )
 
         header_lower = header.lower()
 
         if "image/png" in header_lower:
+
             mime_type = "image/png"
 
         elif "image/webp" in header_lower:
+
             mime_type = "image/webp"
 
         else:
+
             mime_type = "image/jpeg"
 
         return {
@@ -552,28 +760,20 @@ def create_background_response(
         }
 
     user_prompt = (
-        "Analyze these trading charts.\n\n"
+        "Analyze the supplied trading charts.\n\n"
         f"Instrument: {instrument}\n"
         f"Trade focus: {trade_focus}\n\n"
-        "The first image is the 4H chart.\n"
-        "The second image is the 15M chart.\n\n"
-        "Use the strongest visible evidence.\n"
-        "For SCALP, give the 15M setup primary execution importance "
-        "while using the 4H chart for context.\n"
-        "Do not automatically return NO TRADE merely because the "
-        "4H and 15M are not identical.\n\n"
-        "Return BUY, SELL, or NO TRADE with the complete JSON schema."
+        "IMAGE 1 = 4H chart.\n"
+        "IMAGE 2 = 15M chart.\n\n"
+        "For SCALP, make the 15M chart the primary execution "
+        "timeframe and use the 4H chart as context.\n"
+        "For DAY TRADE, combine 4H context with 15M confirmation.\n"
+        "For SWING, make the 4H chart the primary structural timeframe.\n\n"
+        "Do not automatically return NO TRADE.\n"
+        "Return the strongest justified decision: BUY, SELL, or NO TRADE."
     )
 
     payload = {
-        "system_instruction": {
-            "parts": [
-                {
-                    "text":
-                        SYSTEM_PROMPT,
-                }
-            ]
-        },
 
         "contents": [
             {
@@ -583,7 +783,9 @@ def create_background_response(
 
                     {
                         "text":
-                            user_prompt,
+                            SYSTEM_PROMPT
+                            + "\n\n"
+                            + user_prompt,
                     },
 
                     image_part(
@@ -598,6 +800,7 @@ def create_background_response(
         ],
 
         "generationConfig": {
+
             "responseMimeType":
                 "application/json",
 
@@ -610,7 +813,7 @@ def create_background_response(
             },
 
             "maxOutputTokens":
-                3000,
+                2400,
         },
     }
 
@@ -660,6 +863,7 @@ def create_background_response(
                 data,
                 dict,
             ):
+
                 raise RuntimeError(
                     "Gemini returned an invalid response."
                 )
@@ -675,38 +879,12 @@ def create_background_response(
         except Exception:
             pass
 
-        message = ""
-
-        try:
-
-            decoded = raw.decode(
-                "utf-8",
-                errors="replace",
-            )
-
-            error_data = json.loads(
-                decoded
-            )
-
-            error = error_data.get(
-                "error"
-            )
-
-            if isinstance(
-                error,
-                dict,
-            ):
-                message = str(
-                    error.get(
-                        "message",
-                        "",
-                    )
-                ).strip()
-
-        except Exception:
-            pass
+        message = _gemini_error_message(
+            raw
+        )
 
         if exc.code == 400:
+
             raise RuntimeError(
                 "Gemini rejected the request: "
                 + (
@@ -715,7 +893,11 @@ def create_background_response(
                 )
             ) from exc
 
-        if exc.code in {401, 403}:
+        if exc.code in {
+            401,
+            403,
+        }:
+
             raise RuntimeError(
                 "The Gemini API key was rejected: "
                 + (
@@ -725,8 +907,9 @@ def create_background_response(
             ) from exc
 
         if exc.code == 404:
+
             raise RuntimeError(
-                "Gemini model not found: "
+                "The Gemini model was not found: "
                 + (
                     message
                     or GEMINI_MODEL
@@ -734,6 +917,7 @@ def create_background_response(
             ) from exc
 
         if exc.code == 429:
+
             raise RuntimeError(
                 "Gemini quota or rate limit reached: "
                 + (
@@ -743,6 +927,7 @@ def create_background_response(
             ) from exc
 
         if 500 <= exc.code <= 599:
+
             raise RuntimeError(
                 "Gemini is temporarily unavailable."
             ) from exc
@@ -751,7 +936,7 @@ def create_background_response(
             "Gemini request failed: "
             + (
                 message
-                or str(exc)
+                or "unknown error"
             )
         ) from exc
 
@@ -782,6 +967,7 @@ def extract_output_text(
         response_data,
         dict,
     ):
+
         raise RuntimeError(
             "Gemini returned an invalid response."
         )
@@ -795,47 +981,58 @@ def extract_output_text(
         candidates,
         list,
     ) or not candidates:
+
         raise RuntimeError(
             "Gemini returned no analysis candidate."
         )
 
-    first = candidates[0]
+    candidate = candidates[0]
 
     if not isinstance(
-        first,
+        candidate,
         dict,
     ):
+
         raise RuntimeError(
             "Gemini returned an invalid analysis candidate."
         )
 
-    content = first.get(
+    finish_reason = str(
+        candidate.get(
+            "finishReason",
+            "",
+        )
+    ).strip()
+
+    content = candidate.get(
         "content",
-        {}
+        {},
     )
 
     if not isinstance(
         content,
         dict,
     ):
+
         raise RuntimeError(
             "Gemini returned no analysis content."
         )
 
     parts = content.get(
         "parts",
-        []
+        [],
     )
 
     if not isinstance(
         parts,
         list,
     ):
+
         raise RuntimeError(
-            "Gemini returned no analysis text."
+            "Gemini returned no analysis parts."
         )
 
-    texts = []
+    pieces = []
 
     for part in parts:
 
@@ -847,25 +1044,35 @@ def extract_output_text(
 
         text = part.get(
             "text",
-            ""
+            "",
         )
 
-        if isinstance(
-            text,
-            str,
-        ) and text.strip():
+        if (
+            isinstance(
+                text,
+                str,
+            )
+            and text.strip()
+        ):
 
-            texts.append(
+            pieces.append(
                 text.strip()
             )
 
-    if not texts:
+    if not pieces:
+
+        if finish_reason:
+            raise RuntimeError(
+                "Gemini returned no analysis text. "
+                f"Finish reason: {finish_reason}"
+            )
+
         raise RuntimeError(
             "Gemini returned no analysis text."
         )
 
     return "\n".join(
-        texts
+        pieces
     ).strip()
 
 
@@ -893,6 +1100,7 @@ def clean_json_text(
             and lines[-1].strip()
             == "```"
         ):
+
             lines = lines[:-1]
 
         cleaned = "\n".join(
@@ -925,7 +1133,7 @@ def _clean_string(
     ).strip()
 
 
-def _clean_list(
+def _clean_string_list(
     value,
 ):
     if not isinstance(
@@ -977,6 +1185,7 @@ def parse_completed_response(
         result,
         dict,
     ):
+
         raise RuntimeError(
             "Gemini returned an invalid analysis object."
         )
@@ -995,68 +1204,156 @@ def parse_completed_response(
         "SELL",
         "NO TRADE",
     }:
+
         signal = "NO TRADE"
 
-    result["signal"] = signal
+    confidence = _safe_int(
+        result.get(
+            "confidence",
+            0,
+        )
+    )
 
-    result["confidence"] = max(
-        0,
-        min(
-            100,
-            _safe_int(
+    result = {
+
+        "signal":
+            signal,
+
+        "confidence":
+            max(
+                0,
+                min(
+                    100,
+                    confidence,
+                ),
+            ),
+
+        "instrument":
+            _clean_string(
+                instrument
+            ).upper(),
+
+        "trend":
+            _clean_string(
                 result.get(
-                    "confidence",
-                    0,
+                    "trend"
                 )
             ),
-        ),
-    )
 
-    result["instrument"] = (
-        _clean_string(
-            instrument
-        ).upper()
-    )
+        "trade_idea":
+            _clean_string(
+                result.get(
+                    "trade_idea"
+                )
+            ),
 
-    text_fields = [
-        "trend",
-        "trade_idea",
-        "higher_timeframe_context",
-        "lower_timeframe_confirmation",
-        "entry",
-        "stop_loss",
-        "take_profit_1",
-        "take_profit_2",
-        "risk_reward",
-        "duration",
-        "data_analysis",
-        "explanation",
-        "news_fundamental_risk",
-    ]
+        "higher_timeframe_context":
+            _clean_string(
+                result.get(
+                    "higher_timeframe_context"
+                )
+            ),
 
-    for field in text_fields:
+        "lower_timeframe_confirmation":
+            _clean_string(
+                result.get(
+                    "lower_timeframe_confirmation"
+                )
+            ),
 
-        result[field] = _clean_string(
-            result.get(
-                field
-            )
-        )
+        "entry":
+            _clean_string(
+                result.get(
+                    "entry"
+                )
+            ),
 
-    list_fields = [
-        "contributing_methods",
-        "weak_methods",
-        "conflicting_methods",
-        "warnings",
-    ]
+        "stop_loss":
+            _clean_string(
+                result.get(
+                    "stop_loss"
+                )
+            ),
 
-    for field in list_fields:
+        "take_profit_1":
+            _clean_string(
+                result.get(
+                    "take_profit_1"
+                )
+            ),
 
-        result[field] = _clean_list(
-            result.get(
-                field
-            )
-        )
+        "take_profit_2":
+            _clean_string(
+                result.get(
+                    "take_profit_2"
+                )
+            ),
 
+        "risk_reward":
+            _clean_string(
+                result.get(
+                    "risk_reward"
+                )
+            ),
+
+        "duration":
+            _clean_string(
+                result.get(
+                    "duration"
+                )
+            ),
+
+        "data_analysis":
+            _clean_string(
+                result.get(
+                    "data_analysis"
+                )
+            ),
+
+        "explanation":
+            _clean_string(
+                result.get(
+                    "explanation"
+                )
+            ),
+
+        "contributing_methods":
+            _clean_string_list(
+                result.get(
+                    "contributing_methods"
+                )
+            ),
+
+        "weak_methods":
+            _clean_string_list(
+                result.get(
+                    "weak_methods"
+                )
+            ),
+
+        "conflicting_methods":
+            _clean_string_list(
+                result.get(
+                    "conflicting_methods"
+                )
+            ),
+
+        "news_fundamental_risk":
+            _clean_string(
+                result.get(
+                    "news_fundamental_risk"
+                )
+            ),
+
+        "warnings":
+            _clean_string_list(
+                result.get(
+                    "warnings"
+                )
+            ),
+    }
+
+    # For NO TRADE, price fields remain empty.
     if signal == "NO TRADE":
 
         result["entry"] = ""
