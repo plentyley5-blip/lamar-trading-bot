@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 from analysis_common import (
-    OPENAI_URL,
+    GEMINI_URL,
     api_key,
     json_response,
     parse_completed_response,
@@ -18,19 +18,22 @@ from api.user_security import (
 
 
 def retrieve_response(
-    response_id,
+    interaction_id,
     key,
 ):
     request = urllib.request.Request(
 
-        f"{OPENAI_URL}/{response_id}",
+        f"{GEMINI_URL}/{interaction_id}",
 
         headers={
-            "Authorization":
-                "Bearer " + key,
+            "x-goog-api-key":
+                key,
 
             "Accept":
                 "application/json",
+
+            "Api-Revision":
+                "2026-05-20",
         },
 
         method="GET",
@@ -94,7 +97,7 @@ def retrieve_response(
 
                     if message:
                         raise RuntimeError(
-                            "OpenAI: " + message
+                            "Gemini: " + message
                         )
 
         except RuntimeError:
@@ -105,22 +108,17 @@ def retrieve_response(
 
         if exc.code == 401:
             raise RuntimeError(
-                "The server AI API key was rejected."
+                "The Gemini API key was rejected."
             )
 
         if exc.code == 429:
             raise RuntimeError(
-                "The AI service rate or usage limit was reached."
-            )
-
-        if 500 <= exc.code <= 599:
-            raise RuntimeError(
-                "The AI service is temporarily unavailable."
+                "Gemini rate limit or quota reached."
             )
 
         raise RuntimeError(
-            "The analysis result could not be retrieved."
-        )
+            "The Gemini analysis result could not be retrieved."
+        ) from exc
 
     except (
         urllib.error.URLError,
@@ -128,7 +126,7 @@ def retrieve_response(
     ) as exc:
 
         raise RuntimeError(
-            "The analysis service is temporarily unavailable."
+            "Gemini is temporarily unavailable."
         ) from exc
 
 
@@ -143,77 +141,55 @@ def extract_job_token(
         parsed.query
     )
 
-    token = values.get(
-        "job_id",
-        [""],
-    )[0]
-
     return str(
-        token
+        values.get(
+            "job_id",
+            [""],
+        )[0]
     ).strip()
 
 
 def extract_failure_reason(
     response,
 ):
-    error = response.get(
-        "error"
+    errors = response.get(
+        "errors"
     )
 
     if isinstance(
-        error,
-        dict,
+        errors,
+        list,
     ):
 
-        message = str(
-            error.get(
-                "message",
-                "",
-            )
-        ).strip()
+        messages = []
 
-        code = str(
-            error.get(
-                "code",
-                "",
-            )
-        ).strip()
+        for error in errors:
 
-        if message and code:
-            return (
-                f"{message} ({code})"
-            )
+            if not isinstance(
+                error,
+                dict,
+            ):
+                continue
 
-        if message:
-            return message
+            message = str(
+                error.get(
+                    "message",
+                    "",
+                )
+            ).strip()
 
-        if code:
-            return code
+            if message:
+                messages.append(
+                    message
+                )
 
-    incomplete = response.get(
-        "incomplete_details"
-    )
-
-    if isinstance(
-        incomplete,
-        dict,
-    ):
-
-        reason = str(
-            incomplete.get(
-                "reason",
-                "",
-            )
-        ).strip()
-
-        if reason:
-            return (
-                "The analysis became incomplete. "
-                f"Reason: {reason}"
+        if messages:
+            return "; ".join(
+                messages
             )
 
     return (
-        "The analysis did not complete."
+        "The Gemini analysis did not complete."
     )
 
 
@@ -224,6 +200,7 @@ class handler(
     def do_OPTIONS(
         self
     ):
+
         json_response(
             self,
             204,
@@ -245,25 +222,11 @@ class handler(
                     500,
                     {
                         "error":
-                            "Server configuration is incomplete."
+                            "GEMINI_API_KEY is missing from Vercel."
                     },
                 )
 
                 return
-
-            # ------------------------------------------------
-            # IMPORTANT:
-            #
-            # Do NOT verify the Supabase access token again
-            # here.
-            #
-            # /analysis_submit already authenticated the user
-            # and created a signed job token containing that
-            # user's ID.
-            #
-            # The signed job token is short-lived and is tied to
-            # the authenticated user who created the job.
-            # ------------------------------------------------
 
             job_token = extract_job_token(
                 self
@@ -283,25 +246,15 @@ class handler(
                 return
 
             (
-                response_id,
+                interaction_id,
                 instrument,
                 trade_focus,
-                token_user_id,
+                user_id,
             ) = read_secure_job_token(
                 job_token
             )
 
-            # The signed token itself is the authorization
-            # credential for this short-lived analysis job.
-            #
-            # token_user_id is deliberately extracted and retained
-            # so that the job remains bound to its originating user.
-            #
-            # It is not compared against a second Supabase request,
-            # because that second request was the source of the
-            # expired-session failure during polling.
-
-            if not token_user_id:
+            if not user_id:
 
                 json_response(
                     self,
@@ -314,15 +267,15 @@ class handler(
 
                 return
 
-            response = retrieve_response(
-                response_id,
+            interaction = retrieve_response(
+                interaction_id,
                 key,
             )
 
             status = str(
-                response.get(
+                interaction.get(
                     "status",
-                    "queued",
+                    "in_progress",
                 )
             ).strip()
 
@@ -349,7 +302,7 @@ class handler(
 
                 result = (
                     parse_completed_response(
-                        response,
+                        interaction,
                         instrument,
                         trade_focus,
                     )
@@ -372,13 +325,11 @@ class handler(
             if status in {
                 "failed",
                 "cancelled",
-                "incomplete",
-                "expired",
             }:
 
                 reason = (
                     extract_failure_reason(
-                        response
+                        interaction
                     )
                 )
 
