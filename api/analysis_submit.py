@@ -1,20 +1,26 @@
 import base64
+import hashlib
+import hmac
 import json
 import os
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 
 from http.server import BaseHTTPRequestHandler
 
 from analysis_common import (
+    create_background_response,
     json_response,
+    parse_completed_response,
     validate_focus,
     validate_image_data_url,
     validate_instrument,
 )
 
 from api.user_security import (
-    create_secure_job_token,
     extract_bearer_token,
     is_owner_user,
     release_analysis_slot,
@@ -24,481 +30,230 @@ from api.user_security import (
 
 
 # ============================================================
-# GEMINI CONFIGURATION
+# JOB TOKEN CONFIGURATION
 # ============================================================
 
-GEMINI_API_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/interactions"
-)
-
-# HARD-CODED.
-# This endpoint cannot read GEMINI_MODEL from Vercel.
-GEMINI_MODEL = "gemini-3.8-flash"
+JOB_TTL_SECONDS = 15 * 60
 
 
-# ============================================================
-# ANALYSIS INSTRUCTIONS
-# ============================================================
+def _job_secret():
+    secret = os.getenv(
+        "JOB_TOKEN_SECRET",
+        "",
+    ).strip()
 
-SYSTEM_PROMPT = """
-You are LAMAR TRADING BOT's professional chart-analysis engine.
+    if not secret:
+        secret = os.getenv(
+            "GEMINI_API_KEY",
+            "",
+        ).strip()
 
-You receive two trading screenshots:
+    if not secret:
 
-1. 4H chart
-2. 15M chart
-
-Analyze both charts and return exactly one of:
-
-BUY
-SELL
-NO TRADE
-
-Do not automatically choose NO TRADE.
-
-Do not require every method to agree.
-
-Do not require the 4H and 15M charts to be identical.
-
-For SCALP:
-
-- 15M is the primary execution timeframe.
-- 4H is broader context.
-- A valid BUY or SELL is allowed when the 15M provides a sufficiently
-  clear setup and the 4H does not clearly invalidate it.
-
-For DAY TRADE:
-
-- 4H provides directional context.
-- 15M provides confirmation and execution.
-
-For SWING:
-
-- 4H is the primary structural timeframe.
-- 15M may be used for timing.
-
-Analyze whichever visible concepts are useful:
-
-- support and resistance
-- price action
-- market structure
-- swing highs and lows
-- BOS
-- CHoCH
-- liquidity
-- equal highs
-- equal lows
-- liquidity sweeps
-- displacement
-- inducement
-- mitigation
-- invalidation
-- Fibonacci
-- premium and discount
-- smart money concepts
-- order blocks
-- fair value gaps
-
-Not every method is required.
-
-A BUY is allowed when the overall visible evidence is sufficiently bullish.
-
-A SELL is allowed when the overall visible evidence is sufficiently bearish.
-
-Use NO TRADE only when the evidence is genuinely unclear, materially
-conflicting, too weak, or the image quality prevents reliable analysis.
-
-Do not invent current news.
-
-Do not invent prices.
-
-When price digits are readable, use them.
-
-When an exact price cannot responsibly be determined, leave the field empty.
-
-For NO TRADE:
-
-entry = ""
-stop_loss = ""
-take_profit_1 = ""
-take_profit_2 = ""
-risk_reward = ""
-
-Confidence is confidence in the quality of the analysis, not a guarantee
-of profit.
-
-Return ONLY valid JSON matching the supplied schema.
-""".strip()
-
-
-# ============================================================
-# OUTPUT SCHEMA
-# ============================================================
-
-OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-
-        "signal": {
-            "type": "string",
-            "enum": [
-                "BUY",
-                "SELL",
-                "NO TRADE",
-            ],
-        },
-
-        "confidence": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 100,
-        },
-
-        "instrument": {
-            "type": "string",
-        },
-
-        "trend": {
-            "type": "string",
-        },
-
-        "trade_idea": {
-            "type": "string",
-        },
-
-        "higher_timeframe_context": {
-            "type": "string",
-        },
-
-        "lower_timeframe_confirmation": {
-            "type": "string",
-        },
-
-        "entry": {
-            "type": "string",
-        },
-
-        "stop_loss": {
-            "type": "string",
-        },
-
-        "take_profit_1": {
-            "type": "string",
-        },
-
-        "take_profit_2": {
-            "type": "string",
-        },
-
-        "risk_reward": {
-            "type": "string",
-        },
-
-        "duration": {
-            "type": "string",
-        },
-
-        "data_analysis": {
-            "type": "string",
-        },
-
-        "explanation": {
-            "type": "string",
-        },
-
-        "contributing_methods": {
-            "type": "array",
-            "items": {
-                "type": "string",
-            },
-        },
-
-        "weak_methods": {
-            "type": "array",
-            "items": {
-                "type": "string",
-            },
-        },
-
-        "conflicting_methods": {
-            "type": "array",
-            "items": {
-                "type": "string",
-            },
-        },
-
-        "news_fundamental_risk": {
-            "type": "string",
-        },
-
-        "warnings": {
-            "type": "array",
-            "items": {
-                "type": "string",
-            },
-        },
-    },
-
-    "required": [
-        "signal",
-        "confidence",
-        "instrument",
-        "trend",
-        "trade_idea",
-        "higher_timeframe_context",
-        "lower_timeframe_confirmation",
-        "entry",
-        "stop_loss",
-        "take_profit_1",
-        "take_profit_2",
-        "risk_reward",
-        "duration",
-        "data_analysis",
-        "explanation",
-        "contributing_methods",
-        "weak_methods",
-        "conflicting_methods",
-        "news_fundamental_risk",
-        "warnings",
-    ],
-}
-
-
-# ============================================================
-# REQUEST READER
-# ============================================================
-
-def _read_json(handler):
-    try:
-        length = int(
-            handler.headers.get(
-                "Content-Length",
-                "0",
-            )
-        )
-    except ValueError:
-        raise ValueError(
-            "Invalid request."
+        raise RuntimeError(
+            "JOB_TOKEN_SECRET or GEMINI_API_KEY is missing from Vercel."
         )
 
-    if (
-        length <= 0
-        or length > 25 * 1024 * 1024
-    ):
-        raise ValueError(
-            "Invalid chart request."
-        )
-
-    raw = handler.rfile.read(
-        length
+    return secret.encode(
+        "utf-8"
     )
 
-    try:
-        data = json.loads(
-            raw.decode(
+
+def _create_job_token(
+    job_nonce,
+    instrument,
+    trade_focus,
+    user_id,
+):
+    payload = {
+        "job_nonce":
+            str(job_nonce),
+
+        "instrument":
+            str(instrument),
+
+        "trade_focus":
+            str(trade_focus),
+
+        "user_id":
+            str(user_id),
+
+        "created_at":
+            int(time.time()),
+    }
+
+    raw = json.dumps(
+        payload,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+    signature = hmac.new(
+        _job_secret(),
+        raw,
+        hashlib.sha256,
+    ).digest()
+
+    encoded_payload = (
+        base64.urlsafe_b64encode(
+            raw
+        )
+        .decode("ascii")
+        .rstrip("=")
+    )
+
+    encoded_signature = (
+        base64.urlsafe_b64encode(
+            signature
+        )
+        .decode("ascii")
+        .rstrip("=")
+    )
+
+    return (
+        encoded_payload
+        + "."
+        + encoded_signature
+    )
+
+
+# ============================================================
+# SUPABASE HELPERS
+# ============================================================
+
+def _supabase_url():
+    url = os.getenv(
+        "SUPABASE_URL",
+        "",
+    ).strip().rstrip("/")
+
+    if not url:
+
+        raise RuntimeError(
+            "SUPABASE_URL is missing from Vercel."
+        )
+
+    for suffix in (
+        "/rest/v1",
+        "/auth/v1",
+        "/storage/v1",
+    ):
+
+        if url.endswith(suffix):
+
+            url = url[
+                :-len(suffix)
+            ]
+
+    return url
+
+
+def _supabase_service_key():
+    key = os.getenv(
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "",
+    ).strip()
+
+    if not key:
+
+        raise RuntimeError(
+            "SUPABASE_SERVICE_ROLE_KEY is missing from Vercel."
+        )
+
+    return key
+
+
+def _supabase_headers():
+    key = _supabase_service_key()
+
+    return {
+        "apikey":
+            key,
+
+        "Authorization":
+            "Bearer " + key,
+
+        "Content-Type":
+            "application/json",
+
+        "Accept":
+            "application/json",
+    }
+
+
+def _save_completed_job(
+    user_id,
+    job_nonce,
+    instrument,
+    trade_focus,
+    result,
+):
+    """
+    Uses the existing analysis_jobs table without requiring
+    a database schema migration.
+
+    Existing columns are used as follows:
+
+    openai_response_id -> encoded completed result
+    instrument         -> instrument + unique job nonce
+    trade_focus        -> actual trade focus
+    user_id            -> authenticated owner of job
+    """
+
+    result_json = json.dumps(
+        result,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+    result_blob = (
+        base64.urlsafe_b64encode(
+            result_json.encode(
                 "utf-8"
             )
         )
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            "Invalid request JSON."
-        ) from exc
-
-    if not isinstance(
-        data,
-        dict,
-    ):
-        raise ValueError(
-            "Invalid request."
-        )
-
-    return data
-
-
-# ============================================================
-# GEMINI ERROR
-# ============================================================
-
-def _gemini_error_message(
-    raw,
-):
-    if not raw:
-        return ""
-
-    try:
-
-        if isinstance(
-            raw,
-            bytes,
-        ):
-            raw = raw.decode(
-                "utf-8",
-                errors="replace",
-            )
-
-        data = json.loads(
-            raw
-        )
-
-    except Exception:
-        return ""
-
-    if not isinstance(
-        data,
-        dict,
-    ):
-        return ""
-
-    error = data.get(
-        "error"
+        .decode("ascii")
+        .rstrip("=")
     )
 
-    if isinstance(
-        error,
-        dict,
-    ):
-
-        message = str(
-            error.get(
-                "message",
-                "",
-            )
-        ).strip()
-
-        status = str(
-            error.get(
-                "status",
-                "",
-            )
-        ).strip()
-
-        if message and status:
-            return (
-                f"{message} ({status})"
-            )
-
-        return (
-            message or status
-        )
-
-    return ""
-
-
-# ============================================================
-# GEMINI REQUEST
-# ============================================================
-
-def _gemini_request(
-    key,
-    instrument,
-    trade_focus,
-    higher_image,
-    lower_image,
-):
-
-    def split_image(
-        data_url
-    ):
-        header, separator, encoded = (
-            data_url.partition(",")
-        )
-
-        if not separator:
-            raise ValueError(
-                "Invalid chart image."
-            )
-
-        if "image/png" in header.lower():
-            mime = "image/png"
-        elif "image/webp" in header.lower():
-            mime = "image/webp"
-        else:
-            mime = "image/jpeg"
-
-        # Verify base64.
-        base64.b64decode(
-            encoded,
-            validate=True,
-        )
-
-        return {
-            "type": "image",
-            "mime_type": mime,
-            "data": encoded,
-        }
-
-    prompt = (
-        "Analyze this trading setup.\n\n"
-        f"Instrument: {instrument}\n"
-        f"Trade focus: {trade_focus}\n\n"
-        "IMAGE 1 = 4H chart.\n"
-        "IMAGE 2 = 15M chart.\n\n"
-        "For SCALP, use the 15M as the primary execution chart "
-        "while using the 4H for context.\n"
-        "Do not force NO TRADE simply because the 4H and 15M "
-        "do not show identical structures.\n"
-        "Return the strongest justified decision: BUY, SELL, or NO TRADE."
+    unique_instrument = (
+        instrument
+        + "|"
+        + job_nonce
     )
 
     payload = {
-        "model": GEMINI_MODEL,
 
-        "input": [
-            {
-                "type": "text",
-                "text": prompt,
-            },
+        "user_id":
+            str(user_id),
 
-            split_image(
-                higher_image
-            ),
+        "openai_response_id":
+            result_blob,
 
-            split_image(
-                lower_image
-            ),
-        ],
+        "instrument":
+            unique_instrument,
 
-        "system_instruction":
-            SYSTEM_PROMPT,
-
-        "response_format": {
-            "type": "text",
-            "mime_type": "application/json",
-            "schema": OUTPUT_SCHEMA,
-        },
-
-        "generation_config": {
-            "thinking_level": "low",
-            "max_output_tokens": 3000,
-        },
-
-        "background": True,
-
-        "store": True,
+        "trade_focus":
+            trade_focus,
     }
 
     body = json.dumps(
         payload,
         separators=(",", ":"),
-    ).encode(
-        "utf-8"
-    )
+    ).encode("utf-8")
 
     request = urllib.request.Request(
 
-        GEMINI_API_URL,
+        _supabase_url()
+        + "/rest/v1/analysis_jobs",
 
         data=body,
 
         headers={
-            "x-goog-api-key":
-                key,
+            **_supabase_headers(),
 
-            "Content-Type":
-                "application/json",
-
-            "Accept":
-                "application/json",
+            "Prefer":
+                "return=minimal",
         },
 
         method="POST",
@@ -508,105 +263,21 @@ def _gemini_request(
 
         with urllib.request.urlopen(
             request,
-            timeout=90,
+            timeout=20,
         ) as response:
 
-            raw = (
-                response
-                .read()
-                .decode(
-                    "utf-8"
-                )
-            )
-
-            data = json.loads(
-                raw
-            )
-
-            if not isinstance(
-                data,
-                dict,
-            ):
-                raise RuntimeError(
-                    "Gemini returned an invalid response."
-                )
-
-            return data
+            response.read()
 
     except urllib.error.HTTPError as exc:
 
-        raw = b""
-
-        try:
-            raw = exc.read()
-        except Exception:
-            pass
-
-        message = _gemini_error_message(
-            raw
+        raw = exc.read().decode(
+            "utf-8",
+            errors="replace",
         )
-
-        # Include the hard-coded model in the
-        # error so there is no ambiguity about
-        # which model the deployed endpoint used.
-        model_note = (
-            f" [Server model: {GEMINI_MODEL}]"
-        )
-
-        if exc.code == 400:
-
-            raise RuntimeError(
-                "Gemini rejected the request: "
-                + (
-                    message
-                    or "invalid request"
-                )
-                + model_note
-            ) from exc
-
-        if exc.code in {
-            401,
-            403,
-        }:
-
-            raise RuntimeError(
-                "The Gemini API key was rejected: "
-                + (
-                    message
-                    or "access denied"
-                )
-                + model_note
-            ) from exc
-
-        if exc.code == 404:
-
-            raise RuntimeError(
-                "Gemini model or endpoint not found: "
-                + (
-                    message
-                    or "not found"
-                )
-                + model_note
-            ) from exc
-
-        if exc.code == 429:
-
-            raise RuntimeError(
-                "Gemini quota or rate limit reached: "
-                + (
-                    message
-                    or "quota exceeded"
-                )
-                + model_note
-            ) from exc
 
         raise RuntimeError(
-            "Gemini analysis failed: "
-            + (
-                message
-                or "unknown error"
-            )
-            + model_note
+            "Analysis result could not be stored: "
+            + raw
         ) from exc
 
     except (
@@ -615,14 +286,69 @@ def _gemini_request(
     ) as exc:
 
         raise RuntimeError(
-            "Gemini could not be reached."
+            "Supabase could not store the analysis result."
         ) from exc
+
+
+# ============================================================
+# REQUEST READER
+# ============================================================
+
+def _read_json(
+    handler,
+):
+    try:
+
+        length = int(
+            handler.headers.get(
+                "Content-Length",
+                "0",
+            )
+        )
+
+    except ValueError:
+
+        raise ValueError(
+            "Invalid request."
+        )
+
+    if (
+        length <= 0
+        or length > 25 * 1024 * 1024
+    ):
+
+        raise ValueError(
+            "Invalid chart request."
+        )
+
+    raw = handler.rfile.read(
+        length
+    )
+
+    try:
+
+        value = json.loads(
+            raw.decode(
+                "utf-8"
+            )
+        )
 
     except json.JSONDecodeError as exc:
 
-        raise RuntimeError(
-            "Gemini returned invalid JSON."
+        raise ValueError(
+            "Invalid request JSON."
         ) from exc
+
+    if not isinstance(
+        value,
+        dict,
+    ):
+
+        raise ValueError(
+            "Invalid request."
+        )
+
+    return value
 
 
 # ============================================================
@@ -650,24 +376,6 @@ class handler(
         user = None
 
         try:
-
-            key = os.getenv(
-                "GEMINI_API_KEY",
-                "",
-            ).strip()
-
-            if not key:
-
-                json_response(
-                    self,
-                    500,
-                    {
-                        "error":
-                            "GEMINI_API_KEY is missing from Vercel."
-                    },
-                )
-
-                return
 
             access_token = (
                 extract_bearer_token(
@@ -724,6 +432,10 @@ class handler(
                 )
             )
 
+            # ----------------------------------------
+            # DAILY LIMIT
+            # ----------------------------------------
+
             if not owner:
 
                 slot = reserve_analysis_slot(
@@ -763,19 +475,27 @@ class handler(
 
                 remaining = None
 
+            # ----------------------------------------
+            # RUN GEMINI DIRECTLY
+            # ----------------------------------------
+
             try:
 
-                response = _gemini_request(
+                raw_response = (
+                    create_background_response(
+                        instrument=instrument,
+                        trade_focus=trade_focus,
+                        higher_image=higher_image,
+                        lower_image=lower_image,
+                    )
+                )
 
-                    key=key,
-
-                    instrument=instrument,
-
-                    trade_focus=trade_focus,
-
-                    higher_image=higher_image,
-
-                    lower_image=lower_image,
+                result = (
+                    parse_completed_response(
+                        raw_response,
+                        instrument,
+                        trade_focus,
+                    )
                 )
 
             except Exception:
@@ -793,21 +513,28 @@ class handler(
 
                 raise
 
-            interaction_id = str(
-                response.get(
-                    "id",
-                    "",
-                )
-            ).strip()
+            # ----------------------------------------
+            # STORE COMPLETED RESULT
+            # ----------------------------------------
 
-            status = str(
-                response.get(
-                    "status",
-                    "queued",
-                )
-            ).strip()
+            job_nonce = uuid.uuid4().hex
 
-            if not interaction_id:
+            try:
+
+                _save_completed_job(
+
+                    user_id=user_id,
+
+                    job_nonce=job_nonce,
+
+                    instrument=instrument,
+
+                    trade_focus=trade_focus,
+
+                    result=result,
+                )
+
+            except Exception:
 
                 if reserved:
 
@@ -820,43 +547,60 @@ class handler(
                     except Exception:
                         pass
 
-                raise RuntimeError(
-                    "Gemini returned no interaction id."
-                )
+                raise
 
-            job_id = (
-                create_secure_job_token(
-                    interaction_id,
+            # ----------------------------------------
+            # CREATE SHORT-LIVED SIGNED JOB TOKEN
+            # ----------------------------------------
+
+            job_id = _create_job_token(
+
+                job_nonce=
+                    job_nonce,
+
+                instrument=
                     instrument,
+
+                trade_focus=
                     trade_focus,
+
+                user_id=
                     user_id,
-                )
             )
+
+            # ----------------------------------------
+            # IMPORTANT:
+            #
+            # Gemini analysis has ALREADY completed.
+            #
+            # Android still receives a job_id because
+            # the existing Android app is designed to
+            # poll /analysis_status.
+            # ----------------------------------------
 
             json_response(
                 self,
                 202,
                 {
                     "status":
-                        status or "queued",
+                        "completed",
 
                     "job_id":
                         job_id,
 
                     "poll_after_seconds":
-                        2,
+                        1,
 
                     "is_owner":
                         owner,
 
                     "daily_limit":
-                        None if owner else 4,
+                        None
+                        if owner
+                        else 4,
 
                     "remaining":
                         remaining,
-
-                    "model":
-                        GEMINI_MODEL,
                 },
             )
 
@@ -873,12 +617,17 @@ class handler(
 
         except RuntimeError as exc:
 
-            if reserved and user:
+            if (
+                reserved
+                and user
+            ):
 
                 try:
 
                     release_analysis_slot(
-                        str(user["id"])
+                        str(
+                            user["id"]
+                        )
                     )
 
                 except Exception:
@@ -895,12 +644,17 @@ class handler(
 
         except Exception as exc:
 
-            if reserved and user:
+            if (
+                reserved
+                and user
+            ):
 
                 try:
 
                     release_analysis_slot(
-                        str(user["id"])
+                        str(
+                            user["id"]
+                        )
                     )
 
                 except Exception:
