@@ -5,17 +5,23 @@ import urllib.error
 import urllib.request
 
 
-GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/interactions"
-)
+# ============================================================
+# GEMINI STANDARD GENERATECONTENT API
+# ============================================================
 
-# IMPORTANT:
-# Hard-coded so Vercel environment variables cannot accidentally
-# select an agent model such as gemini-3.5-flash-agent.
-MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
+
+GEMINI_GENERATE_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/"
+    "models/gemini-3.8-flash:generateContent"
+)
 
 MAX_IMAGE_DATA_URL_CHARS = 8 * 1024 * 1024
 
+
+# ============================================================
+# ANALYSIS PROMPT
+# ============================================================
 
 SYSTEM_PROMPT = """
 You are the professional chart-analysis engine for LAMAR TRADING BOT.
@@ -25,248 +31,135 @@ You receive two trading-chart screenshots:
 1. 4H chart
 2. 15M chart
 
-Your job is to determine whether the chart evidence supports:
+Your job is to determine whether the evidence supports:
 
 BUY
 SELL
 NO TRADE
 
-==================================================
-IMPORTANT DECISION RULE
-==================================================
+IMPORTANT:
 
-Do NOT automatically choose NO TRADE.
+Do not automatically choose NO TRADE.
 
-Do NOT require every trading method to agree.
+Do not require every trading method to agree.
 
-Do NOT require perfect agreement between the 4H and 15M charts.
+Do not require perfect agreement between the 4H and 15M charts.
 
-Choose the strongest directional idea supported by the overall
-visible evidence.
-
-Choose BUY when the evidence is sufficiently bullish.
-
-Choose SELL when the evidence is sufficiently bearish.
-
-Choose NO TRADE only when the evidence is genuinely too unclear,
-too conflicting, or too weak to justify a directional setup.
-
-==================================================
-TIMEFRAME LOGIC
-==================================================
+Use the selected trade focus appropriately.
 
 SCALP:
-
-The 15M chart is the primary execution timeframe.
-
-The 4H chart provides broader context.
-
-A valid scalp BUY or SELL may be produced from a sufficiently clear
-15M setup even when the 4H chart is neutral, provided the 4H context
-does not clearly invalidate the setup.
+- 15M is the primary execution timeframe.
+- 4H provides broader context.
+- A valid scalp BUY or SELL can exist when the 15M setup is sufficiently
+  clear and the 4H does not clearly invalidate it.
 
 DAY TRADE:
-
-Use the 4H chart for broader directional context.
-
-Use the 15M chart for confirmation and execution.
+- 4H provides broader directional context.
+- 15M provides confirmation and execution.
 
 SWING:
+- 4H is the primary structural timeframe.
+- 15M may assist with timing.
 
-Use the 4H chart as the primary structure.
+Analyze whichever visible evidence is useful:
 
-Use the 15M chart for timing when useful.
+- support and resistance
+- price action
+- market structure
+- swing highs
+- swing lows
+- BOS
+- CHoCH
+- liquidity
+- equal highs
+- equal lows
+- liquidity sweeps
+- displacement
+- inducement
+- mitigation
+- invalidation
+- Fibonacci
+- premium and discount
+- smart money concepts
+- order blocks
+- fair value gaps
+- higher timeframe bias
+- lower timeframe confirmation
 
-==================================================
-ANALYSIS
-==================================================
+Not every method is required.
 
-Use whichever visible concepts are useful:
+Choose BUY when the overall visible evidence is sufficiently bullish.
 
-support and resistance
-pure price action
-market structure
-swing highs
-swing lows
-BOS
-CHoCH
-liquidity
-equal highs
-equal lows
-liquidity sweeps
-stop hunts
-displacement
-inducement
-mitigation
-invalidation
-Fibonacci retracement
-Fibonacci extension
-premium and discount
-smart money concepts
-order blocks
-fair value gaps
-higher-timeframe bias
-lower-timeframe confirmation
+Choose SELL when the overall visible evidence is sufficiently bearish.
 
-Do not require all concepts.
+Choose NO TRADE only when the evidence is genuinely unclear, too weak,
+materially conflicting, or the chart quality prevents a responsible setup.
 
-Identify:
+Do not force a trade merely to provide a signal.
 
-- contributing evidence
-- weak evidence
-- conflicting evidence
+ENTRY:
 
-==================================================
-BUY
-==================================================
+For BUY or SELL, identify a logical entry area.
 
-A BUY can be considered when the visible evidence contains a
-meaningful combination such as:
+STOP LOSS:
 
-- bullish market structure
-- bullish BOS or CHoCH
-- support reaction
-- bullish liquidity sweep
-- bullish displacement
-- bullish order block
-- bullish fair value gap
-- discount positioning
-- bullish price action
-- lower-timeframe bullish confirmation
+Place it beyond the logical invalidation area.
 
-Not all are necessary.
+TP1:
 
-==================================================
-SELL
-==================================================
+Use the nearer logical target.
 
-A SELL can be considered when the visible evidence contains a
-meaningful combination such as:
+TP2:
 
-- bearish market structure
-- bearish BOS or CHoCH
-- resistance reaction
-- bearish liquidity sweep
-- bearish displacement
-- bearish order block
-- bearish fair value gap
-- premium positioning
-- bearish price action
-- lower-timeframe bearish confirmation
+Use a further logical target only when supported by visible structure,
+liquidity, or price objectives.
 
-Not all are necessary.
+RISK/REWARD:
 
-==================================================
-ENTRY AND TARGETS
-==================================================
+Make it consistent with the entry, stop loss, and targets.
 
-For BUY:
+PRICE PRECISION:
 
-Provide a logical entry area when reasonably visible.
+Use exact prices only when they are reasonably visible or inferable.
 
-Provide stop loss beyond logical invalidation.
+Do not invent false precision.
 
-Provide TP1.
+If the exact numerical value cannot responsibly be determined, leave
+that individual field empty.
 
-Provide TP2 when supported by visible structure or liquidity.
+NO TRADE:
 
-Provide a consistent risk/reward value.
+For NO TRADE, entry, stop loss, TP1, TP2, and risk/reward must be empty.
 
-For SELL:
-
-Provide a logical entry area when reasonably visible.
-
-Provide stop loss beyond logical invalidation.
-
-Provide TP1.
-
-Provide TP2 when supported by visible structure or liquidity.
-
-Provide a consistent risk/reward value.
-
-If exact price digits are readable, use them.
-
-If exact price digits are not readable:
-
-- do not invent false precision
-- use a logical price area when reasonably inferable
-- if a numerical field cannot responsibly be determined, leave it empty
-
-Do NOT automatically turn an otherwise valid setup into NO TRADE merely
-because one price digit is difficult to read.
-
-==================================================
-NO TRADE
-==================================================
-
-Use NO TRADE when:
-
-- directional evidence is genuinely unclear
-- bullish and bearish evidence are materially balanced
-- the setup is too weak
-- the chart quality prevents reliable analysis
-- important chart information is missing
-- the proposed setup is materially invalidated
-
-Do NOT use NO TRADE simply because one method is weak.
-
-==================================================
-CONFIDENCE
-==================================================
-
-Confidence represents confidence in the quality of the analysis.
-
-It is NOT a guaranteed win rate.
-
-It is NOT a guarantee of profit.
-
-It is NOT a promise that the trade will win.
-
-Higher confidence requires stronger visible evidence.
-
-==================================================
-NEWS AND FUNDAMENTALS
-==================================================
+NEWS:
 
 Do not invent current news.
 
-Use only visible or reliably supplied information.
+If current news cannot be verified, state that limitation.
 
-If current news cannot be verified, state that limitation in the
-news/fundamental risk field.
+CONFIDENCE:
 
-News uncertainty alone does not automatically require NO TRADE.
+Confidence measures confidence in the quality of the analysis.
 
-==================================================
-IMAGE QUALITY
-==================================================
+It is NOT a guaranteed probability of winning.
 
-Mention warnings when:
+It is NOT a guarantee of profit.
 
-- the chart is blurry
-- price labels are unreadable
-- the chart is heavily cropped
-- important candles are missing
-- the timeframe is unclear
-- market structure cannot be established reliably
-- the two charts materially conflict
-
-==================================================
-OUTPUT
-==================================================
-
-Return ONLY valid JSON matching the supplied schema.
+Return only JSON matching the supplied schema.
 
 Do not return Markdown.
-
 Do not return code fences.
-
-Do not return commentary outside the JSON object.
+Do not return commentary outside JSON.
 """.strip()
 
 
+# ============================================================
+# JSON SCHEMA
+# ============================================================
+
 OUTPUT_SCHEMA = {
     "type": "object",
+    "additionalProperties": False,
 
     "properties": {
 
@@ -395,6 +288,10 @@ OUTPUT_SCHEMA = {
 }
 
 
+# ============================================================
+# VALIDATION
+# ============================================================
+
 ALLOWED_INSTRUMENTS = {
     "EURUSD",
     "GBPUSD",
@@ -407,7 +304,6 @@ ALLOWED_INSTRUMENTS = {
     "EURGBP",
     "BTCUSD",
 }
-
 
 ALLOWED_FOCUSES = {
     "SCALP",
@@ -481,12 +377,15 @@ def api_key():
         "",
     ).strip()
 
+    if not key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is missing from Vercel."
+        )
+
     return key
 
 
-def validate_instrument(
-    value,
-):
+def validate_instrument(value):
     instrument = str(
         value or ""
     ).strip().upper()
@@ -499,9 +398,7 @@ def validate_instrument(
     return instrument
 
 
-def validate_focus(
-    value,
-):
+def validate_focus(value):
     focus = str(
         value or "DAY TRADE"
     ).strip().upper()
@@ -549,39 +446,33 @@ def validate_image_data_url(
             f"A valid {label} is required."
         )
 
-    header_lower = header.lower()
-
-    allowed_headers = (
+    allowed = (
         "data:image/jpeg;base64",
         "data:image/jpg;base64",
         "data:image/png;base64",
         "data:image/webp;base64",
     )
 
-    if not header_lower.startswith(
-        allowed_headers
+    if not header.lower().startswith(
+        allowed
     ):
         raise ValueError(
-            f"Unsupported {label} format. "
-            "Use JPG, PNG, or WEBP."
+            f"Unsupported {label} format."
         )
 
     encoded = encoded.strip()
 
     if len(encoded) < 100:
         raise ValueError(
-            f"The {label} appears to be empty or invalid."
+            f"The {label} appears to be empty."
         )
 
     try:
-
         base64.b64decode(
             encoded,
             validate=True,
         )
-
     except Exception as exc:
-
         raise ValueError(
             f"The {label} contains invalid image data."
         ) from exc
@@ -589,196 +480,140 @@ def validate_image_data_url(
     return image
 
 
-def _split_data_url(
-    data_url,
-):
-    header, separator, encoded = (
-        data_url.partition(",")
-    )
+# ============================================================
+# GEMINI REQUEST
+# ============================================================
 
-    if not separator:
-        raise ValueError(
-            "Invalid image data."
-        )
-
-    header_lower = header.lower()
-
-    if "image/png" in header_lower:
-        mime_type = "image/png"
-
-    elif "image/webp" in header_lower:
-        mime_type = "image/webp"
-
-    elif "image/jpg" in header_lower:
-        mime_type = "image/jpeg"
-
-    else:
-        mime_type = "image/jpeg"
-
-    return (
-        mime_type,
-        encoded,
-    )
-
-
-def _image_input(
-    data_url,
-):
-    mime_type, encoded = (
-        _split_data_url(
-            data_url
-        )
-    )
-
-    return {
-        "type": "image",
-        "data": encoded,
-        "mime_type": mime_type,
-    }
-
-
-def _build_gemini_payload(
+def create_background_response(
     instrument,
     trade_focus,
     higher_image,
     lower_image,
 ):
-    prompt = (
-        "Analyze the two supplied trading charts.\n\n"
-        f"Instrument: {instrument}\n"
-        f"Trade focus: {trade_focus}\n\n"
-        "Image 1 is the 4H chart.\n"
-        "Image 2 is the 15M chart.\n\n"
-        "For SCALP, treat the 15M chart as the primary execution "
-        "timeframe and use the 4H chart for broader context.\n"
-        "For DAY TRADE, combine 4H context with 15M confirmation.\n"
-        "For SWING, give the 4H chart primary importance.\n\n"
-        "Do not force NO TRADE simply because the two timeframes "
-        "are not identical.\n"
-        "Return the strongest justified decision: BUY, SELL, or NO TRADE."
+    """
+    Compatibility name retained because analysis_submit.py
+    already calls this function.
+
+    This no longer uses the Interactions API or any Agent.
+    It uses the standard Gemini generateContent endpoint.
+    """
+
+    key = api_key()
+
+    instrument = validate_instrument(
+        instrument
     )
 
-    return {
+    trade_focus = validate_focus(
+        trade_focus
+    )
 
-        "model":
-            MODEL,
+    higher_image = validate_image_data_url(
+        higher_image,
+        "4H chart",
+    )
 
-        "input": [
-            {
-                "type": "text",
-                "text": prompt,
-            },
+    lower_image = validate_image_data_url(
+        lower_image,
+        "15M chart",
+    )
 
-            _image_input(
-                higher_image
-            ),
+    def image_part(
+        data_url
+    ):
+        header, separator, encoded = (
+            data_url.partition(",")
+        )
 
-            _image_input(
-                lower_image
-            ),
-        ],
+        if not separator:
+            raise ValueError(
+                "Invalid image data."
+            )
 
-        "system_instruction":
-            SYSTEM_PROMPT,
+        header_lower = header.lower()
 
-        "response_format": {
-            "type": "text",
+        if "image/png" in header_lower:
+            mime_type = "image/png"
 
-            "mime_type":
-                "application/json",
+        elif "image/webp" in header_lower:
+            mime_type = "image/webp"
 
-            "schema":
-                OUTPUT_SCHEMA,
+        else:
+            mime_type = "image/jpeg"
+
+        return {
+            "inline_data": {
+                "mime_type":
+                    mime_type,
+
+                "data":
+                    encoded,
+            }
+        }
+
+    user_prompt = (
+        "Analyze these trading charts.\n\n"
+        f"Instrument: {instrument}\n"
+        f"Trade focus: {trade_focus}\n\n"
+        "The first image is the 4H chart.\n"
+        "The second image is the 15M chart.\n\n"
+        "Use the strongest visible evidence.\n"
+        "For SCALP, give the 15M setup primary execution importance "
+        "while using the 4H chart for context.\n"
+        "Do not automatically return NO TRADE merely because the "
+        "4H and 15M are not identical.\n\n"
+        "Return BUY, SELL, or NO TRADE with the complete JSON schema."
+    )
+
+    payload = {
+        "system_instruction": {
+            "parts": [
+                {
+                    "text":
+                        SYSTEM_PROMPT,
+                }
+            ]
         },
 
-        "background":
-            True,
+        "contents": [
+            {
+                "role": "user",
 
-        "store":
-            True,
+                "parts": [
 
-        "generation_config": {
+                    {
+                        "text":
+                            user_prompt,
+                    },
 
-            "thinking_level":
-                "low",
+                    image_part(
+                        higher_image
+                    ),
 
-            "max_output_tokens":
+                    image_part(
+                        lower_image
+                    ),
+                ],
+            }
+        ],
+
+        "generationConfig": {
+            "responseMimeType":
+                "application/json",
+
+            "responseJsonSchema":
+                OUTPUT_SCHEMA,
+
+            "thinkingConfig": {
+                "thinkingLevel":
+                    "low",
+            },
+
+            "maxOutputTokens":
                 3000,
         },
     }
 
-
-def _gemini_error_message(
-    raw,
-):
-    if not raw:
-        return ""
-
-    try:
-
-        if isinstance(
-            raw,
-            bytes,
-        ):
-            text = raw.decode(
-                "utf-8",
-                errors="replace",
-            )
-        else:
-            text = str(raw)
-
-        data = json.loads(
-            text
-        )
-
-    except Exception:
-        return ""
-
-    if not isinstance(
-        data,
-        dict,
-    ):
-        return ""
-
-    error = data.get(
-        "error"
-    )
-
-    if isinstance(
-        error,
-        dict,
-    ):
-
-        message = str(
-            error.get(
-                "message",
-                "",
-            )
-        ).strip()
-
-        status = str(
-            error.get(
-                "status",
-                "",
-            )
-        ).strip()
-
-        if message and status:
-            return (
-                f"{message} ({status})"
-            )
-
-        return (
-            message or status
-        )
-
-    return ""
-
-
-def _request_gemini(
-    payload,
-    key,
-):
     body = json.dumps(
         payload,
         separators=(",", ":"),
@@ -786,7 +621,7 @@ def _request_gemini(
 
     request = urllib.request.Request(
 
-        GEMINI_URL,
+        GEMINI_GENERATE_URL,
 
         data=body,
 
@@ -808,15 +643,13 @@ def _request_gemini(
 
         with urllib.request.urlopen(
             request,
-            timeout=90,
+            timeout=120,
         ) as response:
 
             raw = (
                 response
                 .read()
-                .decode(
-                    "utf-8"
-                )
+                .decode("utf-8")
             )
 
             data = json.loads(
@@ -842,12 +675,38 @@ def _request_gemini(
         except Exception:
             pass
 
-        message = _gemini_error_message(
-            raw
-        )
+        message = ""
+
+        try:
+
+            decoded = raw.decode(
+                "utf-8",
+                errors="replace",
+            )
+
+            error_data = json.loads(
+                decoded
+            )
+
+            error = error_data.get(
+                "error"
+            )
+
+            if isinstance(
+                error,
+                dict,
+            ):
+                message = str(
+                    error.get(
+                        "message",
+                        "",
+                    )
+                ).strip()
+
+        except Exception:
+            pass
 
         if exc.code == 400:
-
             raise RuntimeError(
                 "Gemini rejected the request: "
                 + (
@@ -856,11 +715,7 @@ def _request_gemini(
                 )
             ) from exc
 
-        if exc.code in {
-            401,
-            403,
-        }:
-
+        if exc.code in {401, 403}:
             raise RuntimeError(
                 "The Gemini API key was rejected: "
                 + (
@@ -870,19 +725,17 @@ def _request_gemini(
             ) from exc
 
         if exc.code == 404:
-
             raise RuntimeError(
-                "Gemini model or endpoint not found: "
+                "Gemini model not found: "
                 + (
                     message
-                    or "not found"
+                    or GEMINI_MODEL
                 )
             ) from exc
 
         if exc.code == 429:
-
             raise RuntimeError(
-                "Gemini rate limit or quota reached: "
+                "Gemini quota or rate limit reached: "
                 + (
                     message
                     or "quota exceeded"
@@ -890,16 +743,15 @@ def _request_gemini(
             ) from exc
 
         if 500 <= exc.code <= 599:
-
             raise RuntimeError(
                 "Gemini is temporarily unavailable."
             ) from exc
 
         raise RuntimeError(
-            "Gemini analysis could not be started: "
+            "Gemini request failed: "
             + (
                 message
-                or "unknown error"
+                or str(exc)
             )
         ) from exc
 
@@ -919,50 +771,9 @@ def _request_gemini(
         ) from exc
 
 
-def create_background_response(
-    instrument,
-    trade_focus,
-    higher_image,
-    lower_image,
-):
-    key = api_key()
-
-    if not key:
-
-        raise RuntimeError(
-            "GEMINI_API_KEY is missing from Vercel."
-        )
-
-    instrument = validate_instrument(
-        instrument
-    )
-
-    trade_focus = validate_focus(
-        trade_focus
-    )
-
-    higher_image = validate_image_data_url(
-        higher_image,
-        "4H chart",
-    )
-
-    lower_image = validate_image_data_url(
-        lower_image,
-        "15M chart",
-    )
-
-    payload = _build_gemini_payload(
-        instrument=instrument,
-        trade_focus=trade_focus,
-        higher_image=higher_image,
-        lower_image=lower_image,
-    )
-
-    return _request_gemini(
-        payload,
-        key,
-    )
-
+# ============================================================
+# RESPONSE PARSING
+# ============================================================
 
 def extract_output_text(
     response_data,
@@ -975,85 +786,86 @@ def extract_output_text(
             "Gemini returned an invalid response."
         )
 
-    direct = response_data.get(
-        "output_text"
-    )
-
-    if (
-        isinstance(
-            direct,
-            str,
-        )
-        and direct.strip()
-    ):
-        return direct.strip()
-
-    steps = response_data.get(
-        "steps",
+    candidates = response_data.get(
+        "candidates",
         [],
     )
 
     if not isinstance(
-        steps,
+        candidates,
+        list,
+    ) or not candidates:
+        raise RuntimeError(
+            "Gemini returned no analysis candidate."
+        )
+
+    first = candidates[0]
+
+    if not isinstance(
+        first,
+        dict,
+    ):
+        raise RuntimeError(
+            "Gemini returned an invalid analysis candidate."
+        )
+
+    content = first.get(
+        "content",
+        {}
+    )
+
+    if not isinstance(
+        content,
+        dict,
+    ):
+        raise RuntimeError(
+            "Gemini returned no analysis content."
+        )
+
+    parts = content.get(
+        "parts",
+        []
+    )
+
+    if not isinstance(
+        parts,
         list,
     ):
-        return ""
+        raise RuntimeError(
+            "Gemini returned no analysis text."
+        )
 
-    parts = []
+    texts = []
 
-    for step in steps:
+    for part in parts:
 
         if not isinstance(
-            step,
+            part,
             dict,
         ):
             continue
 
-        if step.get(
-            "type"
-        ) != "model_output":
-            continue
-
-        content = step.get(
-            "content",
-            [],
+        text = part.get(
+            "text",
+            ""
         )
 
-        if not isinstance(
-            content,
-            list,
-        ):
-            continue
+        if isinstance(
+            text,
+            str,
+        ) and text.strip():
 
-        for item in content:
-
-            if not isinstance(
-                item,
-                dict,
-            ):
-                continue
-
-            if item.get(
-                "type"
-            ) != "text":
-                continue
-
-            text = item.get(
-                "text",
-                "",
+            texts.append(
+                text.strip()
             )
 
-            if isinstance(
-                text,
-                str,
-            ) and text.strip():
-
-                parts.append(
-                    text.strip()
-                )
+    if not texts:
+        raise RuntimeError(
+            "Gemini returned no analysis text."
+        )
 
     return "\n".join(
-        parts
+        texts
     ).strip()
 
 
@@ -1092,23 +904,83 @@ def clean_json_text(
 
 def _safe_int(
     value,
-    default=0,
 ):
     try:
-        return int(
-            value
-        )
+        return int(value)
     except (
         TypeError,
         ValueError,
     ):
-        return default
+        return 0
 
 
-def _normalise_result(
-    result,
-    instrument,
+def _clean_string(
+    value,
 ):
+    if value is None:
+        return ""
+
+    return str(
+        value
+    ).strip()
+
+
+def _clean_list(
+    value,
+):
+    if not isinstance(
+        value,
+        list,
+    ):
+        return []
+
+    result = []
+
+    for item in value:
+
+        text = _clean_string(
+            item
+        )
+
+        if text:
+            result.append(
+                text
+            )
+
+    return result
+
+
+def parse_completed_response(
+    response_data,
+    instrument,
+    trade_focus="DAY TRADE",
+):
+    text = clean_json_text(
+        extract_output_text(
+            response_data
+        )
+    )
+
+    try:
+
+        result = json.loads(
+            text
+        )
+
+    except json.JSONDecodeError as exc:
+
+        raise RuntimeError(
+            "Gemini returned invalid analysis JSON."
+        ) from exc
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+        raise RuntimeError(
+            "Gemini returned an invalid analysis object."
+        )
+
     signal = (
         _clean_string(
             result.get(
@@ -1127,19 +999,16 @@ def _normalise_result(
 
     result["signal"] = signal
 
-    confidence = _safe_int(
-        result.get(
-            "confidence",
-            0,
-        ),
-        0,
-    )
-
     result["confidence"] = max(
         0,
         min(
             100,
-            confidence,
+            _safe_int(
+                result.get(
+                    "confidence",
+                    0,
+                )
+            ),
         ),
     )
 
@@ -1182,7 +1051,7 @@ def _normalise_result(
 
     for field in list_fields:
 
-        result[field] = _clean_string_list(
+        result[field] = _clean_list(
             result.get(
                 field
             )
@@ -1197,76 +1066,3 @@ def _normalise_result(
         result["risk_reward"] = ""
 
     return result
-
-
-def parse_completed_response(
-    response_data,
-    instrument,
-    trade_focus="DAY TRADE",
-):
-    if not isinstance(
-        response_data,
-        dict,
-    ):
-        raise RuntimeError(
-            "Gemini returned an invalid analysis response."
-        )
-
-    text = clean_json_text(
-        extract_output_text(
-            response_data
-        )
-    )
-
-    if not text:
-
-        interaction_error = (
-            response_data.get(
-                "error"
-            )
-        )
-
-        if isinstance(
-            interaction_error,
-            dict,
-        ):
-
-            message = _clean_string(
-                interaction_error.get(
-                    "message"
-                )
-            )
-
-            if message:
-                raise RuntimeError(
-                    "Gemini: " + message
-                )
-
-        raise RuntimeError(
-            "Gemini returned no analysis text."
-        )
-
-    try:
-
-        result = json.loads(
-            text
-        )
-
-    except json.JSONDecodeError as exc:
-
-        raise RuntimeError(
-            "Gemini returned invalid analysis JSON."
-        ) from exc
-
-    if not isinstance(
-        result,
-        dict,
-    ):
-        raise RuntimeError(
-            "Gemini returned an invalid analysis object."
-        )
-
-    return _normalise_result(
-        result,
-        instrument,
-    )
