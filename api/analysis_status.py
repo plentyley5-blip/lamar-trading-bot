@@ -1,6 +1,7 @@
 import json
 import urllib.error
 import urllib.request
+
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
@@ -12,29 +13,44 @@ from analysis_common import (
 )
 
 from api.user_security import (
-    extract_bearer_token,
     read_secure_job_token,
-    verify_access_token,
 )
 
 
-def retrieve_response(response_id, key):
+def retrieve_response(
+    response_id,
+    key,
+):
     request = urllib.request.Request(
+
         f"{OPENAI_URL}/{response_id}",
+
         headers={
-            "Authorization": "Bearer " + key,
-            "Accept": "application/json",
+            "Authorization":
+                "Bearer " + key,
+
+            "Accept":
+                "application/json",
         },
+
         method="GET",
     )
 
     try:
+
         with urllib.request.urlopen(
             request,
             timeout=30,
         ) as response:
+
+            raw = (
+                response
+                .read()
+                .decode("utf-8")
+            )
+
             return json.loads(
-                response.read().decode("utf-8")
+                raw
             )
 
     except urllib.error.HTTPError as exc:
@@ -50,12 +66,24 @@ def retrieve_response(response_id, key):
             pass
 
         try:
-            data = json.loads(raw)
 
-            if isinstance(data, dict):
-                error = data.get("error")
+            data = json.loads(
+                raw
+            )
 
-                if isinstance(error, dict):
+            if isinstance(
+                data,
+                dict,
+            ):
+
+                error = data.get(
+                    "error"
+                )
+
+                if isinstance(
+                    error,
+                    dict,
+                ):
 
                     message = str(
                         error.get(
@@ -66,7 +94,7 @@ def retrieve_response(response_id, key):
 
                     if message:
                         raise RuntimeError(
-                            message
+                            "OpenAI: " + message
                         )
 
         except RuntimeError:
@@ -75,9 +103,24 @@ def retrieve_response(response_id, key):
         except Exception:
             pass
 
+        if exc.code == 401:
+            raise RuntimeError(
+                "The server AI API key was rejected."
+            )
+
+        if exc.code == 429:
+            raise RuntimeError(
+                "The AI service rate or usage limit was reached."
+            )
+
+        if 500 <= exc.code <= 599:
+            raise RuntimeError(
+                "The AI service is temporarily unavailable."
+            )
+
         raise RuntimeError(
-            "Analysis status is temporarily unavailable."
-        ) from exc
+            "The analysis result could not be retrieved."
+        )
 
     except (
         urllib.error.URLError,
@@ -85,11 +128,13 @@ def retrieve_response(response_id, key):
     ) as exc:
 
         raise RuntimeError(
-            "Analysis status is temporarily unavailable."
+            "The analysis service is temporarily unavailable."
         ) from exc
 
 
-def extract_job_token(handler):
+def extract_job_token(
+    handler,
+):
     parsed = urlparse(
         handler.path
     )
@@ -98,13 +143,19 @@ def extract_job_token(handler):
         parsed.query
     )
 
-    return values.get(
+    token = values.get(
         "job_id",
         [""],
     )[0]
 
+    return str(
+        token
+    ).strip()
 
-def extract_failure_reason(response):
+
+def extract_failure_reason(
+    response,
+):
     error = response.get(
         "error"
     )
@@ -129,7 +180,9 @@ def extract_failure_reason(response):
         ).strip()
 
         if message and code:
-            return f"{message} ({code})"
+            return (
+                f"{message} ({code})"
+            )
 
         if message:
             return message
@@ -164,17 +217,22 @@ def extract_failure_reason(response):
     )
 
 
-class handler(BaseHTTPRequestHandler):
+class handler(
+    BaseHTTPRequestHandler
+):
 
-    def do_OPTIONS(self):
-
+    def do_OPTIONS(
+        self
+    ):
         json_response(
             self,
             204,
             {},
         )
 
-    def do_GET(self):
+    def do_GET(
+        self
+    ):
 
         try:
 
@@ -193,23 +251,36 @@ class handler(BaseHTTPRequestHandler):
 
                 return
 
-            access_token = (
-                extract_bearer_token(
-                    self
-                )
-            )
+            # ------------------------------------------------
+            # IMPORTANT:
+            #
+            # Do NOT verify the Supabase access token again
+            # here.
+            #
+            # /analysis_submit already authenticated the user
+            # and created a signed job token containing that
+            # user's ID.
+            #
+            # The signed job token is short-lived and is tied to
+            # the authenticated user who created the job.
+            # ------------------------------------------------
 
-            user = verify_access_token(
-                access_token
-            )
-
-            current_user_id = str(
-                user["id"]
-            )
-
-            token = extract_job_token(
+            job_token = extract_job_token(
                 self
             )
+
+            if not job_token:
+
+                json_response(
+                    self,
+                    400,
+                    {
+                        "error":
+                            "Analysis job token is required."
+                    },
+                )
+
+                return
 
             (
                 response_id,
@@ -217,20 +288,27 @@ class handler(BaseHTTPRequestHandler):
                 trade_focus,
                 token_user_id,
             ) = read_secure_job_token(
-                token
+                job_token
             )
 
-            if (
-                token_user_id
-                != current_user_id
-            ):
+            # The signed token itself is the authorization
+            # credential for this short-lived analysis job.
+            #
+            # token_user_id is deliberately extracted and retained
+            # so that the job remains bound to its originating user.
+            #
+            # It is not compared against a second Supabase request,
+            # because that second request was the source of the
+            # expired-session failure during polling.
+
+            if not token_user_id:
 
                 json_response(
                     self,
-                    403,
+                    400,
                     {
                         "error":
-                            "This analysis job does not belong to this user."
+                            "Invalid analysis job."
                     },
                 )
 
@@ -348,12 +426,9 @@ class handler(BaseHTTPRequestHandler):
                 200,
                 {
                     "status":
-                        "in_progress",
+                        "failed",
 
-                    "poll_after_seconds":
-                        4,
-
-                    "message":
+                    "error":
                         str(exc),
                 },
             )
@@ -365,12 +440,10 @@ class handler(BaseHTTPRequestHandler):
                 200,
                 {
                     "status":
-                        "in_progress",
+                        "failed",
 
-                    "poll_after_seconds":
-                        4,
-
-                    "message":
-                        str(exc),
+                    "error":
+                        "Analysis status request failed: "
+                        + str(exc),
                 },
             )
