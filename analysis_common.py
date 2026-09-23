@@ -1,17 +1,20 @@
+import base64
 import json
 import os
 import urllib.error
 import urllib.request
 
 
-OPENAI_URL = "https://api.openai.com/v1/responses"
+GEMINI_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/interactions"
+)
 
 MODEL = (
     os.getenv(
-        "OPENAI_MODEL",
-        "gpt-5.6-luna",
+        "GEMINI_MODEL",
+        "gemini-3.5-flash",
     ).strip()
-    or "gpt-5.6-luna"
+    or "gemini-3.5-flash"
 )
 
 MAX_IMAGE_DATA_URL_CHARS = 8 * 1024 * 1024
@@ -27,19 +30,28 @@ You receive two trading-chart screenshots:
 
 Your job is to determine whether the chart evidence supports:
 
-- BUY
-- SELL
-- NO TRADE
+BUY
+SELL
+NO TRADE
 
-IMPORTANT:
+==================================================
+IMPORTANT DECISION RULE
+==================================================
 
-Do NOT automatically choose NO TRADE simply because every method does not agree.
+Do NOT automatically choose NO TRADE.
+
+Do NOT require every trading method to agree.
 
 Do NOT require perfect agreement between the 4H and 15M charts.
 
-A trade is allowed when the overall evidence provides a sufficiently clear and logical setup.
+Choose the strongest direction supported by the overall visible evidence.
 
-Use professional judgment.
+Choose BUY when the evidence is sufficiently bullish.
+
+Choose SELL when the evidence is sufficiently bearish.
+
+Choose NO TRADE only when the evidence is genuinely too unclear,
+too conflicting, or too weak to justify a directional setup.
 
 ==================================================
 TIMEFRAME LOGIC
@@ -47,228 +59,133 @@ TIMEFRAME LOGIC
 
 SCALP:
 
-- The 15M chart is the main execution timeframe.
-- The 4H chart provides broader context.
-- A valid scalp BUY or SELL may be produced when the 15M structure,
-  price action, liquidity, and/or SMC evidence provide a sufficiently
-  clear setup.
-- The 4H chart does NOT have to show an identical entry pattern.
-- A neutral 4H chart does not automatically mean NO TRADE.
-- A clear 15M setup with acceptable higher-timeframe context can qualify.
+The 15M chart is the primary execution timeframe.
+
+The 4H chart provides broader context.
+
+A valid scalp BUY or SELL may be produced from a sufficiently clear
+15M setup even when the 4H chart is neutral, provided the 4H context
+does not clearly invalidate the setup.
 
 DAY TRADE:
 
-- Use the 4H chart for directional context.
-- Use the 15M chart for confirmation and execution.
-- The timeframes should generally support the same directional idea,
-  but they do not need to be visually identical.
+Use the 4H chart for broader directional context.
+
+Use the 15M chart for confirmation and execution.
 
 SWING:
 
-- The 4H chart is the primary decision timeframe.
-- The 15M chart can be used for timing and confirmation.
+Use the 4H chart as the primary structure.
+
+Use the 15M chart for timing when useful.
 
 ==================================================
-TRADE DECISION
+ANALYSIS
 ==================================================
 
-Choose BUY when the evidence is sufficiently bullish.
+Use whichever visible concepts are useful:
 
-Choose SELL when the evidence is sufficiently bearish.
+support and resistance
+pure price action
+market structure
+swing highs
+swing lows
+BOS
+CHoCH
+liquidity
+equal highs
+equal lows
+liquidity sweep
+stop hunt
+displacement
+inducement
+mitigation
+invalidation
+Fibonacci retracement
+Fibonacci extension
+premium and discount
+smart money concepts
+order block
+fair value gap
+higher timeframe bias
+lower timeframe confirmation
 
-Choose NO TRADE only when:
+Do not require all concepts.
 
-- the directional evidence is genuinely unclear,
-- bullish and bearish evidence are materially conflicting,
-- the setup is too weak to justify a directional decision,
-- the chart quality prevents meaningful analysis,
-- or there is no reasonable setup visible.
+Identify:
 
-Do NOT use NO TRADE simply because one individual method is weak.
-
-Do NOT require all analysis concepts to agree.
-
-The strongest overall evidence should determine the direction.
-
-==================================================
-INTERNAL ANALYSIS
-==================================================
-
-Analyze whichever of these concepts are useful and visible:
-
-- support and resistance
-- pure price action
-- market structure
-- swing highs
-- swing lows
-- BOS
-- CHoCH
-- liquidity
-- equal highs
-- equal lows
-- liquidity sweeps
-- stop hunts
-- displacement
-- inducement
-- mitigation
-- invalidation
-- Fibonacci retracement
-- Fibonacci extension
-- premium and discount
-- smart money concepts
-- order blocks
-- fair value gaps
-- higher-timeframe bias
-- lower-timeframe confirmation
-
-You do NOT need every concept.
-
-Identify which evidence:
-
-- contributes to the setup
-- is weak
-- conflicts with the setup
+- contributing evidence
+- weak evidence
+- conflicting evidence
 
 ==================================================
-ENTRY LOGIC
+TRADE SETUP
 ==================================================
 
-When a BUY setup is sufficiently clear:
+For BUY:
 
-- identify the logical entry area
-- identify invalidation
-- identify stop loss
-- identify TP1
-- identify TP2 when supported
-- describe the trade idea
-- calculate or describe risk/reward consistently
+Provide a logical entry area when reasonably visible.
 
-When a SELL setup is sufficiently clear:
+Provide stop loss beyond logical invalidation.
 
-- identify the logical entry area
-- identify invalidation
-- identify stop loss
-- identify TP1
-- identify TP2 when supported
-- describe the trade idea
-- calculate or describe risk/reward consistently
+Provide TP1.
 
-If exact price digits are visible enough, use them.
+Provide TP2 when supported by visible structure or liquidity.
 
-If the exact price digits are not readable:
+Provide a consistent risk/reward value.
 
-- do not invent fake precision
-- you may describe an entry area using a clear price zone or structure
-  when that can reasonably be inferred from the chart
-- if an exact numerical field cannot be stated responsibly, leave that
-  individual field empty rather than inventing a number
+For SELL:
 
-Do NOT turn an otherwise valid trade into NO TRADE solely because a
-single exact price digit is difficult to read.
+Provide a logical entry area when reasonably visible.
+
+Provide stop loss beyond logical invalidation.
+
+Provide TP1.
+
+Provide TP2 when supported by visible structure or liquidity.
+
+Provide a consistent risk/reward value.
+
+If the exact price digits are not clearly readable, do not invent
+false precision.
 
 ==================================================
-BUY CONDITIONS
+NO TRADE
 ==================================================
 
-A BUY can be considered when the evidence contains a meaningful
-combination such as:
+Use NO TRADE only when:
 
-- bullish structure
-- bullish BOS or CHoCH
-- support reaction
-- bullish liquidity sweep
-- bullish displacement
-- bullish order block
-- bullish fair value gap
-- discount positioning
-- bullish price action
-- lower-timeframe bullish confirmation
-
-Not all of these are necessary.
-
-==================================================
-SELL CONDITIONS
-==================================================
-
-A SELL can be considered when the evidence contains a meaningful
-combination such as:
-
-- bearish structure
-- bearish BOS or CHoCH
-- resistance reaction
-- bearish liquidity sweep
-- bearish displacement
-- bearish order block
-- bearish fair value gap
-- premium positioning
-- bearish price action
-- lower-timeframe bearish confirmation
-
-Not all of these are necessary.
-
-==================================================
-NO TRADE CONDITIONS
-==================================================
-
-Use NO TRADE when the chart genuinely does not provide enough
-directional evidence.
-
-Examples:
-
-- price is clearly ranging with no meaningful confirmation
-- bullish and bearish evidence are strongly balanced
-- the 15M setup is too unclear for the selected focus
-- the 4H context materially invalidates the proposed idea
-- the screenshot is too poor to analyze
+- directional evidence is genuinely unclear
+- bullish and bearish evidence are materially balanced
+- the setup is too weak
+- the chart is too poor to analyze
 - important chart information is missing
+- the proposed trade is materially invalidated
 
-Do not use NO TRADE just because some methods disagree.
+Do not use NO TRADE simply because one method is weak.
+
+==================================================
+NEWS
+==================================================
+
+Do not invent current news.
+
+Use visible or reliably supplied news information only.
+
+If current news cannot be verified, say so in the news/fundamental
+risk field.
 
 ==================================================
 CONFIDENCE
 ==================================================
 
-Confidence is the confidence in the QUALITY OF THE ANALYSIS.
+Confidence represents confidence in the quality of the chart analysis.
 
-It is NOT:
+It is NOT a guarantee of profit.
 
-- a guaranteed win rate
-- a guarantee of profit
-- a guaranteed probability of success
+It is NOT a guaranteed probability of winning.
 
-Use a lower confidence score when evidence is weak or conflicting.
-
-Use a higher confidence score when the setup is well supported by
-multiple visible pieces of evidence.
-
-==================================================
-NEWS AND FUNDAMENTALS
-==================================================
-
-Do not invent current news.
-
-Use only visible or reliably supplied news/fundamental information.
-
-If current news cannot be verified from the chart or supplied data,
-state that limitation.
-
-News uncertainty by itself does not automatically require NO TRADE.
-
-Instead, describe it under news_fundamental_risk when relevant.
-
-==================================================
-IMAGE QUALITY
-==================================================
-
-Warn about:
-
-- blurry images
-- unreadable price labels
-- heavy cropping
-- missing candles
-- unclear timeframe
-- missing structure
-- conflicting evidence
+Higher confidence requires stronger visible evidence.
 
 ==================================================
 OUTPUT
@@ -276,19 +193,16 @@ OUTPUT
 
 Return ONLY valid JSON.
 
-Do not return Markdown.
+No Markdown.
 
-Do not return code fences.
+No code fences.
 
-Do not return commentary outside the JSON.
-
-Return exactly the requested JSON schema.
+No explanation outside the JSON object.
 """.strip()
 
 
 OUTPUT_SCHEMA = {
     "type": "object",
-    "additionalProperties": False,
 
     "properties": {
         "signal": {
@@ -302,8 +216,6 @@ OUTPUT_SCHEMA = {
 
         "confidence": {
             "type": "integer",
-            "minimum": 0,
-            "maximum": 100,
         },
 
         "instrument": {
@@ -498,7 +410,7 @@ def json_response(
 
 def api_key():
     return os.getenv(
-        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
         "",
     ).strip()
 
@@ -552,18 +464,17 @@ def validate_image_data_url(
 
     if len(image) > MAX_IMAGE_DATA_URL_CHARS:
         raise ValueError(
-            f"{label} is too large. "
-            "Please use a smaller chart screenshot."
+            f"{label} is too large."
         )
 
-    header, separator, encoded = image.partition(",")
+    header, separator, encoded = (
+        image.partition(",")
+    )
 
     if not separator or not encoded:
         raise ValueError(
             f"A valid {label} is required."
         )
-
-    header_lower = header.lower()
 
     supported = (
         "data:image/jpeg;base64",
@@ -572,7 +483,7 @@ def validate_image_data_url(
         "data:image/webp;base64",
     )
 
-    if not header_lower.startswith(
+    if not header.lower().startswith(
         supported
     ):
         raise ValueError(
@@ -584,6 +495,16 @@ def validate_image_data_url(
         raise ValueError(
             f"The {label} appears to be empty or invalid."
         )
+
+    try:
+        base64.b64decode(
+            encoded,
+            validate=True,
+        )
+    except Exception as exc:
+        raise ValueError(
+            f"The {label} contains invalid image data."
+        ) from exc
 
     return image
 
@@ -602,96 +523,106 @@ def _clean_string_list(value):
     ):
         return []
 
-    cleaned = []
+    result = []
 
     for item in value:
-        text = _clean_string(
+
+        cleaned = _clean_string(
             item
         )
 
-        if text:
-            cleaned.append(
-                text
+        if cleaned:
+            result.append(
+                cleaned
             )
 
-    return cleaned
+    return result
 
 
-def _build_analysis_payload(
+def _image_data(
+    data_url,
+):
+    header, _, encoded = (
+        data_url.partition(",")
+    )
+
+    if header.lower().startswith(
+        "data:image/png"
+    ):
+        mime_type = "image/png"
+    elif header.lower().startswith(
+        "data:image/webp"
+    ):
+        mime_type = "image/webp"
+    else:
+        mime_type = "image/jpeg"
+
+    return {
+        "type": "image",
+        "mime_type": mime_type,
+        "data": encoded,
+    }
+
+
+def _build_gemini_payload(
     instrument,
     trade_focus,
     higher_image,
     lower_image,
 ):
+    user_text = (
+        "Perform the chart analysis now.\n\n"
+        f"Instrument: {instrument}\n"
+        f"Trade focus: {trade_focus}\n\n"
+        "Image 1 = 4H chart.\n"
+        "Image 2 = 15M chart.\n\n"
+        "SCALP uses the 15M chart as the primary execution "
+        "timeframe while the 4H chart provides context.\n"
+        "Do not force NO TRADE simply because the 4H and 15M "
+        "are not identical.\n"
+        "Return the strongest justified decision: "
+        "BUY, SELL, or NO TRADE."
+    )
+
     return {
         "model": MODEL,
 
-        "background": True,
-
-        "instructions": SYSTEM_PROMPT,
-
         "input": [
             {
-                "role": "user",
+                "type": "text",
+                "text": user_text,
+            },
 
-                "content": [
-                    {
-                        "type": "input_text",
+            _image_data(
+                higher_image
+            ),
 
-                        "text": (
-                            "Perform a professional chart analysis.\n\n"
-                            f"Instrument: {instrument}\n"
-                            f"Trade focus: {trade_focus}\n\n"
-                            "Image 1 = 4H chart.\n"
-                            "Image 2 = 15M chart.\n\n"
-                            "IMPORTANT:\n"
-                            "Do not default to NO TRADE merely because "
-                            "the two timeframes are not identical.\n"
-                            "For SCALP, give the 15M setup primary "
-                            "execution importance while using 4H for context.\n"
-                            "For DAY TRADE, combine 4H context with 15M confirmation.\n"
-                            "For SWING, give the 4H structure primary importance.\n\n"
-                            "Return the strongest justified decision: "
-                            "BUY, SELL, or NO TRADE."
-                        ),
-                    },
-
-                    {
-                        "type": "input_image",
-                        "image_url": higher_image,
-                        "detail": "high",
-                    },
-
-                    {
-                        "type": "input_image",
-                        "image_url": lower_image,
-                        "detail": "high",
-                    },
-                ],
-            }
+            _image_data(
+                lower_image
+            ),
         ],
 
-        "text": {
-            "format": {
-                "type": "json_schema",
+        "system_instruction":
+            SYSTEM_PROMPT,
 
-                "name": "lamar_trade_analysis",
-
-                "strict": True,
-
-                "schema": OUTPUT_SCHEMA,
-            }
+        "response_format": {
+            "type": "text",
+            "mime_type": "application/json",
+            "schema": OUTPUT_SCHEMA,
         },
 
-        "reasoning": {
-            "effort": "low",
-        },
+        "background": True,
 
-        "max_output_tokens": 3000,
+        "store": True,
+
+        "generation_config": {
+            "thinking_level": "low",
+            "max_output_tokens": 3000,
+        },
     }
 
 
-def _openai_error_message(
+def _gemini_error_message(
     raw,
 ):
     if not raw:
@@ -703,15 +634,13 @@ def _openai_error_message(
             raw,
             bytes,
         ):
-            text = raw.decode(
+            raw = raw.decode(
                 "utf-8",
                 errors="replace",
             )
-        else:
-            text = str(raw)
 
         data = json.loads(
-            text
+            raw
         )
 
     except Exception:
@@ -727,35 +656,36 @@ def _openai_error_message(
         "error"
     )
 
-    if not isinstance(
+    if isinstance(
         error,
         dict,
     ):
-        return ""
 
-    message = _clean_string(
-        error.get(
-            "message"
+        message = _clean_string(
+            error.get(
+                "message"
+            )
         )
-    )
 
-    code = _clean_string(
-        error.get(
-            "code"
+        status = _clean_string(
+            error.get(
+                "status"
+            )
         )
-    )
 
-    if message and code:
+        if message and status:
+            return (
+                f"{message} ({status})"
+            )
+
         return (
-            f"{message} ({code})"
+            message or status
         )
 
-    return (
-        message or code
-    )
+    return ""
 
 
-def _request_openai(
+def _request_gemini(
     payload,
     key,
 ):
@@ -766,19 +696,22 @@ def _request_openai(
 
     request = urllib.request.Request(
 
-        OPENAI_URL,
+        GEMINI_URL,
 
         data=body,
 
         headers={
-            "Authorization":
-                "Bearer " + key,
+            "x-goog-api-key":
+                key,
 
             "Content-Type":
                 "application/json",
 
             "Accept":
                 "application/json",
+
+            "Api-Revision":
+                "2026-05-20",
         },
 
         method="POST",
@@ -806,7 +739,7 @@ def _request_openai(
                 dict,
             ):
                 raise RuntimeError(
-                    "The AI service returned an invalid response."
+                    "Gemini returned an invalid response."
                 )
 
             return data
@@ -820,30 +753,27 @@ def _request_openai(
         except Exception:
             pass
 
-        message = _openai_error_message(
+        message = _gemini_error_message(
             raw
         )
 
         if exc.code == 400:
 
             raise RuntimeError(
-                "The AI request was rejected: "
+                "Gemini rejected the request: "
                 + (
                     message
                     or "invalid request"
                 )
             ) from exc
 
-        if exc.code == 401:
+        if exc.code in {
+            401,
+            403,
+        }:
 
             raise RuntimeError(
-                "The server AI API key was rejected."
-            ) from exc
-
-        if exc.code == 403:
-
-            raise RuntimeError(
-                "The AI service refused the request: "
+                "The Gemini API key was rejected: "
                 + (
                     message
                     or "access denied"
@@ -853,7 +783,7 @@ def _request_openai(
         if exc.code == 404:
 
             raise RuntimeError(
-                "The selected AI model or endpoint was not found: "
+                "The Gemini model or endpoint was not found: "
                 + (
                     message
                     or "not found"
@@ -863,24 +793,24 @@ def _request_openai(
         if exc.code == 429:
 
             raise RuntimeError(
-                "The AI service rate or usage limit was reached: "
+                "Gemini rate limit or quota reached: "
                 + (
                     message
-                    or "rate limit"
+                    or "quota exceeded"
                 )
             ) from exc
 
         if 500 <= exc.code <= 599:
 
             raise RuntimeError(
-                "The AI service is temporarily unavailable."
+                "Gemini is temporarily unavailable."
             ) from exc
 
         raise RuntimeError(
-            "AI analysis could not be started: "
+            "Gemini analysis could not be started: "
             + (
                 message
-                or "unknown AI error"
+                or "unknown error"
             )
         ) from exc
 
@@ -890,13 +820,13 @@ def _request_openai(
     ) as exc:
 
         raise RuntimeError(
-            "The AI analysis service could not be reached."
+            "Gemini could not be reached."
         ) from exc
 
     except json.JSONDecodeError as exc:
 
         raise RuntimeError(
-            "The AI service returned invalid JSON."
+            "Gemini returned invalid JSON."
         ) from exc
 
 
@@ -910,7 +840,7 @@ def create_background_response(
 
     if not key:
         raise RuntimeError(
-            "OPENAI_API_KEY is missing from Vercel."
+            "GEMINI_API_KEY is missing from Vercel."
         )
 
     instrument = validate_instrument(
@@ -931,14 +861,14 @@ def create_background_response(
         "15M chart",
     )
 
-    payload = _build_analysis_payload(
+    payload = _build_gemini_payload(
         instrument=instrument,
         trade_focus=trade_focus,
         higher_image=higher_image,
         lower_image=lower_image,
     )
 
-    return _request_openai(
+    return _request_gemini(
         payload,
         key,
     )
@@ -952,44 +882,47 @@ def extract_output_text(
         dict,
     ):
         raise RuntimeError(
-            "The AI service returned an invalid response."
+            "Gemini returned an invalid response."
         )
 
-    output_text = response_data.get(
+    direct = response_data.get(
         "output_text"
     )
 
     if (
         isinstance(
-            output_text,
+            direct,
             str,
         )
-        and output_text.strip()
+        and direct.strip()
     ):
-        return output_text.strip()
+        return direct.strip()
 
-    output = response_data.get(
-        "output",
+    steps = response_data.get(
+        "steps",
         [],
     )
 
     if not isinstance(
-        output,
+        steps,
         list,
     ):
-        raise RuntimeError(
-            "The AI service returned no analysis output."
-        )
+        steps = []
 
-    for item in output:
+    for step in steps:
 
         if not isinstance(
-            item,
+            step,
             dict,
         ):
             continue
 
-        content = item.get(
+        if step.get(
+            "type"
+        ) != "model_output":
+            continue
+
+        content = step.get(
             "content",
             [],
         )
@@ -1000,6 +933,8 @@ def extract_output_text(
         ):
             continue
 
+        pieces = []
+
         for part in content:
 
             if not isinstance(
@@ -1008,35 +943,31 @@ def extract_output_text(
             ):
                 continue
 
-            part_type = str(
-                part.get(
-                    "type",
-                    "",
-                )
-            )
-
-            if part_type not in {
-                "output_text",
-                "text",
-            }:
+            if part.get(
+                "type"
+            ) != "text":
                 continue
 
             text = part.get(
-                "text"
+                "text",
+                "",
             )
 
-            if (
-                isinstance(
-                    text,
-                    str,
-                )
-                and text.strip()
+            if isinstance(
+                text,
+                str,
             ):
-                return text.strip()
+                pieces.append(
+                    text
+                )
 
-    raise RuntimeError(
-        "The model returned no analysis text."
-    )
+        if pieces:
+
+            return "\n".join(
+                pieces
+            ).strip()
+
+    return ""
 
 
 def clean_json_text(
@@ -1083,6 +1014,40 @@ def parse_completed_response(
         )
     )
 
+    if not text:
+
+        errors = response_data.get(
+            "errors",
+            [],
+        )
+
+        if isinstance(
+            errors,
+            list,
+        ):
+
+            for error in errors:
+
+                if isinstance(
+                    error,
+                    dict,
+                ):
+
+                    message = _clean_string(
+                        error.get(
+                            "message"
+                        )
+                    )
+
+                    if message:
+                        raise RuntimeError(
+                            "Gemini: " + message
+                        )
+
+        raise RuntimeError(
+            "Gemini returned no analysis text."
+        )
+
     try:
 
         result = json.loads(
@@ -1092,7 +1057,7 @@ def parse_completed_response(
     except json.JSONDecodeError as exc:
 
         raise RuntimeError(
-            "The model returned an invalid analysis format."
+            "Gemini returned invalid analysis JSON."
         ) from exc
 
     if not isinstance(
@@ -1100,7 +1065,7 @@ def parse_completed_response(
         dict,
     ):
         raise RuntimeError(
-            "The model returned an invalid analysis object."
+            "Gemini returned an invalid analysis object."
         )
 
     signal = (
@@ -1117,9 +1082,30 @@ def parse_completed_response(
         "SELL",
         "NO TRADE",
     }:
+
         signal = "NO TRADE"
 
     result["signal"] = signal
+
+    result["confidence"] = max(
+        0,
+        min(
+            100,
+            int(
+                result.get(
+                    "confidence",
+                    0,
+                )
+            )
+            if str(
+                result.get(
+                    "confidence",
+                    "0",
+                )
+            ).strip().lstrip("-").isdigit()
+            else 0,
+        ),
+    )
 
     result["instrument"] = (
         _clean_string(
@@ -1204,38 +1190,6 @@ def parse_completed_response(
     )
 
     result[
-        "news_fundamental_risk"
-    ] = _clean_string(
-        result.get(
-            "news_fundamental_risk"
-        )
-    )
-
-    try:
-
-        confidence = int(
-            result.get(
-                "confidence",
-                0,
-            )
-        )
-
-    except (
-        TypeError,
-        ValueError,
-    ):
-
-        confidence = 0
-
-    result["confidence"] = max(
-        0,
-        min(
-            100,
-            confidence,
-        ),
-    )
-
-    result[
         "contributing_methods"
     ] = _clean_string_list(
         result.get(
@@ -1256,6 +1210,14 @@ def parse_completed_response(
     ] = _clean_string_list(
         result.get(
             "conflicting_methods"
+        )
+    )
+
+    result[
+        "news_fundamental_risk"
+    ] = _clean_string(
+        result.get(
+            "news_fundamental_risk"
         )
     )
 
