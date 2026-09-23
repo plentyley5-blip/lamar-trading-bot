@@ -9,13 +9,10 @@ GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/interactions"
 )
 
-MODEL = (
-    os.getenv(
-        "GEMINI_MODEL",
-        "gemini-3.5-flash",
-    ).strip()
-    or "gemini-3.5-flash"
-)
+# IMPORTANT:
+# Hard-coded so Vercel environment variables cannot accidentally
+# select an agent model such as gemini-3.5-flash-agent.
+MODEL = "gemini-3.8-flash"
 
 MAX_IMAGE_DATA_URL_CHARS = 8 * 1024 * 1024
 
@@ -44,7 +41,8 @@ Do NOT require every trading method to agree.
 
 Do NOT require perfect agreement between the 4H and 15M charts.
 
-Choose the strongest direction supported by the overall visible evidence.
+Choose the strongest directional idea supported by the overall
+visible evidence.
 
 Choose BUY when the evidence is sufficiently bullish.
 
@@ -95,8 +93,8 @@ CHoCH
 liquidity
 equal highs
 equal lows
-liquidity sweep
-stop hunt
+liquidity sweeps
+stop hunts
 displacement
 inducement
 mitigation
@@ -105,10 +103,10 @@ Fibonacci retracement
 Fibonacci extension
 premium and discount
 smart money concepts
-order block
-fair value gap
-higher timeframe bias
-lower timeframe confirmation
+order blocks
+fair value gaps
+higher-timeframe bias
+lower-timeframe confirmation
 
 Do not require all concepts.
 
@@ -119,7 +117,47 @@ Identify:
 - conflicting evidence
 
 ==================================================
-TRADE SETUP
+BUY
+==================================================
+
+A BUY can be considered when the visible evidence contains a
+meaningful combination such as:
+
+- bullish market structure
+- bullish BOS or CHoCH
+- support reaction
+- bullish liquidity sweep
+- bullish displacement
+- bullish order block
+- bullish fair value gap
+- discount positioning
+- bullish price action
+- lower-timeframe bullish confirmation
+
+Not all are necessary.
+
+==================================================
+SELL
+==================================================
+
+A SELL can be considered when the visible evidence contains a
+meaningful combination such as:
+
+- bearish market structure
+- bearish BOS or CHoCH
+- resistance reaction
+- bearish liquidity sweep
+- bearish displacement
+- bearish order block
+- bearish fair value gap
+- premium positioning
+- bearish price action
+- lower-timeframe bearish confirmation
+
+Not all are necessary.
+
+==================================================
+ENTRY AND TARGETS
 ==================================================
 
 For BUY:
@@ -146,58 +184,84 @@ Provide TP2 when supported by visible structure or liquidity.
 
 Provide a consistent risk/reward value.
 
-If the exact price digits are not clearly readable, do not invent
-false precision.
+If exact price digits are readable, use them.
+
+If exact price digits are not readable:
+
+- do not invent false precision
+- use a logical price area when reasonably inferable
+- if a numerical field cannot responsibly be determined, leave it empty
+
+Do NOT automatically turn an otherwise valid setup into NO TRADE merely
+because one price digit is difficult to read.
 
 ==================================================
 NO TRADE
 ==================================================
 
-Use NO TRADE only when:
+Use NO TRADE when:
 
 - directional evidence is genuinely unclear
 - bullish and bearish evidence are materially balanced
 - the setup is too weak
-- the chart is too poor to analyze
+- the chart quality prevents reliable analysis
 - important chart information is missing
-- the proposed trade is materially invalidated
+- the proposed setup is materially invalidated
 
-Do not use NO TRADE simply because one method is weak.
-
-==================================================
-NEWS
-==================================================
-
-Do not invent current news.
-
-Use visible or reliably supplied news information only.
-
-If current news cannot be verified, say so in the news/fundamental
-risk field.
+Do NOT use NO TRADE simply because one method is weak.
 
 ==================================================
 CONFIDENCE
 ==================================================
 
-Confidence represents confidence in the quality of the chart analysis.
+Confidence represents confidence in the quality of the analysis.
+
+It is NOT a guaranteed win rate.
 
 It is NOT a guarantee of profit.
 
-It is NOT a guaranteed probability of winning.
+It is NOT a promise that the trade will win.
 
 Higher confidence requires stronger visible evidence.
+
+==================================================
+NEWS AND FUNDAMENTALS
+==================================================
+
+Do not invent current news.
+
+Use only visible or reliably supplied information.
+
+If current news cannot be verified, state that limitation in the
+news/fundamental risk field.
+
+News uncertainty alone does not automatically require NO TRADE.
+
+==================================================
+IMAGE QUALITY
+==================================================
+
+Mention warnings when:
+
+- the chart is blurry
+- price labels are unreadable
+- the chart is heavily cropped
+- important candles are missing
+- the timeframe is unclear
+- market structure cannot be established reliably
+- the two charts materially conflict
 
 ==================================================
 OUTPUT
 ==================================================
 
-Return ONLY valid JSON.
+Return ONLY valid JSON matching the supplied schema.
 
-No Markdown.
+Do not return Markdown.
 
-No code fences.
+Do not return code fences.
 
-No explanation outside the JSON object.
+Do not return commentary outside the JSON object.
 """.strip()
 
 
@@ -205,6 +269,7 @@ OUTPUT_SCHEMA = {
     "type": "object",
 
     "properties": {
+
         "signal": {
             "type": "string",
             "enum": [
@@ -216,6 +281,8 @@ OUTPUT_SCHEMA = {
 
         "confidence": {
             "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
         },
 
         "instrument": {
@@ -409,13 +476,17 @@ def json_response(
 
 
 def api_key():
-    return os.getenv(
+    key = os.getenv(
         "GEMINI_API_KEY",
         "",
     ).strip()
 
+    return key
 
-def validate_instrument(value):
+
+def validate_instrument(
+    value,
+):
     instrument = str(
         value or ""
     ).strip().upper()
@@ -428,7 +499,9 @@ def validate_instrument(value):
     return instrument
 
 
-def validate_focus(value):
+def validate_focus(
+    value,
+):
     focus = str(
         value or "DAY TRADE"
     ).strip().upper()
@@ -476,32 +549,39 @@ def validate_image_data_url(
             f"A valid {label} is required."
         )
 
-    supported = (
+    header_lower = header.lower()
+
+    allowed_headers = (
         "data:image/jpeg;base64",
         "data:image/jpg;base64",
         "data:image/png;base64",
         "data:image/webp;base64",
     )
 
-    if not header.lower().startswith(
-        supported
+    if not header_lower.startswith(
+        allowed_headers
     ):
         raise ValueError(
             f"Unsupported {label} format. "
             "Use JPG, PNG, or WEBP."
         )
 
-    if len(encoded.strip()) < 100:
+    encoded = encoded.strip()
+
+    if len(encoded) < 100:
         raise ValueError(
             f"The {label} appears to be empty or invalid."
         )
 
     try:
+
         base64.b64decode(
             encoded,
             validate=True,
         )
+
     except Exception as exc:
+
         raise ValueError(
             f"The {label} contains invalid image data."
         ) from exc
@@ -509,58 +589,51 @@ def validate_image_data_url(
     return image
 
 
-def _clean_string(value):
-    if value is None:
-        return ""
-
-    return str(value).strip()
-
-
-def _clean_string_list(value):
-    if not isinstance(
-        value,
-        list,
-    ):
-        return []
-
-    result = []
-
-    for item in value:
-
-        cleaned = _clean_string(
-            item
-        )
-
-        if cleaned:
-            result.append(
-                cleaned
-            )
-
-    return result
-
-
-def _image_data(
+def _split_data_url(
     data_url,
 ):
-    header, _, encoded = (
+    header, separator, encoded = (
         data_url.partition(",")
     )
 
-    if header.lower().startswith(
-        "data:image/png"
-    ):
+    if not separator:
+        raise ValueError(
+            "Invalid image data."
+        )
+
+    header_lower = header.lower()
+
+    if "image/png" in header_lower:
         mime_type = "image/png"
-    elif header.lower().startswith(
-        "data:image/webp"
-    ):
+
+    elif "image/webp" in header_lower:
         mime_type = "image/webp"
+
+    elif "image/jpg" in header_lower:
+        mime_type = "image/jpeg"
+
     else:
         mime_type = "image/jpeg"
 
+    return (
+        mime_type,
+        encoded,
+    )
+
+
+def _image_input(
+    data_url,
+):
+    mime_type, encoded = (
+        _split_data_url(
+            data_url
+        )
+    )
+
     return {
         "type": "image",
-        "mime_type": mime_type,
         "data": encoded,
+        "mime_type": mime_type,
     }
 
 
@@ -570,34 +643,37 @@ def _build_gemini_payload(
     higher_image,
     lower_image,
 ):
-    user_text = (
-        "Perform the chart analysis now.\n\n"
+    prompt = (
+        "Analyze the two supplied trading charts.\n\n"
         f"Instrument: {instrument}\n"
         f"Trade focus: {trade_focus}\n\n"
-        "Image 1 = 4H chart.\n"
-        "Image 2 = 15M chart.\n\n"
-        "SCALP uses the 15M chart as the primary execution "
-        "timeframe while the 4H chart provides context.\n"
-        "Do not force NO TRADE simply because the 4H and 15M "
+        "Image 1 is the 4H chart.\n"
+        "Image 2 is the 15M chart.\n\n"
+        "For SCALP, treat the 15M chart as the primary execution "
+        "timeframe and use the 4H chart for broader context.\n"
+        "For DAY TRADE, combine 4H context with 15M confirmation.\n"
+        "For SWING, give the 4H chart primary importance.\n\n"
+        "Do not force NO TRADE simply because the two timeframes "
         "are not identical.\n"
-        "Return the strongest justified decision: "
-        "BUY, SELL, or NO TRADE."
+        "Return the strongest justified decision: BUY, SELL, or NO TRADE."
     )
 
     return {
-        "model": MODEL,
+
+        "model":
+            MODEL,
 
         "input": [
             {
                 "type": "text",
-                "text": user_text,
+                "text": prompt,
             },
 
-            _image_data(
+            _image_input(
                 higher_image
             ),
 
-            _image_data(
+            _image_input(
                 lower_image
             ),
         ],
@@ -607,17 +683,27 @@ def _build_gemini_payload(
 
         "response_format": {
             "type": "text",
-            "mime_type": "application/json",
-            "schema": OUTPUT_SCHEMA,
+
+            "mime_type":
+                "application/json",
+
+            "schema":
+                OUTPUT_SCHEMA,
         },
 
-        "background": True,
+        "background":
+            True,
 
-        "store": True,
+        "store":
+            True,
 
         "generation_config": {
-            "thinking_level": "low",
-            "max_output_tokens": 3000,
+
+            "thinking_level":
+                "low",
+
+            "max_output_tokens":
+                3000,
         },
     }
 
@@ -634,13 +720,15 @@ def _gemini_error_message(
             raw,
             bytes,
         ):
-            raw = raw.decode(
+            text = raw.decode(
                 "utf-8",
                 errors="replace",
             )
+        else:
+            text = str(raw)
 
         data = json.loads(
-            raw
+            text
         )
 
     except Exception:
@@ -661,17 +749,19 @@ def _gemini_error_message(
         dict,
     ):
 
-        message = _clean_string(
+        message = str(
             error.get(
-                "message"
+                "message",
+                "",
             )
-        )
+        ).strip()
 
-        status = _clean_string(
+        status = str(
             error.get(
-                "status"
+                "status",
+                "",
             )
-        )
+        ).strip()
 
         if message and status:
             return (
@@ -709,9 +799,6 @@ def _request_gemini(
 
             "Accept":
                 "application/json",
-
-            "Api-Revision":
-                "2026-05-20",
         },
 
         method="POST",
@@ -727,7 +814,9 @@ def _request_gemini(
             raw = (
                 response
                 .read()
-                .decode("utf-8")
+                .decode(
+                    "utf-8"
+                )
             )
 
             data = json.loads(
@@ -783,7 +872,7 @@ def _request_gemini(
         if exc.code == 404:
 
             raise RuntimeError(
-                "The Gemini model or endpoint was not found: "
+                "Gemini model or endpoint not found: "
                 + (
                     message
                     or "not found"
@@ -839,6 +928,7 @@ def create_background_response(
     key = api_key()
 
     if not key:
+
         raise RuntimeError(
             "GEMINI_API_KEY is missing from Vercel."
         )
@@ -907,7 +997,9 @@ def extract_output_text(
         steps,
         list,
     ):
-        steps = []
+        return ""
+
+    parts = []
 
     for step in steps:
 
@@ -933,22 +1025,20 @@ def extract_output_text(
         ):
             continue
 
-        pieces = []
-
-        for part in content:
+        for item in content:
 
             if not isinstance(
-                part,
+                item,
                 dict,
             ):
                 continue
 
-            if part.get(
+            if item.get(
                 "type"
             ) != "text":
                 continue
 
-            text = part.get(
+            text = item.get(
                 "text",
                 "",
             )
@@ -956,18 +1046,15 @@ def extract_output_text(
             if isinstance(
                 text,
                 str,
-            ):
-                pieces.append(
-                    text
+            ) and text.strip():
+
+                parts.append(
+                    text.strip()
                 )
 
-        if pieces:
-
-            return "\n".join(
-                pieces
-            ).strip()
-
-    return ""
+    return "\n".join(
+        parts
+    ).strip()
 
 
 def clean_json_text(
@@ -1003,11 +1090,128 @@ def clean_json_text(
     return cleaned
 
 
+def _safe_int(
+    value,
+    default=0,
+):
+    try:
+        return int(
+            value
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return default
+
+
+def _normalise_result(
+    result,
+    instrument,
+):
+    signal = (
+        _clean_string(
+            result.get(
+                "signal"
+            )
+        )
+        .upper()
+    )
+
+    if signal not in {
+        "BUY",
+        "SELL",
+        "NO TRADE",
+    }:
+        signal = "NO TRADE"
+
+    result["signal"] = signal
+
+    confidence = _safe_int(
+        result.get(
+            "confidence",
+            0,
+        ),
+        0,
+    )
+
+    result["confidence"] = max(
+        0,
+        min(
+            100,
+            confidence,
+        ),
+    )
+
+    result["instrument"] = (
+        _clean_string(
+            instrument
+        ).upper()
+    )
+
+    text_fields = [
+        "trend",
+        "trade_idea",
+        "higher_timeframe_context",
+        "lower_timeframe_confirmation",
+        "entry",
+        "stop_loss",
+        "take_profit_1",
+        "take_profit_2",
+        "risk_reward",
+        "duration",
+        "data_analysis",
+        "explanation",
+        "news_fundamental_risk",
+    ]
+
+    for field in text_fields:
+
+        result[field] = _clean_string(
+            result.get(
+                field
+            )
+        )
+
+    list_fields = [
+        "contributing_methods",
+        "weak_methods",
+        "conflicting_methods",
+        "warnings",
+    ]
+
+    for field in list_fields:
+
+        result[field] = _clean_string_list(
+            result.get(
+                field
+            )
+        )
+
+    if signal == "NO TRADE":
+
+        result["entry"] = ""
+        result["stop_loss"] = ""
+        result["take_profit_1"] = ""
+        result["take_profit_2"] = ""
+        result["risk_reward"] = ""
+
+    return result
+
+
 def parse_completed_response(
     response_data,
     instrument,
     trade_focus="DAY TRADE",
 ):
+    if not isinstance(
+        response_data,
+        dict,
+    ):
+        raise RuntimeError(
+            "Gemini returned an invalid analysis response."
+        )
+
     text = clean_json_text(
         extract_output_text(
             response_data
@@ -1016,33 +1220,27 @@ def parse_completed_response(
 
     if not text:
 
-        errors = response_data.get(
-            "errors",
-            [],
+        interaction_error = (
+            response_data.get(
+                "error"
+            )
         )
 
         if isinstance(
-            errors,
-            list,
+            interaction_error,
+            dict,
         ):
 
-            for error in errors:
+            message = _clean_string(
+                interaction_error.get(
+                    "message"
+                )
+            )
 
-                if isinstance(
-                    error,
-                    dict,
-                ):
-
-                    message = _clean_string(
-                        error.get(
-                            "message"
-                        )
-                    )
-
-                    if message:
-                        raise RuntimeError(
-                            "Gemini: " + message
-                        )
+            if message:
+                raise RuntimeError(
+                    "Gemini: " + message
+                )
 
         raise RuntimeError(
             "Gemini returned no analysis text."
@@ -1068,173 +1266,7 @@ def parse_completed_response(
             "Gemini returned an invalid analysis object."
         )
 
-    signal = (
-        _clean_string(
-            result.get(
-                "signal"
-            )
-        )
-        .upper()
+    return _normalise_result(
+        result,
+        instrument,
     )
-
-    if signal not in {
-        "BUY",
-        "SELL",
-        "NO TRADE",
-    }:
-
-        signal = "NO TRADE"
-
-    result["signal"] = signal
-
-    result["confidence"] = max(
-        0,
-        min(
-            100,
-            int(
-                result.get(
-                    "confidence",
-                    0,
-                )
-            )
-            if str(
-                result.get(
-                    "confidence",
-                    "0",
-                )
-            ).strip().lstrip("-").isdigit()
-            else 0,
-        ),
-    )
-
-    result["instrument"] = (
-        _clean_string(
-            instrument
-        ).upper()
-    )
-
-    result["trend"] = _clean_string(
-        result.get(
-            "trend"
-        )
-    )
-
-    result["trade_idea"] = _clean_string(
-        result.get(
-            "trade_idea"
-        )
-    )
-
-    result[
-        "higher_timeframe_context"
-    ] = _clean_string(
-        result.get(
-            "higher_timeframe_context"
-        )
-    )
-
-    result[
-        "lower_timeframe_confirmation"
-    ] = _clean_string(
-        result.get(
-            "lower_timeframe_confirmation"
-        )
-    )
-
-    result["entry"] = _clean_string(
-        result.get(
-            "entry"
-        )
-    )
-
-    result["stop_loss"] = _clean_string(
-        result.get(
-            "stop_loss"
-        )
-    )
-
-    result["take_profit_1"] = _clean_string(
-        result.get(
-            "take_profit_1"
-        )
-    )
-
-    result["take_profit_2"] = _clean_string(
-        result.get(
-            "take_profit_2"
-        )
-    )
-
-    result["risk_reward"] = _clean_string(
-        result.get(
-            "risk_reward"
-        )
-    )
-
-    result["duration"] = _clean_string(
-        result.get(
-            "duration"
-        )
-    )
-
-    result["data_analysis"] = _clean_string(
-        result.get(
-            "data_analysis"
-        )
-    )
-
-    result["explanation"] = _clean_string(
-        result.get(
-            "explanation"
-        )
-    )
-
-    result[
-        "contributing_methods"
-    ] = _clean_string_list(
-        result.get(
-            "contributing_methods"
-        )
-    )
-
-    result[
-        "weak_methods"
-    ] = _clean_string_list(
-        result.get(
-            "weak_methods"
-        )
-    )
-
-    result[
-        "conflicting_methods"
-    ] = _clean_string_list(
-        result.get(
-            "conflicting_methods"
-        )
-    )
-
-    result[
-        "news_fundamental_risk"
-    ] = _clean_string(
-        result.get(
-            "news_fundamental_risk"
-        )
-    )
-
-    result[
-        "warnings"
-    ] = _clean_string_list(
-        result.get(
-            "warnings"
-        )
-    )
-
-    if signal == "NO TRADE":
-
-        result["entry"] = ""
-        result["stop_loss"] = ""
-        result["take_profit_1"] = ""
-        result["take_profit_2"] = ""
-        result["risk_reward"] = ""
-
-    return result
