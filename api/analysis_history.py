@@ -6,40 +6,68 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 
-from analysis_common import json_response
 from user_security import (
     extract_bearer_token,
     verify_access_token,
 )
 
 
-# ---------------------------------------------------------
-# CONFIG
-# ---------------------------------------------------------
-
-SUPABASE_URL = os.environ.get(
-    "SUPABASE_URL",
-    ""
-).rstrip("/")
-
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get(
     "SUPABASE_SERVICE_ROLE_KEY",
-    ""
+    "",
 )
 
 MAX_HISTORY_ITEMS = 50
 
 
 # ---------------------------------------------------------
-# SUPABASE REQUEST
+# JSON RESPONSE
 # ---------------------------------------------------------
 
-def _supabase_request(
-    method,
-    path,
-    payload=None,
-    timeout=30,
-):
+def send_json(handler, status_code, payload):
+    body = json.dumps(
+        payload,
+        ensure_ascii=False,
+        default=str,
+    ).encode("utf-8")
+
+    handler.send_response(status_code)
+
+    handler.send_header(
+        "Content-Type",
+        "application/json; charset=utf-8",
+    )
+
+    handler.send_header(
+        "Access-Control-Allow-Origin",
+        "*",
+    )
+
+    handler.send_header(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization",
+    )
+
+    handler.send_header(
+        "Access-Control-Allow-Methods",
+        "GET, OPTIONS",
+    )
+
+    handler.send_header(
+        "Content-Length",
+        str(len(body)),
+    )
+
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+# ---------------------------------------------------------
+# SUPABASE GET
+# ---------------------------------------------------------
+
+def supabase_get(path):
     if not SUPABASE_URL:
         raise RuntimeError(
             "SUPABASE_URL is not configured."
@@ -52,34 +80,23 @@ def _supabase_request(
 
     url = SUPABASE_URL + path
 
-    headers = {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": (
-            "Bearer "
-            + SUPABASE_SERVICE_ROLE_KEY
-        ),
-        "Content-Type": "application/json",
-    }
-
-    data = None
-
-    if payload is not None:
-        data = json.dumps(
-            payload,
-            ensure_ascii=False,
-        ).encode("utf-8")
-
     request = urllib.request.Request(
         url,
-        data=data,
-        headers=headers,
-        method=method,
+        headers={
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": (
+                "Bearer "
+                + SUPABASE_SERVICE_ROLE_KEY
+            ),
+            "Accept": "application/json",
+        },
+        method="GET",
     )
 
     try:
         with urllib.request.urlopen(
             request,
-            timeout=timeout,
+            timeout=20,
         ) as response:
 
             raw = response.read().decode(
@@ -88,12 +105,9 @@ def _supabase_request(
             )
 
             if not raw:
-                return None
+                return []
 
-            try:
-                return json.loads(raw)
-            except json.JSONDecodeError:
-                return raw
+            return json.loads(raw)
 
     except urllib.error.HTTPError as exc:
 
@@ -103,181 +117,26 @@ def _supabase_request(
         )
 
         raise RuntimeError(
-            "Supabase request failed "
-            f"({exc.code}): {detail}"
+            "Supabase HTTP "
+            + str(exc.code)
+            + ": "
+            + detail
         )
 
     except urllib.error.URLError as exc:
 
         raise RuntimeError(
-            "Supabase connection failed: "
+            "Supabase connection error: "
             + str(exc)
         )
 
 
 # ---------------------------------------------------------
-# DECODE SAVED RESULT
+# AUTHENTICATION
 # ---------------------------------------------------------
 
-def _decode_result(encoded_result):
-    if not encoded_result:
-        return None
+def authenticate_user(handler):
 
-    if not isinstance(
-        encoded_result,
-        str,
-    ):
-        return None
-
-    try:
-
-        padded = encoded_result + (
-            "=" * (
-                -len(encoded_result) % 4
-            )
-        )
-
-        raw = base64.urlsafe_b64decode(
-            padded.encode("ascii")
-        )
-
-        result = json.loads(
-            raw.decode("utf-8")
-        )
-
-        if not isinstance(
-            result,
-            dict,
-        ):
-            return None
-
-        return result
-
-    except Exception:
-        return None
-
-
-# ---------------------------------------------------------
-# LOAD USER HISTORY
-# ---------------------------------------------------------
-
-def _load_history(user_id):
-    encoded_user_id = urllib.parse.quote(
-        user_id,
-        safe="",
-    )
-
-    path = (
-        "/rest/v1/analysis_jobs"
-        "?select="
-        "job_nonce,"
-        "instrument,"
-        "trade_focus,"
-        "status,"
-        "openai_response_id,"
-        "created_at,"
-        "error_message"
-        "&user_id=eq."
-        + encoded_user_id
-        + "&status=eq.completed"
-        "&order=created_at.desc"
-        "&limit="
-        + str(MAX_HISTORY_ITEMS)
-    )
-
-    rows = _supabase_request(
-        "GET",
-        path,
-        timeout=30,
-    )
-
-    if not rows:
-        return []
-
-    if not isinstance(
-        rows,
-        list,
-    ):
-        return []
-
-    history = []
-
-    for row in rows:
-
-        if not isinstance(
-            row,
-            dict,
-        ):
-            continue
-
-        job_nonce = str(
-            row.get(
-                "job_nonce",
-                "",
-            )
-        ).strip()
-
-        raw_instrument = str(
-            row.get(
-                "instrument",
-                "",
-            )
-        ).strip()
-
-        # The current submit system stores:
-        # instrument|job_nonce
-        instrument = raw_instrument
-
-        if "|" in raw_instrument:
-            instrument = raw_instrument.split(
-                "|",
-                1,
-            )[0]
-
-        instrument = instrument.upper()
-
-        trade_focus = str(
-            row.get(
-                "trade_focus",
-                "",
-            )
-        ).strip().upper()
-
-        created_at = row.get(
-            "created_at"
-        )
-
-        result = _decode_result(
-            row.get(
-                "openai_response_id"
-            )
-        )
-
-        # Do not expose broken records.
-        if not job_nonce:
-            continue
-
-        if result is None:
-            continue
-
-        history.append(
-            {
-                "job_id": job_nonce,
-                "instrument": instrument,
-                "trade_focus": trade_focus,
-                "created_at": created_at,
-                "result": result,
-            }
-        )
-
-    return history
-
-
-# ---------------------------------------------------------
-# AUTHENTICATE
-# ---------------------------------------------------------
-
-def _authenticate_user(handler):
     authorization = handler.headers.get(
         "Authorization",
         "",
@@ -296,83 +155,199 @@ def _authenticate_user(handler):
         token
     )
 
-    if not isinstance(
-        user,
-        dict,
-    ):
+    if not isinstance(user, dict):
         raise ValueError(
-            "Invalid authentication."
+            "Invalid authentication token."
         )
 
     user_id = str(
-        user.get(
-            "id",
-            "",
-        )
+        user.get("id", "")
     ).strip()
 
     if not user_id:
         raise ValueError(
-            "Invalid authenticated user."
+            "Authenticated user ID is missing."
         )
 
     return user_id
 
 
 # ---------------------------------------------------------
-# HANDLER
+# DECODE RESULT
+# ---------------------------------------------------------
+
+def decode_saved_result(value):
+
+    if value is None:
+        return None
+
+    # Already a JSON object
+    if isinstance(value, dict):
+        return value
+
+    # Sometimes the database value can already
+    # contain a JSON string.
+    if isinstance(value, str):
+
+        text = value.strip()
+
+        if not text:
+            return None
+
+        try:
+            parsed = json.loads(text)
+
+            if isinstance(parsed, dict):
+                return parsed
+
+        except Exception:
+            pass
+
+        # Try URL-safe base64.
+        try:
+            padded = text + (
+                "=" * (-len(text) % 4)
+            )
+
+            decoded = base64.urlsafe_b64decode(
+                padded.encode("ascii")
+            )
+
+            parsed = json.loads(
+                decoded.decode("utf-8")
+            )
+
+            if isinstance(parsed, dict):
+                return parsed
+
+        except Exception:
+            pass
+
+    return None
+
+
+# ---------------------------------------------------------
+# LOAD HISTORY
+# ---------------------------------------------------------
+
+def load_history(user_id):
+
+    encoded_user_id = urllib.parse.quote(
+        user_id,
+        safe="",
+    )
+
+    select_fields = (
+        "job_nonce,"
+        "instrument,"
+        "trade_focus,"
+        "status,"
+        "openai_response_id,"
+        "created_at,"
+        "error_message"
+    )
+
+    path = (
+        "/rest/v1/analysis_jobs"
+        "?select="
+        + select_fields
+        + "&user_id=eq."
+        + encoded_user_id
+        + "&status=eq.completed"
+        + "&order=created_at.desc"
+        + "&limit="
+        + str(MAX_HISTORY_ITEMS)
+    )
+
+    rows = supabase_get(path)
+
+    if not isinstance(rows, list):
+        return []
+
+    history = []
+
+    for row in rows:
+
+        if not isinstance(row, dict):
+            continue
+
+        job_id = str(
+            row.get("job_nonce", "")
+        ).strip()
+
+        if not job_id:
+            continue
+
+        instrument = str(
+            row.get("instrument", "")
+        ).strip()
+
+        if "|" in instrument:
+            instrument = instrument.split(
+                "|",
+                1,
+            )[0]
+
+        instrument = instrument.upper()
+
+        trade_focus = str(
+            row.get("trade_focus", "")
+        ).strip()
+
+        result = decode_saved_result(
+            row.get("openai_response_id")
+        )
+
+        # Don't show incomplete/broken records.
+        if result is None:
+            continue
+
+        history.append(
+            {
+                "job_id": job_id,
+                "instrument": instrument,
+                "trade_focus": trade_focus.upper(),
+                "created_at": row.get(
+                    "created_at"
+                ),
+                "result": result,
+            }
+        )
+
+    return history
+
+
+# ---------------------------------------------------------
+# REQUEST HANDLER
 # ---------------------------------------------------------
 
 class handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
-        self.send_response(204)
 
-        self.send_header(
-            "Access-Control-Allow-Origin",
-            "*",
+        send_json(
+            self,
+            204,
+            {},
         )
-
-        self.send_header(
-            "Access-Control-Allow-Headers",
-            "Content-Type, Authorization",
-        )
-
-        self.send_header(
-            "Access-Control-Allow-Methods",
-            "GET, OPTIONS",
-        )
-
-        self.end_headers()
 
 
     def do_GET(self):
 
         try:
 
-            # ---------------------------------------------
-            # AUTHENTICATE USER
-            # ---------------------------------------------
-
-            user_id = _authenticate_user(
+            # 1. Authenticate
+            user_id = authenticate_user(
                 self
             )
 
-
-            # ---------------------------------------------
-            # LOAD ONLY THAT USER'S HISTORY
-            # ---------------------------------------------
-
-            history = _load_history(
+            # 2. Load only this user's history
+            history = load_history(
                 user_id
             )
 
-
-            # ---------------------------------------------
-            # RESPONSE
-            # ---------------------------------------------
-
-            json_response(
+            # 3. Return result
+            send_json(
                 self,
                 200,
                 {
@@ -384,33 +359,41 @@ class handler(BaseHTTPRequestHandler):
 
         except ValueError as exc:
 
-            json_response(
+            send_json(
                 self,
                 401,
                 {
-                    "error": str(exc)
+                    "status": "error",
+                    "error": str(exc),
                 },
             )
 
         except RuntimeError as exc:
 
-            json_response(
+            send_json(
                 self,
                 500,
                 {
-                    "error": str(exc)
+                    "status": "error",
+                    "error": str(exc),
                 },
             )
 
-        except Exception:
+        except Exception as exc:
 
-            json_response(
+            # IMPORTANT:
+            # Return the real exception so the next
+            # Vercel log tells us exactly what failed.
+            send_json(
                 self,
                 500,
                 {
+                    "status": "error",
                     "error": (
-                        "Unable to load "
-                        "analysis history."
-                    )
+                        "History server error: "
+                        + type(exc).__name__
+                        + ": "
+                        + str(exc)
+                    ),
                 },
             )
