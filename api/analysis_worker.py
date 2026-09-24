@@ -6,7 +6,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 
-from analysis_common import (
+from api.analysis_common import (
     create_background_response,
     parse_completed_response,
     validate_focus,
@@ -14,49 +14,74 @@ from analysis_common import (
     validate_instrument,
 )
 
-from user_security import (
+from api.user_security import (
     is_owner_user,
     release_analysis_slot,
 )
 
 
+# =========================================================
+# CONFIG
+# =========================================================
+
 SUPABASE_URL = os.environ.get(
     "SUPABASE_URL",
     ""
-).rstrip("/")
+).strip().rstrip("/")
 
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get(
     "SUPABASE_SERVICE_ROLE_KEY",
     ""
-)
+).strip()
 
 WORKER_SECRET = os.environ.get(
     "ANALYSIS_WORKER_SECRET",
     ""
-)
+).strip()
 
+
+# =========================================================
+# RESPONSE
+# =========================================================
 
 def json_response(handler, status, payload):
+
     body = json.dumps(
         payload,
-        ensure_ascii=False
+        ensure_ascii=False,
+        default=str,
     ).encode("utf-8")
 
     handler.send_response(status)
 
     handler.send_header(
         "Content-Type",
-        "application/json"
+        "application/json; charset=utf-8",
     )
 
     handler.send_header(
         "Cache-Control",
-        "no-store"
+        "no-store",
     )
 
     handler.send_header(
         "Access-Control-Allow-Origin",
-        "*"
+        "*",
+    )
+
+    handler.send_header(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization",
+    )
+
+    handler.send_header(
+        "Access-Control-Allow-Methods",
+        "POST, OPTIONS",
+    )
+
+    handler.send_header(
+        "Content-Length",
+        str(len(body)),
     )
 
     handler.end_headers()
@@ -64,12 +89,17 @@ def json_response(handler, status, payload):
     handler.wfile.write(body)
 
 
+# =========================================================
+# SUPABASE REQUEST
+# =========================================================
+
 def supabase_request(
     method,
     path,
     payload=None,
-    timeout=30
+    timeout=30,
 ):
+
     if not SUPABASE_URL:
         raise RuntimeError(
             "SUPABASE_URL is not configured."
@@ -86,20 +116,27 @@ def supabase_request(
     )
 
     headers = {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "apikey":
+            SUPABASE_SERVICE_ROLE_KEY,
+
         "Authorization":
             "Bearer "
             + SUPABASE_SERVICE_ROLE_KEY,
+
         "Content-Type":
+            "application/json",
+
+        "Accept":
             "application/json",
     }
 
     data = None
 
     if payload is not None:
+
         data = json.dumps(
             payload,
-            ensure_ascii=False
+            ensure_ascii=False,
         ).encode("utf-8")
 
     request = urllib.request.Request(
@@ -113,13 +150,16 @@ def supabase_request(
 
         with urllib.request.urlopen(
             request,
-            timeout=timeout
+            timeout=timeout,
         ) as response:
 
             raw = (
                 response
                 .read()
-                .decode("utf-8")
+                .decode(
+                    "utf-8",
+                    errors="replace",
+                )
             )
 
             if not raw:
@@ -127,6 +167,7 @@ def supabase_request(
 
             try:
                 return json.loads(raw)
+
             except json.JSONDecodeError:
                 return raw
 
@@ -136,52 +177,66 @@ def supabase_request(
             exc.read()
             .decode(
                 "utf-8",
-                errors="replace"
+                errors="replace",
             )
         )
 
         raise RuntimeError(
-            f"Supabase request failed "
+            "Supabase request failed "
             f"({exc.code}): {detail}"
         )
 
+    except urllib.error.URLError as exc:
+
+        raise RuntimeError(
+            "Supabase connection failed: "
+            + str(exc)
+        )
+
+
+# =========================================================
+# CLAIM JOB
+# =========================================================
 
 def claim_job(job_nonce):
-    """
-    Atomically changes queued -> processing.
-
-    Only one worker can successfully claim
-    a particular job.
-    """
 
     rows = supabase_request(
         "POST",
         "/rest/v1/rpc/claim_analysis_job",
         {
-            "p_job_nonce": job_nonce
+            "p_job_nonce":
+                job_nonce
         },
-        timeout=30
+        timeout=30,
     )
 
     if not rows:
         return None
 
-    if not isinstance(rows, list):
+    if not isinstance(
+        rows,
+        list,
+    ):
         return None
 
     return rows[0]
 
 
+# =========================================================
+# UPDATE JOB
+# =========================================================
+
 def patch_job(
     job_nonce,
-    values
+    values,
 ):
+
     encoded_nonce = urllib.parse.quote(
         job_nonce,
-        safe=""
+        safe="",
     )
 
-    url = (
+    path = (
         "/rest/v1/analysis_jobs"
         "?job_nonce=eq."
         + encoded_nonce
@@ -189,20 +244,25 @@ def patch_job(
 
     supabase_request(
         "PATCH",
-        url,
+        path,
         values,
-        timeout=30
+        timeout=30,
     )
 
 
+# =========================================================
+# ENCODE RESULT
+# =========================================================
+
 def encode_result(result):
+
     raw = json.dumps(
         result,
         ensure_ascii=False,
         separators=(
             ",",
-            ":"
-        )
+            ":",
+        ),
     ).encode("utf-8")
 
     return (
@@ -214,18 +274,20 @@ def encode_result(result):
     )
 
 
+# =========================================================
+# RELEASE DAILY SLOT
+# =========================================================
+
 def safe_release_slot(user_id):
-    """
-    Releases the reserved daily slot when
-    a non-owner job fails.
-    """
 
     try:
 
         if not user_id:
             return
 
-        if is_owner_user(user_id):
+        if is_owner_user(
+            user_id
+        ):
             return
 
         release_analysis_slot(
@@ -233,30 +295,104 @@ def safe_release_slot(user_id):
         )
 
     except Exception:
-        # Never replace the original analysis
-        # error with a slot-release error.
         pass
 
+
+# =========================================================
+# READ WEBHOOK BODY
+# =========================================================
+
+def read_request_body(handler):
+
+    raw_length = handler.headers.get(
+        "Content-Length",
+        "0",
+    )
+
+    try:
+        content_length = int(
+            raw_length
+        )
+
+    except ValueError:
+        raise ValueError(
+            "Invalid Content-Length."
+        )
+
+    if content_length <= 0:
+        raise ValueError(
+            "Empty request body."
+        )
+
+    if content_length > (
+        30 * 1024 * 1024
+    ):
+        raise ValueError(
+            "Request body is too large."
+        )
+
+    raw_body = handler.rfile.read(
+        content_length
+    )
+
+    try:
+
+        return json.loads(
+            raw_body.decode(
+                "utf-8"
+            )
+        )
+
+    except Exception:
+
+        raise ValueError(
+            "Invalid JSON."
+        )
+
+
+# =========================================================
+# HANDLER
+# =========================================================
 
 class handler(
     BaseHTTPRequestHandler
 ):
 
+    # -----------------------------------------------------
+    # OPTIONS
+    # -----------------------------------------------------
+
+    def do_OPTIONS(self):
+
+        json_response(
+            self,
+            204,
+            {},
+        )
+
+
+    # -----------------------------------------------------
+    # POST
+    # -----------------------------------------------------
+
     def do_POST(self):
+
+        job_nonce = ""
+        user_id = ""
 
         try:
 
-            # ---------------------------------
-            # 1. Verify worker request
-            # ---------------------------------
+            # =============================================
+            # 1. VERIFY WORKER SECRET
+            # =============================================
 
             if WORKER_SECRET:
 
                 supplied_secret = (
                     self.headers.get(
                         "x-analysis-worker-secret",
-                        ""
-                    )
+                        "",
+                    ).strip()
                 )
 
                 if (
@@ -271,72 +407,49 @@ class handler(
                         {
                             "error":
                                 "Unauthorized"
-                        }
+                        },
                     )
 
                     return
 
-            # ---------------------------------
-            # 2. Read webhook body
-            # ---------------------------------
 
-            content_length = int(
-                self.headers.get(
-                    "Content-Length",
-                    "0"
-                )
+            # =============================================
+            # 2. READ WEBHOOK
+            # =============================================
+
+            payload = read_request_body(
+                self
             )
 
-            if content_length <= 0:
+            if not isinstance(
+                payload,
+                dict,
+            ):
 
                 json_response(
                     self,
                     400,
                     {
                         "error":
-                            "Empty request body."
-                    }
+                            "Invalid webhook payload."
+                    },
                 )
 
                 return
 
-            raw_body = self.rfile.read(
-                content_length
-            )
 
-            try:
-
-                payload = json.loads(
-                    raw_body.decode(
-                        "utf-8"
-                    )
-                )
-
-            except Exception:
-
-                json_response(
-                    self,
-                    400,
-                    {
-                        "error":
-                            "Invalid JSON."
-                    }
-                )
-
-                return
-
-            # ---------------------------------
-            # 3. Get inserted database record
-            # ---------------------------------
+            # =============================================
+            # 3. GET DATABASE RECORD
+            # =============================================
 
             record = payload.get(
                 "record",
-                payload
+                payload,
             )
 
             if not isinstance(
                 record,
-                dict
+                dict,
             ):
 
                 json_response(
@@ -345,15 +458,16 @@ class handler(
                     {
                         "error":
                             "Invalid webhook record."
-                    }
+                    },
                 )
 
                 return
 
+
             job_nonce = str(
                 record.get(
                     "job_nonce",
-                    ""
+                    "",
                 )
             ).strip()
 
@@ -365,14 +479,15 @@ class handler(
                     {
                         "error":
                             "Missing job_nonce."
-                    }
+                    },
                 )
 
                 return
 
-            # ---------------------------------
-            # 4. Atomically claim the job
-            # ---------------------------------
+
+            # =============================================
+            # 4. CLAIM JOB
+            # =============================================
 
             job = claim_job(
                 job_nonce
@@ -380,44 +495,44 @@ class handler(
 
             if not job:
 
-                # Another worker may already have
-                # claimed it. This is NOT an error.
                 json_response(
                     self,
                     200,
                     {
                         "status":
                             "ignored",
+
                         "reason":
                             "Job already claimed "
-                            "or does not exist."
-                    }
+                            "or does not exist.",
+                    },
                 )
 
                 return
 
-            # ---------------------------------
-            # 5. Extract job data
-            # ---------------------------------
+
+            # =============================================
+            # 5. EXTRACT JOB
+            # =============================================
 
             user_id = str(
                 job.get(
                     "user_id",
-                    ""
+                    "",
                 )
             ).strip()
 
             instrument = str(
                 job.get(
                     "instrument",
-                    ""
+                    "",
                 )
             ).strip()
 
             trade_focus = str(
                 job.get(
                     "trade_focus",
-                    ""
+                    "",
                 )
             ).strip()
 
@@ -429,106 +544,134 @@ class handler(
                 "lower_timeframe_image"
             )
 
-            try:
 
-                # ---------------------------------
-                # 6. Validate job
-                # ---------------------------------
+            # =============================================
+            # 6. VALIDATE
+            # =============================================
 
-                validate_instrument(
-                    instrument
+            validate_instrument(
+                instrument
+            )
+
+            validate_focus(
+                trade_focus
+            )
+
+            validate_image_data_url(
+                h4_image,
+                "higher_timeframe_image",
+            )
+
+            validate_image_data_url(
+                m15_image,
+                "lower_timeframe_image",
+            )
+
+
+            # =============================================
+            # 7. RUN AI ANALYSIS
+            # =============================================
+
+            raw_response = (
+                create_background_response(
+                    instrument=instrument,
+                    trade_focus=trade_focus,
+                    higher_timeframe_image=h4_image,
+                    lower_timeframe_image=m15_image,
+                )
+            )
+
+
+            # =============================================
+            # 8. PARSE RESULT
+            # =============================================
+
+            result = (
+                parse_completed_response(
+                    raw_response,
+                    instrument=instrument,
+                )
+            )
+
+            if not isinstance(
+                result,
+                dict,
+            ):
+
+                raise RuntimeError(
+                    "The analysis returned an invalid result."
                 )
 
-                validate_focus(
-                    trade_focus
-                )
 
-                validate_image_data_url(
-                    h4_image,
-                    "higher_timeframe_image"
-                )
+            # =============================================
+            # 9. ENCODE RESULT
+            # =============================================
 
-                validate_image_data_url(
-                    m15_image,
-                    "lower_timeframe_image"
-                )
+            encoded_result = encode_result(
+                result
+            )
 
-                # ---------------------------------
-                # 7. Run Gemini analysis
-                # ---------------------------------
 
-                raw_response = (
-                    create_background_response(
-                        instrument=instrument,
-                        trade_focus=trade_focus,
-                        higher_timeframe_image=h4_image,
-                        lower_timeframe_image=m15_image,
-                    )
-                )
+            # =============================================
+            # 10. SAVE COMPLETED JOB
+            # =============================================
 
-                # ---------------------------------
-                # 8. Parse Gemini result
-                # ---------------------------------
+            patch_job(
+                job_nonce,
+                {
+                    "status":
+                        "completed",
 
-                result = (
-                    parse_completed_response(
-                        raw_response,
-                        instrument=instrument
-                    )
-                )
+                    "openai_response_id":
+                        encoded_result,
 
-                # ---------------------------------
-                # 9. Save completed result
-                # ---------------------------------
+                    "error_message":
+                        None,
+                },
+            )
 
-                encoded_result = encode_result(
-                    result
-                )
 
-                patch_job(
-                    job_nonce,
-                    {
-                        "status":
-                            "completed",
+            # =============================================
+            # 11. SUCCESS
+            # =============================================
 
-                        "openai_response_id":
-                            encoded_result,
+            json_response(
+                self,
+                200,
+                {
+                    "status":
+                        "completed",
 
-                        "error_message":
-                            None,
-                    }
-                )
+                    "job_id":
+                        job_nonce,
+                },
+            )
 
-                json_response(
-                    self,
-                    200,
-                    {
-                        "status":
-                            "completed",
+            return
 
-                        "job_id":
-                            job_nonce,
-                    }
-                )
 
-            except Exception as exc:
+        except Exception as exc:
 
-                error_message = str(
-                    exc
-                ).strip()
+            error_message = str(
+                exc
+            ).strip()
 
-                if not error_message:
-                    error_message = (
-                        "Analysis processing failed."
-                    )
+            if not error_message:
 
                 error_message = (
-                    error_message[:2000]
+                    "Analysis processing failed."
                 )
 
-                # ---------------------------------
-                # 10. Mark job failed
-                # ---------------------------------
+            error_message = (
+                error_message[:2000]
+            )
+
+
+            # =============================================
+            # MARK JOB FAILED
+            # =============================================
+
+            if job_nonce:
 
                 try:
 
@@ -540,45 +683,47 @@ class handler(
 
                             "error_message":
                                 error_message,
-                        }
+                        },
                     )
 
                 except Exception:
                     pass
 
-                # ---------------------------------
-                # 11. Return reserved daily slot
-                # ---------------------------------
 
-                safe_release_slot(
-                    user_id
-                )
+            # =============================================
+            # RELEASE SLOT
+            # =============================================
 
-                json_response(
-                    self,
-                    200,
-                    {
-                        "status":
-                            "failed",
+            safe_release_slot(
+                user_id
+            )
 
-                        "job_id":
-                            job_nonce,
 
-                        "error":
-                            error_message,
-                    }
-                )
-
-        except Exception as exc:
+            # =============================================
+            # RETURN FAILURE
+            # =============================================
 
             json_response(
                 self,
-                500,
+                200,
                 {
+                    "status":
+                        "failed",
+
+                    "job_id":
+                        job_nonce,
+
                     "error":
-                        str(exc)
-                }
+                        error_message,
+                },
             )
+
+            return
+
+
+    # -----------------------------------------------------
+    # GET
+    # -----------------------------------------------------
 
     def do_GET(self):
 
@@ -588,5 +733,5 @@ class handler(
             {
                 "status":
                     "analysis worker online"
-            }
+            },
         )
