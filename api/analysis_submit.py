@@ -1,14 +1,13 @@
-import base64
-import hashlib
-import hmac
 import json
 import os
 import time
+import uuid
+import base64
+import hashlib
+import hmac
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid
-
 from http.server import BaseHTTPRequestHandler
 
 from analysis_common import (
@@ -18,7 +17,7 @@ from analysis_common import (
     validate_instrument,
 )
 
-from api.user_security import (
+from user_security import (
     extract_bearer_token,
     is_owner_user,
     release_analysis_slot,
@@ -27,31 +26,32 @@ from api.user_security import (
 )
 
 
-# ============================================================
+# ---------------------------------------------------------
+# CONFIG
+# ---------------------------------------------------------
+
+JOB_TTL_SECONDS = 24 * 60 * 60
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get(
+    "SUPABASE_SERVICE_ROLE_KEY",
+    ""
+)
+
+
+# ---------------------------------------------------------
 # JOB TOKEN
-# ============================================================
-
-JOB_TTL_SECONDS = 15 * 60
-
+# ---------------------------------------------------------
 
 def _job_secret():
-
-    secret = os.getenv(
-        "JOB_TOKEN_SECRET",
-        "",
-    ).strip()
+    secret = os.environ.get("JOB_TOKEN_SECRET", "").strip()
 
     if not secret:
-
-        secret = os.getenv(
-            "GEMINI_API_KEY",
-            "",
-        ).strip()
+        secret = os.environ.get("GEMINI_API_KEY", "").strip()
 
     if not secret:
-
         raise RuntimeError(
-            "JOB_TOKEN_SECRET or GEMINI_API_KEY is missing from Vercel."
+            "JOB_TOKEN_SECRET is not configured."
         )
 
     return secret.encode("utf-8")
@@ -63,13 +63,14 @@ def _create_job_token(
     trade_focus,
     user_id,
 ):
+    created_at = int(time.time())
 
     payload = {
-        "job_nonce": str(job_nonce),
-        "instrument": str(instrument),
-        "trade_focus": str(trade_focus),
-        "user_id": str(user_id),
-        "created_at": int(time.time()),
+        "job_nonce": job_nonce,
+        "instrument": instrument,
+        "trade_focus": trade_focus,
+        "user_id": user_id,
+        "created_at": created_at,
     }
 
     raw = json.dumps(
@@ -78,500 +79,480 @@ def _create_job_token(
         sort_keys=True,
     ).encode("utf-8")
 
+    encoded = base64.urlsafe_b64encode(
+        raw
+    ).decode("ascii").rstrip("=")
+
     signature = hmac.new(
         _job_secret(),
-        raw,
+        encoded.encode("ascii"),
         hashlib.sha256,
     ).digest()
 
-    encoded_payload = (
-        base64.urlsafe_b64encode(raw)
-        .decode("ascii")
-        .rstrip("=")
-    )
+    encoded_signature = base64.urlsafe_b64encode(
+        signature
+    ).decode("ascii").rstrip("=")
 
-    encoded_signature = (
-        base64.urlsafe_b64encode(signature)
-        .decode("ascii")
-        .rstrip("=")
-    )
-
-    return (
-        encoded_payload
-        + "."
-        + encoded_signature
-    )
+    return encoded + "." + encoded_signature
 
 
-# ============================================================
+# ---------------------------------------------------------
 # SUPABASE
-# ============================================================
+# ---------------------------------------------------------
 
-def _supabase_url():
-
-    url = os.getenv(
-        "SUPABASE_URL",
-        "",
-    ).strip().rstrip("/")
-
-    if not url:
-
-        raise RuntimeError(
-            "SUPABASE_URL is missing from Vercel."
-        )
-
-    for suffix in (
-        "/rest/v1",
-        "/auth/v1",
-        "/storage/v1",
-    ):
-
-        if url.endswith(suffix):
-
-            url = url[
-                :-len(suffix)
-            ]
-
-    return url
-
-
-def _supabase_service_key():
-
-    key = os.getenv(
-        "SUPABASE_SERVICE_ROLE_KEY",
-        "",
-    ).strip()
-
-    if not key:
-
-        raise RuntimeError(
-            "SUPABASE_SERVICE_ROLE_KEY is missing from Vercel."
-        )
-
-    return key
-
-
-def _supabase_headers():
-
-    key = _supabase_service_key()
-
-    return {
-        "apikey": key,
-        "Authorization": "Bearer " + key,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-
-# ============================================================
-# CREATE QUEUED JOB
-# ============================================================
-
-def _create_job(
-    user_id,
-    job_nonce,
-    instrument,
-    trade_focus,
-    higher_image,
-    lower_image,
+def _supabase_request(
+    method,
+    path,
+    payload=None,
+    timeout=30,
+    extra_headers=None,
 ):
+    if not SUPABASE_URL:
+        raise RuntimeError(
+            "SUPABASE_URL is not configured."
+        )
 
-    payload = {
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError(
+            "SUPABASE_SERVICE_ROLE_KEY is not configured."
+        )
 
-        "user_id":
-            str(user_id),
+    url = SUPABASE_URL + path
 
-        "job_nonce":
-            str(job_nonce),
-
-        "instrument":
-            str(instrument),
-
-        "trade_focus":
-            str(trade_focus),
-
-        "status":
-            "queued",
-
-        "higher_timeframe_image":
-            higher_image,
-
-        "lower_timeframe_image":
-            lower_image,
-
-        "openai_response_id":
-            "",
-
-        "error_message":
-            "",
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": (
+            "Bearer " + SUPABASE_SERVICE_ROLE_KEY
+        ),
+        "Content-Type": "application/json",
     }
 
-    body = json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    if extra_headers:
+        headers.update(extra_headers)
+
+    data = None
+
+    if payload is not None:
+        data = json.dumps(
+            payload,
+            ensure_ascii=False,
+        ).encode("utf-8")
 
     request = urllib.request.Request(
-
-        _supabase_url()
-        + "/rest/v1/analysis_jobs",
-
-        data=body,
-
-        headers={
-            **_supabase_headers(),
-
-            "Prefer":
-                "return=minimal",
-        },
-
-        method="POST",
+        url,
+        data=data,
+        headers=headers,
+        method=method,
     )
 
     try:
-
         with urllib.request.urlopen(
             request,
-            timeout=15,
+            timeout=timeout,
         ) as response:
 
-            response.read()
+            raw = response.read().decode(
+                "utf-8",
+                errors="replace",
+            )
+
+            if not raw:
+                return None
+
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                return raw
 
     except urllib.error.HTTPError as exc:
-
-        raw = exc.read().decode(
+        detail = exc.read().decode(
             "utf-8",
             errors="replace",
         )
 
         raise RuntimeError(
-            "Analysis job could not be created: "
-            + raw
-        ) from exc
+            f"Supabase request failed "
+            f"({exc.code}): {detail}"
+        )
 
-    except (
-        urllib.error.URLError,
-        TimeoutError,
-    ) as exc:
-
+    except urllib.error.URLError as exc:
         raise RuntimeError(
-            "Supabase could not create the analysis job."
-        ) from exc
+            f"Supabase connection failed: {exc}"
+        )
 
 
-# ============================================================
-# HANDLER
-# ============================================================
+# ---------------------------------------------------------
+# CREATE QUEUED JOB
+# ---------------------------------------------------------
 
-class handler(
-    BaseHTTPRequestHandler
+def _create_queued_job(
+    user_id,
+    instrument,
+    trade_focus,
+    higher_timeframe_image,
+    lower_timeframe_image,
 ):
+    job_nonce = uuid.uuid4().hex
+
+    payload = {
+        "job_nonce": job_nonce,
+        "user_id": user_id,
+
+        # Keep this format for compatibility with
+        # the existing database/worker structure.
+        "instrument": (
+            instrument + "|" + job_nonce
+        ),
+
+        "trade_focus": trade_focus,
+
+        "higher_timeframe_image": (
+            higher_timeframe_image
+        ),
+
+        "lower_timeframe_image": (
+            lower_timeframe_image
+        ),
+
+        "status": "queued",
+
+        "openai_response_id": None,
+
+        "error_message": None,
+    }
+
+    result = _supabase_request(
+        "POST",
+        "/rest/v1/analysis_jobs",
+        payload,
+        timeout=30,
+        extra_headers={
+            "Prefer": "return=representation",
+        },
+    )
+
+    if not result:
+        raise RuntimeError(
+            "The analysis job could not be created."
+        )
+
+    return job_nonce
+
+
+# ---------------------------------------------------------
+# REQUEST BODY
+# ---------------------------------------------------------
+
+def _read_json(handler):
+    raw_length = handler.headers.get(
+        "Content-Length",
+        "0",
+    )
+
+    try:
+        content_length = int(raw_length)
+    except ValueError:
+        raise ValueError(
+            "Invalid Content-Length."
+        )
+
+    if content_length <= 0:
+        raise ValueError(
+            "Request body is empty."
+        )
+
+    # Protect the endpoint from oversized requests.
+    if content_length > 25 * 1024 * 1024:
+        raise ValueError(
+            "Request body is too large."
+        )
+
+    raw = handler.rfile.read(
+        content_length
+    )
+
+    try:
+        return json.loads(
+            raw.decode("utf-8")
+        )
+    except Exception:
+        raise ValueError(
+            "Invalid JSON request."
+        )
+
+
+# ---------------------------------------------------------
+# AUTHENTICATION
+# ---------------------------------------------------------
+
+def _authenticate_user(handler):
+    token = extract_bearer_token(
+        handler.headers.get(
+            "Authorization",
+            "",
+        )
+    )
+
+    if not token:
+        raise ValueError(
+            "Authentication required."
+        )
+
+    return verify_access_token(token)
+
+
+# ---------------------------------------------------------
+# HANDLER
+# ---------------------------------------------------------
+
+class handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
-
-        json_response(
-            self,
-            204,
-            {},
+        self.send_response(204)
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            "*",
         )
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization",
+        )
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "POST, OPTIONS",
+        )
+        self.end_headers()
+
 
     def do_POST(self):
 
-        reserved = False
-        user = None
+        reserved_slot = False
+        user_id = None
 
         try:
+            # ---------------------------------------------
+            # AUTH
+            # ---------------------------------------------
 
-            # ------------------------------------------------
-            # AUTHENTICATION
-            # ------------------------------------------------
+            user = _authenticate_user(self)
 
-            access_token = (
-                extract_bearer_token(
-                    self
+            if not isinstance(user, dict):
+                raise RuntimeError(
+                    "Invalid authentication response."
                 )
-            )
-
-            user = verify_access_token(
-                access_token
-            )
 
             user_id = str(
-                user["id"]
+                user.get("id", "")
+            ).strip()
+
+            if not user_id:
+                raise ValueError(
+                    "Invalid authenticated user."
+                )
+
+
+            # ---------------------------------------------
+            # BODY
+            # ---------------------------------------------
+
+            body = _read_json(self)
+
+            if not isinstance(body, dict):
+                raise ValueError(
+                    "Invalid request body."
+                )
+
+
+            # ---------------------------------------------
+            # INPUTS
+            # ---------------------------------------------
+
+            instrument = str(
+                body.get(
+                    "instrument",
+                    "",
+                )
+            ).strip().upper()
+
+            trade_focus = str(
+                body.get(
+                    "trade_focus",
+                    "",
+                )
+            ).strip().upper()
+
+            higher_timeframe_image = body.get(
+                "higher_timeframe_image"
             )
+
+            lower_timeframe_image = body.get(
+                "lower_timeframe_image"
+            )
+
+
+            # ---------------------------------------------
+            # VALIDATION
+            # ---------------------------------------------
+
+            validate_instrument(
+                instrument
+            )
+
+            validate_focus(
+                trade_focus
+            )
+
+            validate_image_data_url(
+                higher_timeframe_image,
+                "higher_timeframe_image",
+            )
+
+            validate_image_data_url(
+                lower_timeframe_image,
+                "lower_timeframe_image",
+            )
+
+
+            # ---------------------------------------------
+            # DAILY SLOT
+            # ---------------------------------------------
 
             owner = is_owner_user(
-                user
+                user_id
             )
-
-            # ------------------------------------------------
-            # REQUEST
-            # ------------------------------------------------
-
-            try:
-
-                length = int(
-                    self.headers.get(
-                        "Content-Length",
-                        "0",
-                    )
-                )
-
-            except ValueError:
-
-                raise ValueError(
-                    "Invalid request."
-                )
-
-            if (
-                length <= 0
-                or length > 25 * 1024 * 1024
-            ):
-
-                raise ValueError(
-                    "Invalid chart request."
-                )
-
-            raw = self.rfile.read(
-                length
-            )
-
-            try:
-
-                data = json.loads(
-                    raw.decode("utf-8")
-                )
-
-            except json.JSONDecodeError as exc:
-
-                raise ValueError(
-                    "Invalid request JSON."
-                ) from exc
-
-            if not isinstance(
-                data,
-                dict,
-            ):
-
-                raise ValueError(
-                    "Invalid request."
-                )
-
-            # ------------------------------------------------
-            # VALIDATION
-            # ------------------------------------------------
-
-            instrument = validate_instrument(
-                data.get(
-                    "instrument"
-                )
-            )
-
-            trade_focus = validate_focus(
-                data.get(
-                    "trade_focus",
-                    "DAY TRADE",
-                )
-            )
-
-            higher_image = (
-                validate_image_data_url(
-                    data.get(
-                        "higher_timeframe_image"
-                    ),
-                    "4H chart",
-                )
-            )
-
-            lower_image = (
-                validate_image_data_url(
-                    data.get(
-                        "lower_timeframe_image"
-                    ),
-                    "15M chart",
-                )
-            )
-
-            # ------------------------------------------------
-            # DAILY LIMIT
-            # ------------------------------------------------
 
             if not owner:
 
-                slot = reserve_analysis_slot(
+                reserve_analysis_slot(
                     user_id
                 )
 
-                if slot == -1:
+                reserved_slot = True
 
-                    json_response(
-                        self,
-                        429,
-                        {
-                            "error":
-                                "Daily analysis limit reached.",
 
-                            "daily_limit":
-                                4,
+            # ---------------------------------------------
+            # CREATE QUEUED JOB
+            # ---------------------------------------------
 
-                            "remaining":
-                                0,
-
-                            "is_owner":
-                                False,
-                        },
-                    )
-
-                    return
-
-                reserved = True
-
-                remaining = max(
-                    0,
-                    4 - slot,
-                )
-
-            else:
-
-                remaining = None
-
-            # ------------------------------------------------
-            # UNIQUE JOB
-            # ------------------------------------------------
-
-            job_nonce = uuid.uuid4().hex
-
-            # ------------------------------------------------
-            # SAVE QUEUED JOB
-            # ------------------------------------------------
-
-            try:
-
-                _create_job(
-                    user_id=user_id,
-                    job_nonce=job_nonce,
-                    instrument=instrument,
-                    trade_focus=trade_focus,
-                    higher_image=higher_image,
-                    lower_image=lower_image,
-                )
-
-            except Exception:
-
-                if reserved:
-
-                    try:
-
-                        release_analysis_slot(
-                            user_id
-                        )
-
-                    except Exception:
-                        pass
-
-                raise
-
-            # ------------------------------------------------
-            # CREATE SIGNED JOB TOKEN
-            # ------------------------------------------------
-
-            job_id = _create_job_token(
-
-                job_nonce=
-                    job_nonce,
-
-                instrument=
-                    instrument,
-
-                trade_focus=
-                    trade_focus,
-
-                user_id=
-                    user_id,
+            job_nonce = _create_queued_job(
+                user_id=user_id,
+                instrument=instrument,
+                trade_focus=trade_focus,
+                higher_timeframe_image=(
+                    higher_timeframe_image
+                ),
+                lower_timeframe_image=(
+                    lower_timeframe_image
+                ),
             )
 
-            # ------------------------------------------------
-            # IMPORTANT
+
+            # ---------------------------------------------
+            # SIGNED JOB TOKEN
+            # ---------------------------------------------
+
+            job_token = _create_job_token(
+                job_nonce=job_nonce,
+                instrument=instrument,
+                trade_focus=trade_focus,
+                user_id=user_id,
+            )
+
+
+            # ---------------------------------------------
+            # SUCCESS
+            # ---------------------------------------------
             #
-            # We DO NOT call Gemini here.
+            # IMPORTANT:
+            # Gemini is NOT called here.
             #
-            # The job is queued and the worker processes it.
-            # ------------------------------------------------
+            # Supabase INSERT webhook starts the worker.
+            #
+            # ---------------------------------------------
 
             json_response(
                 self,
                 202,
                 {
-                    "status":
-                        "queued",
-
-                    "job_id":
-                        job_id,
-
-                    "poll_after_seconds":
-                        2,
-
-                    "is_owner":
-                        owner,
-
-                    "daily_limit":
-                        None
-                        if owner
-                        else 4,
-
-                    "remaining":
-                        remaining,
+                    "status": "queued",
+                    "job_id": job_token,
+                    "job_nonce": job_nonce,
                 },
             )
+
+            return
+
 
         except ValueError as exc:
 
-            json_response(
-                self,
-                400,
-                {
-                    "error":
-                        str(exc)
-                },
-            )
+            # If the daily slot was reserved and something
+            # failed afterward, give the slot back.
 
-        except RuntimeError as exc:
-
-            if reserved and user:
-
+            if reserved_slot and user_id:
                 try:
-
                     release_analysis_slot(
-                        str(
-                            user["id"]
-                        )
+                        user_id
                     )
-
                 except Exception:
                     pass
 
             json_response(
                 self,
-                503,
+                400,
                 {
-                    "error":
-                        str(exc)
+                    "error": str(exc)
                 },
             )
 
+            return
+
+
+        except RuntimeError as exc:
+
+            if reserved_slot and user_id:
+                try:
+                    release_analysis_slot(
+                        user_id
+                    )
+                except Exception:
+                    pass
+
+            message = str(exc)
+
+            # Daily-limit errors should remain 429.
+            lowered = message.lower()
+
+            if (
+                "limit" in lowered
+                or "daily" in lowered
+                or "analyses" in lowered
+            ):
+                json_response(
+                    self,
+                    429,
+                    {
+                        "error": message
+                    },
+                )
+            else:
+                json_response(
+                    self,
+                    500,
+                    {
+                        "error": message
+                    },
+                )
+
+            return
+
+
         except Exception as exc:
 
-            if reserved and user:
-
+            if reserved_slot and user_id:
                 try:
-
                     release_analysis_slot(
-                        str(
-                            user["id"]
-                        )
+                        user_id
                     )
-
                 except Exception:
                     pass
 
@@ -579,8 +560,21 @@ class handler(
                 self,
                 500,
                 {
-                    "error":
-                        "The analysis could not be started: "
-                        + str(exc)
+                    "error": (
+                        "Unable to create "
+                        "analysis job."
+                    )
                 },
             )
+
+            return
+
+
+    def do_GET(self):
+        json_response(
+            self,
+            200,
+            {
+                "status": "analysis submit online"
+            },
+        )
