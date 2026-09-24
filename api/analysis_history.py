@@ -1,98 +1,126 @@
+import base64
 import json
 import os
-import urllib.request
 import urllib.error
 import urllib.parse
+import urllib.request
+from http.server import BaseHTTPRequestHandler
 
 
-def send_json(handler, status, data):
-    body = json.dumps(data).encode("utf-8")
+SUPABASE_URL = os.environ.get(
+    "SUPABASE_URL",
+    ""
+).strip().rstrip("/")
 
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", "*")
+SUPABASE_ANON_KEY = os.environ.get(
+    "SUPABASE_ANON_KEY",
+    ""
+).strip()
+
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get(
+    "SUPABASE_SERVICE_ROLE_KEY",
+    ""
+).strip()
+
+
+def send_json(
+    handler,
+    status,
+    data,
+):
+    body = json.dumps(
+        data,
+        ensure_ascii=False,
+        default=str,
+    ).encode("utf-8")
+
+    handler.send_response(
+        status
+    )
+
+    handler.send_header(
+        "Content-Type",
+        "application/json; charset=utf-8",
+    )
+
+    handler.send_header(
+        "Content-Length",
+        str(len(body)),
+    )
+
+    handler.send_header(
+        "Cache-Control",
+        "no-store",
+    )
+
+    handler.send_header(
+        "Access-Control-Allow-Origin",
+        "*",
+    )
+
     handler.send_header(
         "Access-Control-Allow-Headers",
-        "Authorization, Content-Type"
+        "Authorization, Content-Type",
     )
+
     handler.send_header(
         "Access-Control-Allow-Methods",
-        "GET, OPTIONS"
+        "GET, OPTIONS",
     )
+
     handler.end_headers()
 
     handler.wfile.write(body)
 
 
 def get_supabase_url():
-    url = os.environ.get("SUPABASE_URL", "").strip()
-
-    if not url:
-        raise Exception("SUPABASE_URL is missing")
-
-    url = url.rstrip("/")
-
-    for suffix in [
-        "/rest/v1",
-        "/auth/v1",
-        "/storage/v1"
-    ]:
-        if url.endswith(suffix):
-            url = url[:-len(suffix)]
-
-    return url
-
-
-def get_supabase_key():
-    key = os.environ.get(
-        "SUPABASE_SERVICE_ROLE_KEY",
-        ""
-    ).strip()
-
-    if not key:
-        raise Exception(
-            "SUPABASE_SERVICE_ROLE_KEY is missing"
+    if not SUPABASE_URL:
+        raise RuntimeError(
+            "SUPABASE_URL is missing."
         )
 
-    return key
+    return SUPABASE_URL
 
 
-def get_bearer_token(handler):
+def get_user_from_token(
+    handler,
+):
     authorization = handler.headers.get(
         "Authorization",
-        ""
+        "",
     ).strip()
 
-    if not authorization:
-        raise Exception(
-            "Authorization header is missing"
+    if not authorization.startswith(
+        "Bearer "
+    ):
+        raise ValueError(
+            "Authorization bearer token is required."
         )
 
-    if not authorization.startswith("Bearer "):
-        raise Exception(
-            "Authorization header is not Bearer format"
-        )
-
-    token = authorization[7:].strip()
+    token = authorization[
+        7:
+    ].strip()
 
     if not token:
-        raise Exception(
-            "Bearer token is empty"
+        raise ValueError(
+            "Authorization bearer token is required."
         )
 
-    return token
-
-
-def verify_user(token):
-    url = get_supabase_url() + "/auth/v1/user"
+    if not SUPABASE_ANON_KEY:
+        raise RuntimeError(
+            "SUPABASE_ANON_KEY is missing."
+        )
 
     request = urllib.request.Request(
-        url,
+        get_supabase_url()
+        + "/auth/v1/user",
         headers={
-            "apikey": get_supabase_key(),
-            "Authorization": "Bearer " + token,
-            "Content-Type": "application/json",
+            "apikey":
+                SUPABASE_ANON_KEY,
+            "Authorization":
+                "Bearer " + token,
+            "Accept":
+                "application/json",
         },
         method="GET",
     )
@@ -100,52 +128,74 @@ def verify_user(token):
     try:
         with urllib.request.urlopen(
             request,
-            timeout=15
-        ) as result:
+            timeout=15,
+        ) as response:
 
-            raw = result.read().decode(
-                "utf-8",
-                errors="replace"
+            user = json.loads(
+                response.read().decode(
+                    "utf-8"
+                )
             )
 
-            return json.loads(raw)
-
-    except urllib.error.HTTPError as error:
-        error_body = error.read().decode(
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(
             "utf-8",
-            errors="replace"
+            errors="replace",
         )
 
-        raise Exception(
-            "Supabase authentication failed: HTTP "
-            + str(error.code)
-            + " "
-            + error_body[:500]
+        raise ValueError(
+            "Session verification failed: "
+            + detail[:500]
         )
 
+    if not isinstance(
+        user,
+        dict,
+    ) or not user.get("id"):
 
-def get_history(user_id, token):
-    encoded_user_id = urllib.parse.quote(
-        user_id,
-        safe=""
+        raise ValueError(
+            "Invalid user session."
+        )
+
+    return (
+        str(user["id"]).strip(),
+        token,
     )
 
-    url = (
-        get_supabase_url()
-        + "/rest/v1/analysis_jobs"
-        + "?user_id=eq."
-        + encoded_user_id
+
+def load_history(
+    user_id,
+):
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError(
+            "SUPABASE_SERVICE_ROLE_KEY is missing."
+        )
+
+    encoded_user = urllib.parse.quote(
+        user_id,
+        safe="",
+    )
+
+    path = (
+        "/rest/v1/analysis_jobs"
+        "?user_id=eq."
+        + encoded_user
         + "&status=eq.completed"
         + "&order=created_at.desc"
         + "&limit=50"
     )
 
     request = urllib.request.Request(
-        url,
+        get_supabase_url()
+        + path,
         headers={
-            "apikey": get_supabase_key(),
-            "Authorization": "Bearer " + token,
-            "Content-Type": "application/json",
+            "apikey":
+                SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization":
+                "Bearer "
+                + SUPABASE_SERVICE_ROLE_KEY,
+            "Accept":
+                "application/json",
         },
         method="GET",
     )
@@ -153,97 +203,218 @@ def get_history(user_id, token):
     try:
         with urllib.request.urlopen(
             request,
-            timeout=15
-        ) as result:
+            timeout=15,
+        ) as response:
 
-            raw = result.read().decode(
+            raw = response.read().decode(
                 "utf-8",
-                errors="replace"
+                errors="replace",
             )
 
             return json.loads(raw)
 
-    except urllib.error.HTTPError as error:
-        error_body = error.read().decode(
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(
             "utf-8",
-            errors="replace"
+            errors="replace",
         )
 
-        raise Exception(
-            "Supabase history query failed: HTTP "
-            + str(error.code)
-            + " "
-            + error_body[:1000]
+        raise RuntimeError(
+            "Supabase history query failed: "
+            + detail[:1000]
         )
 
 
-class Handler:
+def decode_result(
+    encoded_result,
+):
+    if not isinstance(
+        encoded_result,
+        str,
+    ) or not encoded_result:
+        return {}
+
+    try:
+        padded = (
+            encoded_result
+            + "="
+            * (-len(encoded_result) % 4)
+        )
+
+        raw = base64.urlsafe_b64decode(
+            padded.encode("ascii")
+        )
+
+        result = json.loads(
+            raw.decode("utf-8")
+        )
+
+        return (
+            result
+            if isinstance(result, dict)
+            else {}
+        )
+
+    except Exception:
+        return {}
+
+
+class handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
-        send_json(self, 204, {})
+        self.send_response(204)
+
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            "*",
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Authorization, Content-Type",
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "GET, OPTIONS",
+        )
+
+        self.end_headers()
 
     def do_GET(self):
+
         try:
-            # 1. Get login token
-            token = get_bearer_token(self)
 
-            # 2. Verify logged-in user
-            user = verify_user(token)
-
-            user_id = user.get("id")
-
-            if not user_id:
-                raise Exception(
-                    "Supabase user response has no id"
+            # -----------------------------------------
+            # AUTHENTICATED USER
+            # -----------------------------------------
+            user_id, token = (
+                get_user_from_token(
+                    self
                 )
-
-            # 3. Get only this user's completed analyses
-            jobs = get_history(
-                user_id,
-                token
             )
 
-            # 4. Return history
+            # -----------------------------------------
+            # HISTORY
+            # -----------------------------------------
+            rows = load_history(
+                user_id
+            )
+
+            if not isinstance(
+                rows,
+                list,
+            ):
+                rows = []
+
+            history = []
+
+            for row in rows:
+
+                result = decode_result(
+                    row.get(
+                        "openai_response_id"
+                    )
+                )
+
+                item = {
+                    "job_id":
+                        row.get(
+                            "job_nonce"
+                        ),
+
+                    "trade_focus":
+                        row.get(
+                            "trade_focus"
+                        ),
+
+                    "created_at":
+                        row.get(
+                            "created_at"
+                        ),
+
+                    "status":
+                        "completed",
+                }
+
+                # Put the saved analysis
+                # fields directly into the item.
+                if result:
+                    item.update(
+                        result
+                    )
+
+                # Always preserve the database
+                # instrument as fallback.
+                if not item.get(
+                    "instrument"
+                ):
+                    item[
+                        "instrument"
+                    ] = str(
+                        row.get(
+                            "instrument",
+                            "",
+                        )
+                    ).split(
+                        "|",
+                        1
+                    )[0]
+
+                history.append(
+                    item
+                )
+
             send_json(
                 self,
                 200,
                 {
-                    "status": "ok",
-                    "count": len(jobs),
-                    "history": jobs,
-                }
+                    "status":
+                        "ok",
+                    "count":
+                        len(history),
+                    "history":
+                        history,
+                    "analyses":
+                        history,
+                },
             )
 
-        except urllib.error.HTTPError as error:
+        except ValueError as exc:
 
-            body = error.read().decode(
-                "utf-8",
-                errors="replace"
+            send_json(
+                self,
+                401,
+                {
+                    "status":
+                        "error",
+                    "error":
+                        str(exc),
+                },
             )
+
+        except RuntimeError as exc:
 
             send_json(
                 self,
                 500,
                 {
-                    "status": "error",
-                    "type": "HTTPError",
-                    "code": error.code,
-                    "message": body[:1000],
-                }
+                    "status":
+                        "error",
+                    "error":
+                        str(exc),
+                },
             )
 
-        except Exception as error:
+        except Exception as exc:
 
             send_json(
                 self,
                 500,
                 {
-                    "status": "error",
-                    "type": type(error).__name__,
-                    "message": str(error),
-                }
+                    "status":
+                        "error",
+                    "error":
+                        str(exc),
+                },
             )
-
-
-# Vercel Python entry point
-handler = Handler()
