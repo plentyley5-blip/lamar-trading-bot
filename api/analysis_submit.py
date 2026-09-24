@@ -10,14 +10,14 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 
-from analysis_common import (
+from api.analysis_common import (
     json_response,
     validate_focus,
     validate_image_data_url,
     validate_instrument,
 )
 
-from user_security import (
+from api.user_security import (
     extract_bearer_token,
     is_owner_user,
     release_analysis_slot,
@@ -26,28 +26,38 @@ from user_security import (
 )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # CONFIG
-# ---------------------------------------------------------
+# =========================================================
 
 JOB_TTL_SECONDS = 24 * 60 * 60
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_URL = os.environ.get(
+    "SUPABASE_URL",
+    ""
+).strip().rstrip("/")
+
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get(
     "SUPABASE_SERVICE_ROLE_KEY",
     ""
-)
+).strip()
 
 
-# ---------------------------------------------------------
+# =========================================================
 # JOB TOKEN
-# ---------------------------------------------------------
+# =========================================================
 
 def _job_secret():
-    secret = os.environ.get("JOB_TOKEN_SECRET", "").strip()
+    secret = os.environ.get(
+        "JOB_TOKEN_SECRET",
+        ""
+    ).strip()
 
     if not secret:
-        secret = os.environ.get("GEMINI_API_KEY", "").strip()
+        secret = os.environ.get(
+            "GEMINI_API_KEY",
+            ""
+        ).strip()
 
     if not secret:
         raise RuntimeError(
@@ -93,12 +103,16 @@ def _create_job_token(
         signature
     ).decode("ascii").rstrip("=")
 
-    return encoded + "." + encoded_signature
+    return (
+        encoded
+        + "."
+        + encoded_signature
+    )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # SUPABASE
-# ---------------------------------------------------------
+# =========================================================
 
 def _supabase_request(
     method,
@@ -122,9 +136,11 @@ def _supabase_request(
     headers = {
         "apikey": SUPABASE_SERVICE_ROLE_KEY,
         "Authorization": (
-            "Bearer " + SUPABASE_SERVICE_ROLE_KEY
+            "Bearer "
+            + SUPABASE_SERVICE_ROLE_KEY
         ),
         "Content-Type": "application/json",
+        "Accept": "application/json",
     }
 
     if extra_headers:
@@ -165,25 +181,28 @@ def _supabase_request(
                 return raw
 
     except urllib.error.HTTPError as exc:
+
         detail = exc.read().decode(
             "utf-8",
             errors="replace",
         )
 
         raise RuntimeError(
-            f"Supabase request failed "
+            "Supabase request failed "
             f"({exc.code}): {detail}"
         )
 
     except urllib.error.URLError as exc:
+
         raise RuntimeError(
-            f"Supabase connection failed: {exc}"
+            "Supabase connection failed: "
+            + str(exc)
         )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # CREATE QUEUED JOB
-# ---------------------------------------------------------
+# =========================================================
 
 def _create_queued_job(
     user_id,
@@ -198,10 +217,10 @@ def _create_queued_job(
         "job_nonce": job_nonce,
         "user_id": user_id,
 
-        # Keep this format for compatibility with
-        # the existing database/worker structure.
         "instrument": (
-            instrument + "|" + job_nonce
+            instrument
+            + "|"
+            + job_nonce
         ),
 
         "trade_focus": trade_focus,
@@ -239,9 +258,9 @@ def _create_queued_job(
     return job_nonce
 
 
-# ---------------------------------------------------------
+# =========================================================
 # REQUEST BODY
-# ---------------------------------------------------------
+# =========================================================
 
 def _read_json(handler):
     raw_length = handler.headers.get(
@@ -261,8 +280,9 @@ def _read_json(handler):
             "Request body is empty."
         )
 
-    # Protect the endpoint from oversized requests.
-    if content_length > 25 * 1024 * 1024:
+    if content_length > (
+        25 * 1024 * 1024
+    ):
         raise ValueError(
             "Request body is too large."
         )
@@ -281,16 +301,19 @@ def _read_json(handler):
         )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # AUTHENTICATION
-# ---------------------------------------------------------
+# =========================================================
 
 def _authenticate_user(handler):
+
+    authorization = handler.headers.get(
+        "Authorization",
+        "",
+    )
+
     token = extract_bearer_token(
-        handler.headers.get(
-            "Authorization",
-            "",
-        )
+        authorization
     )
 
     if not token:
@@ -298,51 +321,73 @@ def _authenticate_user(handler):
             "Authentication required."
         )
 
-    return verify_access_token(token)
+    user = verify_access_token(
+        token
+    )
+
+    if not isinstance(user, dict):
+        raise ValueError(
+            "Invalid authentication response."
+        )
+
+    return user
 
 
-# ---------------------------------------------------------
+# =========================================================
 # HANDLER
-# ---------------------------------------------------------
+# =========================================================
 
-class handler(BaseHTTPRequestHandler):
+class handler(
+    BaseHTTPRequestHandler
+):
 
     def do_OPTIONS(self):
+
         self.send_response(204)
+
         self.send_header(
             "Access-Control-Allow-Origin",
             "*",
         )
+
         self.send_header(
             "Access-Control-Allow-Headers",
             "Content-Type, Authorization",
         )
+
         self.send_header(
             "Access-Control-Allow-Methods",
-            "POST, OPTIONS",
+            "POST, GET, OPTIONS",
         )
+
+        self.send_header(
+            "Cache-Control",
+            "no-store",
+        )
+
         self.end_headers()
 
 
-    def do_POST(self):
+    def do_POST():
 
         reserved_slot = False
         user_id = None
 
         try:
-            # ---------------------------------------------
-            # AUTH
-            # ---------------------------------------------
 
-            user = _authenticate_user(self)
+            # -----------------------------------------
+            # AUTHENTICATION
+            # -----------------------------------------
 
-            if not isinstance(user, dict):
-                raise RuntimeError(
-                    "Invalid authentication response."
-                )
+            user = _authenticate_user(
+                self
+            )
 
             user_id = str(
-                user.get("id", "")
+                user.get(
+                    "id",
+                    "",
+                )
             ).strip()
 
             if not user_id:
@@ -351,21 +396,26 @@ class handler(BaseHTTPRequestHandler):
                 )
 
 
-            # ---------------------------------------------
-            # BODY
-            # ---------------------------------------------
+            # -----------------------------------------
+            # REQUEST BODY
+            # -----------------------------------------
 
-            body = _read_json(self)
+            body = _read_json(
+                self
+            )
 
-            if not isinstance(body, dict):
+            if not isinstance(
+                body,
+                dict
+            ):
                 raise ValueError(
                     "Invalid request body."
                 )
 
 
-            # ---------------------------------------------
+            # -----------------------------------------
             # INPUTS
-            # ---------------------------------------------
+            # -----------------------------------------
 
             instrument = str(
                 body.get(
@@ -381,18 +431,22 @@ class handler(BaseHTTPRequestHandler):
                 )
             ).strip().upper()
 
-            higher_timeframe_image = body.get(
-                "higher_timeframe_image"
+            higher_timeframe_image = (
+                body.get(
+                    "higher_timeframe_image"
+                )
             )
 
-            lower_timeframe_image = body.get(
-                "lower_timeframe_image"
+            lower_timeframe_image = (
+                body.get(
+                    "lower_timeframe_image"
+                )
             )
 
 
-            # ---------------------------------------------
+            # -----------------------------------------
             # VALIDATION
-            # ---------------------------------------------
+            # -----------------------------------------
 
             validate_instrument(
                 instrument
@@ -413,9 +467,9 @@ class handler(BaseHTTPRequestHandler):
             )
 
 
-            # ---------------------------------------------
-            # DAILY SLOT
-            # ---------------------------------------------
+            # -----------------------------------------
+            # DAILY LIMIT
+            # -----------------------------------------
 
             owner = is_owner_user(
                 user_id
@@ -430,9 +484,9 @@ class handler(BaseHTTPRequestHandler):
                 reserved_slot = True
 
 
-            # ---------------------------------------------
+            # -----------------------------------------
             # CREATE QUEUED JOB
-            # ---------------------------------------------
+            # -----------------------------------------
 
             job_nonce = _create_queued_job(
                 user_id=user_id,
@@ -447,9 +501,9 @@ class handler(BaseHTTPRequestHandler):
             )
 
 
-            # ---------------------------------------------
-            # SIGNED JOB TOKEN
-            # ---------------------------------------------
+            # -----------------------------------------
+            # CREATE SIGNED JOB TOKEN
+            # -----------------------------------------
 
             job_token = _create_job_token(
                 job_nonce=job_nonce,
@@ -459,16 +513,9 @@ class handler(BaseHTTPRequestHandler):
             )
 
 
-            # ---------------------------------------------
+            # -----------------------------------------
             # SUCCESS
-            # ---------------------------------------------
-            #
-            # IMPORTANT:
-            # Gemini is NOT called here.
-            #
-            # Supabase INSERT webhook starts the worker.
-            #
-            # ---------------------------------------------
+            # -----------------------------------------
 
             json_response(
                 self,
@@ -485,10 +532,10 @@ class handler(BaseHTTPRequestHandler):
 
         except ValueError as exc:
 
-            # If the daily slot was reserved and something
-            # failed afterward, give the slot back.
-
-            if reserved_slot and user_id:
+            if (
+                reserved_slot
+                and user_id
+            ):
                 try:
                     release_analysis_slot(
                         user_id
@@ -509,7 +556,10 @@ class handler(BaseHTTPRequestHandler):
 
         except RuntimeError as exc:
 
-            if reserved_slot and user_id:
+            if (
+                reserved_slot
+                and user_id
+            ):
                 try:
                     release_analysis_slot(
                         user_id
@@ -517,9 +567,10 @@ class handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-            message = str(exc)
+            message = str(
+                exc
+            )
 
-            # Daily-limit errors should remain 429.
             lowered = message.lower()
 
             if (
@@ -527,6 +578,7 @@ class handler(BaseHTTPRequestHandler):
                 or "daily" in lowered
                 or "analyses" in lowered
             ):
+
                 json_response(
                     self,
                     429,
@@ -534,7 +586,9 @@ class handler(BaseHTTPRequestHandler):
                         "error": message
                     },
                 )
+
             else:
+
                 json_response(
                     self,
                     500,
@@ -548,7 +602,10 @@ class handler(BaseHTTPRequestHandler):
 
         except Exception as exc:
 
-            if reserved_slot and user_id:
+            if (
+                reserved_slot
+                and user_id
+            ):
                 try:
                     release_analysis_slot(
                         user_id
@@ -560,10 +617,9 @@ class handler(BaseHTTPRequestHandler):
                 self,
                 500,
                 {
-                    "error": (
+                    "error":
                         "Unable to create "
                         "analysis job."
-                    )
                 },
             )
 
@@ -571,10 +627,12 @@ class handler(BaseHTTPRequestHandler):
 
 
     def do_GET(self):
+
         json_response(
             self,
             200,
             {
-                "status": "analysis submit online"
+                "status":
+                    "analysis submit online"
             },
         )
