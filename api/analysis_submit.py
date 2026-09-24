@@ -41,7 +41,7 @@ JOB_TTL_SECONDS = 24 * 60 * 60
 
 
 # =========================================================
-# JOB TOKEN
+# JOB TOKEN SECRET
 # =========================================================
 
 def get_job_secret():
@@ -63,6 +63,10 @@ def get_job_secret():
 
     return secret.encode("utf-8")
 
+
+# =========================================================
+# CREATE JOB TOKEN
+# =========================================================
 
 def create_job_token(
     job_nonce,
@@ -112,7 +116,7 @@ def create_job_token(
 
 
 # =========================================================
-# SUPABASE
+# SUPABASE REQUEST
 # =========================================================
 
 def supabase_request(
@@ -208,7 +212,7 @@ def supabase_request(
 
 
 # =========================================================
-# CREATE JOB
+# CREATE QUEUED JOB
 # =========================================================
 
 def create_queued_job(
@@ -224,7 +228,6 @@ def create_queued_job(
 
     job_nonce = uuid.uuid4().hex
 
-    # Explicit UTC timestamp.
     created_at = (
         datetime.now(
             timezone.utc
@@ -232,11 +235,11 @@ def create_queued_job(
     )
 
     payload = {
-        # Required primary key
+        # Required database ID
         "id":
             job_id,
 
-        # Required job identifier
+        # Unique job nonce
         "job_nonce":
             job_nonce,
 
@@ -244,30 +247,38 @@ def create_queued_job(
         "user_id":
             user_id,
 
-        # IMPORTANT:
-        # Store the instrument alone.
+        # Plain instrument
         "instrument":
             instrument,
 
+        # Trade focus
         "trade_focus":
             trade_focus,
 
+        # Uploaded 4H chart
         "higher_timeframe_image":
             higher_timeframe_image,
 
+        # Uploaded 15M chart
         "lower_timeframe_image":
             lower_timeframe_image,
 
+        # Job state
         "status":
             "queued",
 
+        # IMPORTANT:
+        # Supabase requires this column to be NOT NULL.
+        # The worker will replace "pending" with the
+        # actual encoded analysis result after processing.
         "openai_response_id":
-            None,
+            "pending",
 
+        # No error when newly created
         "error_message":
             None,
 
-        # Explicitly provide created_at
+        # Explicit timestamp
         "created_at":
             created_at,
     }
@@ -292,7 +303,7 @@ def create_queued_job(
 
 
 # =========================================================
-# REQUEST BODY
+# READ REQUEST BODY
 # =========================================================
 
 def read_json(handler):
@@ -389,7 +400,7 @@ class handler(
 
         self.send_header(
             "Access-Control-Allow-Methods",
-            "POST, GET, OPTIONS",
+            "GET, POST, OPTIONS",
         )
 
         self.send_header(
@@ -407,9 +418,9 @@ class handler(
 
         try:
 
-            # -----------------------------------------
-            # AUTH
-            # -----------------------------------------
+            # =============================================
+            # 1. AUTHENTICATE
+            # =============================================
 
             user = authenticate_user(
                 self
@@ -428,9 +439,9 @@ class handler(
                 )
 
 
-            # -----------------------------------------
-            # BODY
-            # -----------------------------------------
+            # =============================================
+            # 2. READ REQUEST
+            # =============================================
 
             body = read_json(
                 self
@@ -445,9 +456,9 @@ class handler(
                 )
 
 
-            # -----------------------------------------
-            # INPUTS
-            # -----------------------------------------
+            # =============================================
+            # 3. GET INPUTS
+            # =============================================
 
             instrument = str(
                 body.get(
@@ -476,9 +487,9 @@ class handler(
             )
 
 
-            # -----------------------------------------
-            # VALIDATION
-            # -----------------------------------------
+            # =============================================
+            # 4. VALIDATE
+            # =============================================
 
             validate_instrument(
                 instrument
@@ -499,14 +510,9 @@ class handler(
             )
 
 
-            # -----------------------------------------
-            # DAILY LIMIT
-            # -----------------------------------------
-            #
-            # IMPORTANT:
-            # Pass the complete user object to
-            # is_owner_user(), not just the UUID.
-            #
+            # =============================================
+            # 5. DAILY LIMIT
+            # =============================================
 
             owner = is_owner_user(
                 user
@@ -521,9 +527,9 @@ class handler(
                 reserved_slot = True
 
 
-            # -----------------------------------------
-            # CREATE JOB
-            # -----------------------------------------
+            # =============================================
+            # 6. CREATE QUEUED JOB
+            # =============================================
 
             job_nonce = create_queued_job(
                 user_id=
@@ -543,9 +549,9 @@ class handler(
             )
 
 
-            # -----------------------------------------
-            # TOKEN
-            # -----------------------------------------
+            # =============================================
+            # 7. SIGNED JOB TOKEN
+            # =============================================
 
             job_token = create_job_token(
                 job_nonce=
@@ -562,9 +568,9 @@ class handler(
             )
 
 
-            # -----------------------------------------
-            # SUCCESS
-            # -----------------------------------------
+            # =============================================
+            # 8. SUCCESS
+            # =============================================
 
             json_response(
                 self,
@@ -622,39 +628,14 @@ class handler(
                 except Exception:
                     pass
 
-            message = str(
-                exc
+            json_response(
+                self,
+                500,
+                {
+                    "error":
+                        str(exc)
+                },
             )
-
-            lowered = (
-                message.lower()
-            )
-
-            if (
-                "limit" in lowered
-                or "daily" in lowered
-                or "analyses" in lowered
-            ):
-
-                json_response(
-                    self,
-                    429,
-                    {
-                        "error":
-                            message
-                    },
-                )
-
-            else:
-
-                json_response(
-                    self,
-                    500,
-                    {
-                        "error":
-                            message
-                    },
-                )
 
             return
 
