@@ -1,12 +1,13 @@
-import base64
-import hashlib
-import hmac
 import json
 import os
 import time
+import uuid
+import base64
+import hashlib
+import hmac
 import urllib.error
 import urllib.request
-import uuid
+
 from http.server import BaseHTTPRequestHandler
 
 from analysis_common import (
@@ -36,6 +37,13 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ.get(
 ).strip()
 
 
+JOB_TTL_SECONDS = 24 * 60 * 60
+
+
+# =========================================================
+# JOB TOKEN SECRET
+# =========================================================
+
 def get_job_secret():
     secret = os.environ.get(
         "JOB_TOKEN_SECRET",
@@ -50,11 +58,15 @@ def get_job_secret():
 
     if not secret:
         raise RuntimeError(
-            "JOB_TOKEN_SECRET is not configured."
+            "JOB_TOKEN_SECRET or GEMINI_API_KEY is missing."
         )
 
     return secret.encode("utf-8")
 
+
+# =========================================================
+# CREATE JOB TOKEN
+# =========================================================
 
 def create_job_token(
     job_nonce,
@@ -62,7 +74,9 @@ def create_job_token(
     trade_focus,
     user_id,
 ):
-    created_at = int(time.time())
+    created_at = int(
+        time.time()
+    )
 
     payload = {
         "job_nonce": job_nonce,
@@ -78,13 +92,17 @@ def create_job_token(
         sort_keys=True,
     ).encode("utf-8")
 
-    encoded = base64.urlsafe_b64encode(
-        raw
-    ).decode("ascii").rstrip("=")
+    encoded_payload = (
+        base64.urlsafe_b64encode(
+            raw
+        )
+        .decode("ascii")
+        .rstrip("=")
+    )
 
     signature = hmac.new(
         get_job_secret(),
-        encoded.encode("ascii"),
+        encoded_payload.encode("ascii"),
         hashlib.sha256,
     ).digest()
 
@@ -96,38 +114,32 @@ def create_job_token(
         .rstrip("=")
     )
 
-    return encoded + "." + encoded_signature
+    return (
+        encoded_payload
+        + "."
+        + encoded_signature
+    )
 
+
+# =========================================================
+# SUPABASE REQUEST
+# =========================================================
 
 def supabase_request(
     method,
     path,
     payload=None,
     timeout=30,
-    extra_headers=None,
 ):
     if not SUPABASE_URL:
         raise RuntimeError(
-            "SUPABASE_URL is not configured."
+            "SUPABASE_URL is missing."
         )
 
     if not SUPABASE_SERVICE_ROLE_KEY:
         raise RuntimeError(
-            "SUPABASE_SERVICE_ROLE_KEY is not configured."
+            "SUPABASE_SERVICE_ROLE_KEY is missing."
         )
-
-    headers = {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": (
-            "Bearer "
-            + SUPABASE_SERVICE_ROLE_KEY
-        ),
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-    if extra_headers:
-        headers.update(extra_headers)
 
     data = None
 
@@ -140,7 +152,20 @@ def supabase_request(
     request = urllib.request.Request(
         SUPABASE_URL + path,
         data=data,
-        headers=headers,
+        headers={
+            "apikey":
+                SUPABASE_SERVICE_ROLE_KEY,
+
+            "Authorization":
+                "Bearer "
+                + SUPABASE_SERVICE_ROLE_KEY,
+
+            "Content-Type":
+                "application/json",
+
+            "Accept":
+                "application/json",
+        },
         method=method,
     )
 
@@ -159,27 +184,36 @@ def supabase_request(
                 return None
 
             try:
-                return json.loads(raw)
+                return json.loads(
+                    raw
+                )
             except json.JSONDecodeError:
                 return raw
 
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(
+
+        details = exc.read().decode(
             "utf-8",
             errors="replace",
         )
 
         raise RuntimeError(
             "Supabase request failed "
-            f"({exc.code}): {detail}"
+            f"({exc.code}) "
+            + details
         )
 
     except urllib.error.URLError as exc:
+
         raise RuntimeError(
             "Supabase connection failed: "
             + str(exc)
         )
 
+
+# =========================================================
+# CREATE QUEUED JOB
+# =========================================================
 
 def create_queued_job(
     user_id,
@@ -190,27 +224,45 @@ def create_queued_job(
 ):
     job_nonce = uuid.uuid4().hex
 
+    # Explicit UUID for the table id.
+    # This prevents a NULL id when the database
+    # column is NOT NULL without a default.
+    job_id = str(
+        uuid.uuid4()
+    )
+
     payload = {
-        "job_nonce": job_nonce,
-        "user_id": user_id,
+        "id":
+            job_id,
+
+        "job_nonce":
+            job_nonce,
+
+        "user_id":
+            user_id,
 
         # IMPORTANT:
-        # Store the instrument by itself.
-        "instrument": instrument,
+        # Keep instrument as plain EURUSD/XAUUSD/etc.
+        "instrument":
+            instrument,
 
-        "trade_focus": trade_focus,
+        "trade_focus":
+            trade_focus,
 
-        "higher_timeframe_image": (
-            higher_timeframe_image
-        ),
+        "higher_timeframe_image":
+            higher_timeframe_image,
 
-        "lower_timeframe_image": (
-            lower_timeframe_image
-        ),
+        "lower_timeframe_image":
+            lower_timeframe_image,
 
-        "status": "queued",
-        "openai_response_id": None,
-        "error_message": None,
+        "status":
+            "queued",
+
+        "openai_response_id":
+            None,
+
+        "error_message":
+            None,
     }
 
     result = supabase_request(
@@ -218,27 +270,32 @@ def create_queued_job(
         "/rest/v1/analysis_jobs",
         payload,
         timeout=30,
-        extra_headers={
-            "Prefer": "return=representation",
-        },
     )
 
-    if not result:
+    if result is None:
         raise RuntimeError(
-            "The analysis job could not be created."
+            "The analysis job was not created."
         )
 
     return job_nonce
 
 
+# =========================================================
+# READ JSON BODY
+# =========================================================
+
 def read_json(handler):
-    raw_length = handler.headers.get(
-        "Content-Length",
-        "0",
+    content_length_header = (
+        handler.headers.get(
+            "Content-Length",
+            "0",
+        )
     )
 
     try:
-        content_length = int(raw_length)
+        content_length = int(
+            content_length_header
+        )
     except ValueError:
         raise ValueError(
             "Invalid Content-Length."
@@ -249,7 +306,9 @@ def read_json(handler):
             "Request body is empty."
         )
 
-    if content_length > 25 * 1024 * 1024:
+    if content_length > (
+        25 * 1024 * 1024
+    ):
         raise ValueError(
             "Request body is too large."
         )
@@ -268,9 +327,15 @@ def read_json(handler):
         )
 
 
+# =========================================================
+# AUTHENTICATION
+# =========================================================
+
 def authenticate_user(handler):
+
     # IMPORTANT:
-    # extract_bearer_token expects the handler.
+    # extract_bearer_token expects the
+    # request handler, NOT the raw header.
     token = extract_bearer_token(
         handler
     )
@@ -279,7 +344,10 @@ def authenticate_user(handler):
         token
     )
 
-    if not isinstance(user, dict):
+    if not isinstance(
+        user,
+        dict,
+    ):
         raise ValueError(
             "Invalid authentication response."
         )
@@ -287,10 +355,23 @@ def authenticate_user(handler):
     return user
 
 
-class handler(BaseHTTPRequestHandler):
+# =========================================================
+# HTTP HANDLER
+# =========================================================
+
+class handler(
+    BaseHTTPRequestHandler
+):
+
+    # -----------------------------------------------------
+    # OPTIONS
+    # -----------------------------------------------------
 
     def do_OPTIONS(self):
-        self.send_response(204)
+
+        self.send_response(
+            204
+        )
 
         self.send_header(
             "Access-Control-Allow-Origin",
@@ -304,7 +385,7 @@ class handler(BaseHTTPRequestHandler):
 
         self.send_header(
             "Access-Control-Allow-Methods",
-            "POST, GET, OPTIONS",
+            "GET, POST, OPTIONS",
         )
 
         self.send_header(
@@ -314,14 +395,22 @@ class handler(BaseHTTPRequestHandler):
 
         self.end_headers()
 
+
+    # -----------------------------------------------------
+    # POST
+    # -----------------------------------------------------
+
     def do_POST(self):
+
         reserved_slot = False
         user_id = ""
 
         try:
-            # -----------------------------------------
-            # AUTHENTICATE
-            # -----------------------------------------
+
+            # =============================================
+            # 1. AUTHENTICATE
+            # =============================================
+
             user = authenticate_user(
                 self
             )
@@ -338,9 +427,11 @@ class handler(BaseHTTPRequestHandler):
                     "Invalid authenticated user."
                 )
 
-            # -----------------------------------------
-            # BODY
-            # -----------------------------------------
+
+            # =============================================
+            # 2. READ REQUEST
+            # =============================================
+
             body = read_json(
                 self
             )
@@ -353,9 +444,11 @@ class handler(BaseHTTPRequestHandler):
                     "Invalid request body."
                 )
 
-            # -----------------------------------------
-            # INPUTS
-            # -----------------------------------------
+
+            # =============================================
+            # 3. READ INPUTS
+            # =============================================
+
             instrument = str(
                 body.get(
                     "instrument",
@@ -382,9 +475,11 @@ class handler(BaseHTTPRequestHandler):
                 )
             )
 
-            # -----------------------------------------
-            # VALIDATION
-            # -----------------------------------------
+
+            # =============================================
+            # 4. VALIDATE
+            # =============================================
+
             validate_instrument(
                 instrument
             )
@@ -403,60 +498,97 @@ class handler(BaseHTTPRequestHandler):
                 "lower_timeframe_image",
             )
 
-            # -----------------------------------------
-            # DAILY LIMIT
-            # -----------------------------------------
+
+            # =============================================
+            # 5. DAILY ANALYSIS LIMIT
+            # =============================================
+
             owner = is_owner_user(
                 user
             )
 
             if not owner:
+
                 reserve_analysis_slot(
                     user_id
                 )
+
                 reserved_slot = True
 
-            # -----------------------------------------
-            # CREATE JOB
-            # -----------------------------------------
+
+            # =============================================
+            # 6. CREATE JOB
+            # =============================================
+
             job_nonce = create_queued_job(
-                user_id=user_id,
-                instrument=instrument,
-                trade_focus=trade_focus,
-                higher_timeframe_image=(
-                    higher_timeframe_image
-                ),
-                lower_timeframe_image=(
-                    lower_timeframe_image
-                ),
+                user_id=
+                    user_id,
+
+                instrument=
+                    instrument,
+
+                trade_focus=
+                    trade_focus,
+
+                higher_timeframe_image=
+                    higher_timeframe_image,
+
+                lower_timeframe_image=
+                    lower_timeframe_image,
             )
 
-            # -----------------------------------------
-            # CREATE SIGNED TOKEN
-            # -----------------------------------------
+
+            # =============================================
+            # 7. SIGNED JOB TOKEN
+            # =============================================
+
             job_token = create_job_token(
-                job_nonce=job_nonce,
-                instrument=instrument,
-                trade_focus=trade_focus,
-                user_id=user_id,
+                job_nonce=
+                    job_nonce,
+
+                instrument=
+                    instrument,
+
+                trade_focus=
+                    trade_focus,
+
+                user_id=
+                    user_id,
             )
 
-            # -----------------------------------------
-            # SUCCESS
-            # -----------------------------------------
+
+            # =============================================
+            # 8. SUCCESS
+            # =============================================
+
             json_response(
                 self,
                 202,
                 {
-                    "status": "queued",
-                    "job_id": job_token,
-                    "job_nonce": job_nonce,
+                    "status":
+                        "queued",
+
+                    "job_id":
+                        job_token,
+
+                    "job_nonce":
+                        job_nonce,
                 },
             )
 
+            return
+
+
+        # =================================================
+        # VALIDATION / USER ERROR
+        # =================================================
+
         except ValueError as exc:
 
-            if reserved_slot and user_id:
+            if (
+                reserved_slot
+                and user_id
+            ):
                 try:
                     release_analysis_slot(
                         user_id
@@ -468,13 +600,24 @@ class handler(BaseHTTPRequestHandler):
                 self,
                 400,
                 {
-                    "error": str(exc)
+                    "error":
+                        str(exc),
                 },
             )
 
+            return
+
+
+        # =================================================
+        # DATABASE / SERVER ERROR
+        # =================================================
+
         except RuntimeError as exc:
 
-            if reserved_slot and user_id:
+            if (
+                reserved_slot
+                and user_id
+            ):
                 try:
                     release_analysis_slot(
                         user_id
@@ -482,29 +625,32 @@ class handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-            message = str(exc)
-            lowered = message.lower()
-
-            if (
-                "limit" in lowered
-                or "daily" in lowered
-                or "analyses" in lowered
-            ):
-                status = 429
-            else:
-                status = 500
+            message = str(
+                exc
+            )
 
             json_response(
                 self,
-                status,
+                500,
                 {
-                    "error": message
+                    "error":
+                        message,
                 },
             )
 
+            return
+
+
+        # =================================================
+        # UNEXPECTED ERROR
+        # =================================================
+
         except Exception as exc:
 
-            if reserved_slot and user_id:
+            if (
+                reserved_slot
+                and user_id
+            ):
                 try:
                     release_analysis_slot(
                         user_id
@@ -516,16 +662,25 @@ class handler(BaseHTTPRequestHandler):
                 self,
                 500,
                 {
-                    "error": str(exc)
+                    "error":
+                        str(exc),
                 },
             )
 
+            return
+
+
+    # -----------------------------------------------------
+    # GET
+    # -----------------------------------------------------
+
     def do_GET(self):
+
         json_response(
             self,
             200,
             {
                 "status":
-                    "analysis submit online"
+                    "analysis submit online",
             },
         )
