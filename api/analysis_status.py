@@ -11,9 +11,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
-from analysis_common import (
-    json_response,
-)
+from analysis_common import json_response
 
 from api.user_security import (
     extract_bearer_token,
@@ -21,14 +19,11 @@ from api.user_security import (
 )
 
 
-# ============================================================
-# JOB TOKEN
-# ============================================================
-
 JOB_TTL_SECONDS = 15 * 60
 
 
 def _job_secret():
+
     secret = os.getenv(
         "JOB_TOKEN_SECRET",
         "",
@@ -47,22 +42,16 @@ def _job_secret():
             "JOB_TOKEN_SECRET or GEMINI_API_KEY is missing from Vercel."
         )
 
-    return secret.encode(
-        "utf-8"
-    )
+    return secret.encode("utf-8")
 
 
-def _read_job_token(
-    token,
-):
+def _read_job_token(token):
+
     try:
 
         parts = str(
             token or ""
-        ).split(
-            ".",
-            1,
-        )
+        ).split(".", 1)
 
         if len(parts) != 2:
 
@@ -73,16 +62,12 @@ def _read_job_token(
         encoded_payload = parts[0]
         encoded_signature = parts[1]
 
-        raw = (
-            base64.urlsafe_b64decode(
-                encoded_payload
-                + "="
-                * (
-                    -len(
-                        encoded_payload
-                    )
-                    % 4
-                )
+        raw = base64.urlsafe_b64decode(
+            encoded_payload
+            + "="
+            * (
+                -len(encoded_payload)
+                % 4
             )
         )
 
@@ -91,9 +76,7 @@ def _read_job_token(
                 encoded_signature
                 + "="
                 * (
-                    -len(
-                        encoded_signature
-                    )
+                    -len(encoded_signature)
                     % 4
                 )
             )
@@ -115,9 +98,7 @@ def _read_job_token(
             )
 
         payload = json.loads(
-            raw.decode(
-                "utf-8"
-            )
+            raw.decode("utf-8")
         )
 
         if not isinstance(
@@ -206,6 +187,7 @@ def _read_job_token(
 # ============================================================
 
 def _supabase_url():
+
     url = os.getenv(
         "SUPABASE_URL",
         "",
@@ -223,9 +205,7 @@ def _supabase_url():
         "/storage/v1",
     ):
 
-        if url.endswith(
-            suffix
-        ):
+        if url.endswith(suffix):
 
             url = url[
                 :-len(suffix)
@@ -235,6 +215,7 @@ def _supabase_url():
 
 
 def _supabase_service_key():
+
     key = os.getenv(
         "SUPABASE_SERVICE_ROLE_KEY",
         "",
@@ -250,6 +231,7 @@ def _supabase_service_key():
 
 
 def _supabase_headers():
+
     key = _supabase_service_key()
 
     return {
@@ -265,20 +247,15 @@ def _supabase_headers():
 
 
 # ============================================================
-# RESULT RETRIEVAL
+# LOAD JOB
 # ============================================================
 
-def _load_completed_job(
+def _load_job(
     user_id,
     job_nonce,
     instrument,
     trade_focus,
 ):
-    unique_instrument = (
-        instrument
-        + "|"
-        + job_nonce
-    )
 
     query = (
 
@@ -291,9 +268,15 @@ def _load_completed_job(
             safe="",
         )
 
+        + "&job_nonce=eq."
+        + urllib.parse.quote(
+            str(job_nonce),
+            safe="",
+        )
+
         + "&instrument=eq."
         + urllib.parse.quote(
-            unique_instrument,
+            str(instrument),
             safe="",
         )
 
@@ -303,17 +286,18 @@ def _load_completed_job(
             safe="",
         )
 
-        + "&select=openai_response_id,created_at"
+        + "&select="
+          "status,"
+          "openai_response_id,"
+          "error_message,"
+          "created_at"
 
         + "&limit=1"
     )
 
     request = urllib.request.Request(
-
         query,
-
         headers=_supabase_headers(),
-
         method="GET",
     )
 
@@ -321,19 +305,13 @@ def _load_completed_job(
 
         with urllib.request.urlopen(
             request,
-            timeout=20,
+            timeout=15,
         ) as response:
 
-            raw = (
+            rows = json.loads(
                 response
                 .read()
-                .decode(
-                    "utf-8"
-                )
-            )
-
-            rows = json.loads(
-                raw
+                .decode("utf-8")
             )
 
     except urllib.error.HTTPError as exc:
@@ -344,7 +322,7 @@ def _load_completed_job(
         )
 
         raise RuntimeError(
-            "Supabase could not retrieve the analysis result: "
+            "Supabase could not retrieve the analysis job: "
             + raw
         ) from exc
 
@@ -357,71 +335,17 @@ def _load_completed_job(
             "Supabase is temporarily unavailable."
         ) from exc
 
-    if not isinstance(
-        rows,
-        list,
-    ) or not rows:
-
-        return None
-
-    row = rows[0]
-
-    if not isinstance(
-        row,
-        dict,
+    if (
+        not isinstance(
+            rows,
+            list,
+        )
+        or not rows
     ):
 
         return None
 
-    result_blob = str(
-        row.get(
-            "openai_response_id",
-            "",
-        )
-    ).strip()
-
-    if not result_blob:
-
-        return None
-
-    try:
-
-        decoded = (
-            base64.urlsafe_b64decode(
-                result_blob
-                + "="
-                * (
-                    -len(
-                        result_blob
-                    )
-                    % 4
-                )
-            )
-            .decode(
-                "utf-8"
-            )
-        )
-
-        result = json.loads(
-            decoded
-        )
-
-    except Exception as exc:
-
-        raise RuntimeError(
-            "The stored analysis result is invalid."
-        ) from exc
-
-    if not isinstance(
-        result,
-        dict,
-    ):
-
-        raise RuntimeError(
-            "The stored analysis result is invalid."
-        )
-
-    return result
+    return rows[0]
 
 
 # ============================================================
@@ -432,16 +356,6 @@ def _check_optional_session(
     handler,
     token_user_id,
 ):
-    """
-    The signed job token is the authorization for the short-lived job.
-
-    If Android supplies a valid current Supabase token, verify that
-    it belongs to the same user.
-
-    If the Supabase access token is expired, do NOT reject the
-    already-authorized short-lived job. This prevents the exact
-    'invalid/expired session' problem during analysis polling.
-    """
 
     auth_header = str(
         handler.headers.get(
@@ -486,8 +400,9 @@ def _check_optional_session(
         raise
 
     except Exception:
-        # An expired session does not invalidate the already-signed
-        # analysis job.
+
+        # The signed job token remains valid even if the
+        # Supabase access token has expired during polling.
         return
 
 
@@ -495,9 +410,8 @@ def _check_optional_session(
 # JOB TOKEN FROM URL
 # ============================================================
 
-def _extract_job_token(
-    handler,
-):
+def _extract_job_token(handler):
+
     parsed = urlparse(
         handler.path
     )
@@ -524,9 +438,7 @@ class handler(
     BaseHTTPRequestHandler
 ):
 
-    def do_OPTIONS(
-        self
-    ):
+    def do_OPTIONS(self):
 
         json_response(
             self,
@@ -534,9 +446,7 @@ class handler(
             {},
         )
 
-    def do_GET(
-        self
-    ):
+    def do_GET(self):
 
         try:
 
@@ -568,13 +478,6 @@ class handler(
                 job_token
             )
 
-            # ------------------------------------------------
-            # Optional session check.
-            #
-            # Expired Supabase sessions are deliberately ignored
-            # for an already-authorized short-lived job.
-            # ------------------------------------------------
-
             try:
 
                 _check_optional_session(
@@ -595,11 +498,7 @@ class handler(
 
                 return
 
-            # ------------------------------------------------
-            # Retrieve completed result from Supabase.
-            # ------------------------------------------------
-
-            result = _load_completed_job(
+            job = _load_job(
 
                 user_id=
                     token_user_id,
@@ -614,7 +513,7 @@ class handler(
                     trade_focus,
             )
 
-            if result is None:
+            if job is None:
 
                 json_response(
                     self,
@@ -626,6 +525,142 @@ class handler(
                 )
 
                 return
+
+            status = str(
+                job.get(
+                    "status",
+                    "queued",
+                )
+            ).strip().lower()
+
+            # ------------------------------------------------
+            # QUEUED
+            # ------------------------------------------------
+
+            if status == "queued":
+
+                json_response(
+                    self,
+                    200,
+                    {
+                        "status":
+                            "queued",
+
+                        "poll_after_seconds":
+                            2,
+                    },
+                )
+
+                return
+
+            # ------------------------------------------------
+            # PROCESSING
+            # ------------------------------------------------
+
+            if status == "processing":
+
+                json_response(
+                    self,
+                    200,
+                    {
+                        "status":
+                            "processing",
+
+                        "poll_after_seconds":
+                            2,
+                    },
+                )
+
+                return
+
+            # ------------------------------------------------
+            # FAILED
+            # ------------------------------------------------
+
+            if status == "failed":
+
+                error_message = str(
+                    job.get(
+                        "error_message",
+                        "",
+                    )
+                ).strip()
+
+                json_response(
+                    self,
+                    200,
+                    {
+                        "status":
+                            "failed",
+
+                        "error":
+                            error_message
+                            or
+                            "The analysis failed.",
+                    },
+                )
+
+                return
+
+            # ------------------------------------------------
+            # COMPLETED
+            # ------------------------------------------------
+
+            result_blob = str(
+                job.get(
+                    "openai_response_id",
+                    "",
+                )
+            ).strip()
+
+            if not result_blob:
+
+                json_response(
+                    self,
+                    200,
+                    {
+                        "status":
+                            "processing",
+
+                        "poll_after_seconds":
+                            2,
+                    },
+                )
+
+                return
+
+            try:
+
+                decoded = (
+                    base64.urlsafe_b64decode(
+                        result_blob
+                        + "="
+                        * (
+                            -len(result_blob)
+                            % 4
+                        )
+                    )
+                    .decode("utf-8")
+                )
+
+                result = json.loads(
+                    decoded
+                )
+
+            except Exception as exc:
+
+                raise RuntimeError(
+                    "The stored analysis result is invalid."
+                ) from exc
+
+            if not isinstance(
+                result,
+                dict,
+            ):
+
+                raise RuntimeError(
+                    "The stored analysis result is invalid."
+                )
 
             json_response(
                 self,
