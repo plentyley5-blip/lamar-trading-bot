@@ -1,6 +1,5 @@
 import base64
 import json
-import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -17,167 +16,68 @@ from analysis_common import (
 
 from api.user_security import (
     extract_bearer_token,
+    get_supabase_service_key,
+    get_supabase_url,
     read_secure_job_token,
+    release_analysis_slot,
     verify_access_token,
 )
 
 
-SUPABASE_URL = os.environ.get(
-    "SUPABASE_URL",
-    ""
-).strip().rstrip("/")
+def _supabase_headers():
+    key = get_supabase_service_key()
 
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get(
-    "SUPABASE_SERVICE_ROLE_KEY",
-    ""
-).strip()
+    return {
+        "apikey": key,
+        "Authorization": "Bearer " + key,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
 
 
 def retrieve_response(
     response_id,
-    key
+    key,
 ):
-
     request = urllib.request.Request(
         f"{OPENAI_URL}/{response_id}",
         headers={
             "Authorization":
                 "Bearer " + key,
-
             "Accept":
-                "application/json"
+                "application/json",
         },
-        method="GET"
+        method="GET",
     )
 
     try:
-
         with urllib.request.urlopen(
             request,
-            timeout=20
+            timeout=20,
         ) as response:
-
             return json.loads(
-                response.read()
-                .decode(
-                    "utf-8"
-                )
+                response.read().decode("utf-8")
             )
 
     except urllib.error.HTTPError as exc:
-
-        detail = (
-            exc.read()
-            .decode(
-                "utf-8",
-                errors="replace"
-            )
+        print(
+            "OpenAI status HTTP error:",
+            exc.code,
         )
-
         raise RuntimeError(
-            "Analysis status is temporarily unavailable: "
-            + detail[:500]
-        )
+            "Analysis status is temporarily unavailable."
+        ) from exc
+
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+    ) as exc:
+        raise RuntimeError(
+            "Analysis status is temporarily unavailable."
+        ) from exc
 
 
-def supabase_patch(
-    user_id,
-    response_id,
-    values
-):
-
-    if not SUPABASE_URL:
-        return
-
-    if not SUPABASE_SERVICE_ROLE_KEY:
-        return
-
-    encoded_user = urllib.parse.quote(
-        str(user_id),
-        safe=""
-    )
-
-    encoded_response = urllib.parse.quote(
-        str(response_id),
-        safe=""
-    )
-
-    path = (
-        "/rest/v1/analysis_jobs"
-        "?user_id=eq."
-        + encoded_user
-        + "&openai_response_id=eq."
-        + encoded_response
-    )
-
-    body = json.dumps(
-        values,
-        ensure_ascii=False,
-    ).encode("utf-8")
-
-    request = urllib.request.Request(
-        SUPABASE_URL + path,
-        data=body,
-        headers={
-            "apikey":
-                SUPABASE_SERVICE_ROLE_KEY,
-
-            "Authorization":
-                "Bearer "
-                + SUPABASE_SERVICE_ROLE_KEY,
-
-            "Content-Type":
-                "application/json",
-
-            "Accept":
-                "application/json",
-
-            "Prefer":
-                "return=minimal"
-        },
-        method="PATCH"
-    )
-
-    try:
-
-        with urllib.request.urlopen(
-            request,
-            timeout=20
-        ) as response:
-
-            response.read()
-
-    except Exception:
-
-        # History must never prevent
-        # the user from seeing the
-        # completed analysis.
-        pass
-
-
-def encode_result(
-    result
-):
-
-    raw = json.dumps(
-        result,
-        ensure_ascii=False,
-        separators=(",", ":")
-    ).encode("utf-8")
-
-    return (
-        base64.urlsafe_b64encode(
-            raw
-        )
-        .decode("ascii")
-        .rstrip("=")
-    )
-
-
-def extract_job_token(
-    handler
-):
-
+def _extract_job_token(handler):
     parsed = urlparse(
         handler.path
     )
@@ -186,57 +86,185 @@ def extract_job_token(
         parsed.query
     )
 
-    return values.get(
-        "job_id",
-        [""]
-    )[0]
+    return str(
+        values.get(
+            "job_id",
+            [""],
+        )[0]
+    ).strip()
 
 
-class handler(
-    BaseHTTPRequestHandler
+def _encode_result(result):
+    raw = json.dumps(
+        result,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    return (
+        base64.urlsafe_b64encode(raw)
+        .decode("ascii")
+        .rstrip("=")
+    )
+
+
+def _save_completed_result(
+    user_id,
+    response_id,
+    result,
 ):
+    """
+    Replace the temporary OpenAI response ID with a
+    compact stored copy of the completed result.
 
-    def do_OPTIONS(self):
+    History reads this stored result later.
+    """
 
-        json_response(
-            self,
-            204,
-            {}
+    encoded_result = _encode_result(
+        result
+    )
+
+    url = (
+        get_supabase_url()
+        + "/rest/v1/analysis_jobs?"
+        + "user_id=eq."
+        + urllib.parse.quote(
+            str(user_id),
+            safe="",
+        )
+        + "&openai_response_id=eq."
+        + urllib.parse.quote(
+            str(response_id),
+            safe="",
+        )
+    )
+
+    payload = {
+        "status":
+            "completed",
+
+        "openai_response_id":
+            encoded_result,
+
+        "error_message":
+            None,
+    }
+
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(
+            payload,
+            separators=(",", ":"),
+        ).encode("utf-8"),
+        headers={
+            **_supabase_headers(),
+            "Prefer":
+                "return=minimal",
+        },
+        method="PATCH",
+    )
+
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=20,
+        ) as response:
+            response.read()
+
+        return True
+
+    except Exception as exc:
+        print(
+            "Supabase completed-result save failed:",
+            str(exc),
+        )
+        return False
+
+
+def _save_failed_result(
+    user_id,
+    response_id,
+    message,
+):
+    url = (
+        get_supabase_url()
+        + "/rest/v1/analysis_jobs?"
+        + "user_id=eq."
+        + urllib.parse.quote(
+            str(user_id),
+            safe="",
+        )
+        + "&openai_response_id=eq."
+        + urllib.parse.quote(
+            str(response_id),
+            safe="",
+        )
+    )
+
+    payload = {
+        "status":
+            "failed",
+
+        "error_message":
+            str(message)
+                if message
+                else "The analysis did not complete.",
+    }
+
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(
+            payload,
+            separators=(",", ":"),
+        ).encode("utf-8"),
+        headers={
+            **_supabase_headers(),
+            "Prefer":
+                "return=minimal",
+        },
+        method="PATCH",
+    )
+
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=20,
+        ) as response:
+            response.read()
+
+    except Exception as exc:
+        print(
+            "Supabase failed-result save failed:",
+            str(exc),
         )
 
 
+class handler(BaseHTTPRequestHandler):
+
+    def do_OPTIONS(self):
+        json_response(
+            self,
+            204,
+            {},
+        )
+
     def do_GET(self):
-
         try:
-
-            # =========================================
-            # API KEY
-            # =========================================
-
             key = api_key()
 
             if not key:
-
                 json_response(
                     self,
                     500,
                     {
                         "error":
                             "Server configuration is incomplete."
-                    }
+                    },
                 )
-
                 return
 
-
-            # =========================================
-            # USER
-            # =========================================
-
-            access_token = (
-                extract_bearer_token(
-                    self
-                )
+            access_token = extract_bearer_token(
+                self
             )
 
             user = verify_access_token(
@@ -247,86 +275,46 @@ class handler(
                 user["id"]
             )
 
-
-            # =========================================
-            # JOB TOKEN
-            # =========================================
-
-            token = extract_job_token(
+            token = _extract_job_token(
                 self
             )
-
-            if not token:
-
-                json_response(
-                    self,
-                    400,
-                    {
-                        "error":
-                            "Missing analysis job ID."
-                    }
-                )
-
-                return
-
 
             (
                 response_id,
                 instrument,
                 trade_focus,
-                token_user_id
+                token_user_id,
             ) = read_secure_job_token(
                 token
             )
 
-
-            # =========================================
-            # SECURITY
-            # =========================================
-
-            if (
-                token_user_id
-                != current_user_id
-            ):
-
+            if token_user_id != current_user_id:
                 json_response(
                     self,
                     403,
                     {
                         "error":
                             "This analysis job does not belong to this user."
-                    }
+                    },
                 )
-
                 return
-
-
-            # =========================================
-            # OPENAI
-            # =========================================
 
             response = retrieve_response(
                 response_id,
-                key
+                key,
             )
 
             status = str(
                 response.get(
                     "status",
-                    "queued"
+                    "queued",
                 )
-            ).strip().lower()
-
-
-            # =========================================
-            # STILL PROCESSING
-            # =========================================
+            ).lower()
 
             if status in {
                 "queued",
-                "in_progress"
+                "in_progress",
             }:
-
                 json_response(
                     self,
                     200,
@@ -335,46 +323,22 @@ class handler(
                             status,
 
                         "poll_after_seconds":
-                            2
-                    }
+                            2,
+                    },
                 )
-
                 return
 
-
-            # =========================================
-            # COMPLETED
-            # =========================================
-
             if status == "completed":
-
-                result = (
-                    parse_completed_response(
-                        response,
-                        instrument,
-                        trade_focus
-                    )
+                result = parse_completed_response(
+                    response,
+                    instrument,
+                    trade_focus,
                 )
 
-                # Save the completed analysis
-                # for History.
-                encoded_result = encode_result(
-                    result
-                )
-
-                supabase_patch(
-                    current_user_id,
-                    response_id,
-                    {
-                        "status":
-                            "completed",
-
-                        "openai_response_id":
-                            encoded_result,
-
-                        "error_message":
-                            None
-                    }
+                history_saved = _save_completed_result(
+                    user_id=current_user_id,
+                    response_id=response_id,
+                    result=result,
                 )
 
                 json_response(
@@ -385,38 +349,24 @@ class handler(
                             "completed",
 
                         "result":
-                            result
-                    }
+                            result,
+
+                        "history_saved":
+                            history_saved,
+                    },
                 )
-
                 return
-
-
-            # =========================================
-            # FAILED
-            # =========================================
 
             if status in {
                 "failed",
                 "cancelled",
+                "incomplete",
                 "expired",
-                "incomplete"
             }:
-
-                supabase_patch(
-                    current_user_id,
-                    response_id,
-                    {
-                        "status":
-                            "failed",
-
-                        # NOT NULL column.
-                        "openai_response_id":
-                            "failed",
-
-                        "error_message":
-                            "The analysis did not complete."
-                    }
+                _save_failed_result(
+                    user_id=current_user_id,
+                    response_id=response_id,
+                    message="The analysis did not complete.",
                 )
 
                 json_response(
@@ -427,16 +377,10 @@ class handler(
                             "failed",
 
                         "error":
-                            "The analysis did not complete."
-                    }
+                            "The analysis did not complete.",
+                    },
                 )
-
                 return
-
-
-            # =========================================
-            # UNKNOWN
-            # =========================================
 
             json_response(
                 self,
@@ -446,23 +390,21 @@ class handler(
                         "in_progress",
 
                     "poll_after_seconds":
-                        3
-                }
+                        3,
+                },
             )
 
         except ValueError as exc:
-
             json_response(
                 self,
                 400,
                 {
                     "error":
                         str(exc)
-                }
+                },
             )
 
         except RuntimeError as exc:
-
             json_response(
                 self,
                 200,
@@ -474,11 +416,15 @@ class handler(
                         4,
 
                     "message":
-                        str(exc)
-                }
+                        str(exc),
+                },
             )
 
         except Exception as exc:
+            print(
+                "analysis_status error:",
+                str(exc),
+            )
 
             json_response(
                 self,
@@ -489,8 +435,5 @@ class handler(
 
                     "poll_after_seconds":
                         4,
-
-                    "message":
-                        str(exc)
-                }
+                },
             )
