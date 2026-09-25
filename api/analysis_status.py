@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 from analysis_common import (
     OPENAI_URL,
-    api_key,
+    get_openai_key,
     json_response,
     parse_completed_response,
 )
@@ -19,7 +19,6 @@ from api.user_security import (
     get_supabase_service_key,
     get_supabase_url,
     read_secure_job_token,
-    release_analysis_slot,
     verify_access_token,
 )
 
@@ -35,17 +34,12 @@ def _supabase_headers():
     }
 
 
-def retrieve_response(
-    response_id,
-    key,
-):
+def retrieve_response(response_id, key):
     request = urllib.request.Request(
         f"{OPENAI_URL}/{response_id}",
         headers={
-            "Authorization":
-                "Bearer " + key,
-            "Accept":
-                "application/json",
+            "Authorization": "Bearer " + key,
+            "Accept": "application/json",
         },
         method="GET",
     )
@@ -61,7 +55,7 @@ def retrieve_response(
 
     except urllib.error.HTTPError as exc:
         print(
-            "OpenAI status HTTP error:",
+            "OpenAI status error:",
             exc.code,
         )
         raise RuntimeError(
@@ -113,13 +107,6 @@ def _save_completed_result(
     response_id,
     result,
 ):
-    """
-    Replace the temporary OpenAI response ID with a
-    compact stored copy of the completed result.
-
-    History reads this stored result later.
-    """
-
     encoded_result = _encode_result(
         result
     )
@@ -175,68 +162,10 @@ def _save_completed_result(
 
     except Exception as exc:
         print(
-            "Supabase completed-result save failed:",
-            str(exc),
+            "Completed history save failed:",
+            repr(exc),
         )
         return False
-
-
-def _save_failed_result(
-    user_id,
-    response_id,
-    message,
-):
-    url = (
-        get_supabase_url()
-        + "/rest/v1/analysis_jobs?"
-        + "user_id=eq."
-        + urllib.parse.quote(
-            str(user_id),
-            safe="",
-        )
-        + "&openai_response_id=eq."
-        + urllib.parse.quote(
-            str(response_id),
-            safe="",
-        )
-    )
-
-    payload = {
-        "status":
-            "failed",
-
-        "error_message":
-            str(message)
-                if message
-                else "The analysis did not complete.",
-    }
-
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(
-            payload,
-            separators=(",", ":"),
-        ).encode("utf-8"),
-        headers={
-            **_supabase_headers(),
-            "Prefer":
-                "return=minimal",
-        },
-        method="PATCH",
-    )
-
-    try:
-        with urllib.request.urlopen(
-            request,
-            timeout=20,
-        ) as response:
-            response.read()
-
-    except Exception as exc:
-        print(
-            "Supabase failed-result save failed:",
-            str(exc),
-        )
 
 
 class handler(BaseHTTPRequestHandler):
@@ -250,18 +179,7 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
-            key = api_key()
-
-            if not key:
-                json_response(
-                    self,
-                    500,
-                    {
-                        "error":
-                            "Server configuration is incomplete."
-                    },
-                )
-                return
+            key = get_openai_key()
 
             access_token = extract_bearer_token(
                 self
@@ -336,9 +254,9 @@ class handler(BaseHTTPRequestHandler):
                 )
 
                 history_saved = _save_completed_result(
-                    user_id=current_user_id,
-                    response_id=response_id,
-                    result=result,
+                    current_user_id,
+                    response_id,
+                    result,
                 )
 
                 json_response(
@@ -363,12 +281,6 @@ class handler(BaseHTTPRequestHandler):
                 "incomplete",
                 "expired",
             }:
-                _save_failed_result(
-                    user_id=current_user_id,
-                    response_id=response_id,
-                    message="The analysis did not complete.",
-                )
-
                 json_response(
                     self,
                     200,
@@ -423,7 +335,7 @@ class handler(BaseHTTPRequestHandler):
         except Exception as exc:
             print(
                 "analysis_status error:",
-                str(exc),
+                repr(exc),
             )
 
             json_response(
