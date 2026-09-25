@@ -20,14 +20,20 @@ from api.user_security import (
 OPENAI_URL = "https://api.openai.com/v1/responses"
 
 
-def json_response(handler, status_code, payload):
+def json_response(
+    handler,
+    status_code,
+    payload,
+):
 
     body = json.dumps(
         payload,
         ensure_ascii=False,
     ).encode("utf-8")
 
-    handler.send_response(status_code)
+    handler.send_response(
+        status_code
+    )
 
     handler.send_header(
         "Content-Type",
@@ -61,7 +67,9 @@ def json_response(handler, status_code, payload):
 
     handler.end_headers()
 
-    handler.wfile.write(body)
+    handler.wfile.write(
+        body
+    )
 
 
 def get_openai_key():
@@ -72,6 +80,7 @@ def get_openai_key():
     ).strip()
 
     if not key:
+
         raise RuntimeError(
             "OPENAI_API_KEY is missing from Vercel."
         )
@@ -85,6 +94,7 @@ def retrieve_response(
 
     request = urllib.request.Request(
         f"{OPENAI_URL}/{response_id}",
+
         headers={
             "Authorization":
                 "Bearer " + get_openai_key(),
@@ -92,6 +102,7 @@ def retrieve_response(
             "Accept":
                 "application/json",
         },
+
         method="GET",
     )
 
@@ -135,7 +146,9 @@ def retrieve_response(
         ) from exc
 
 
-def extract_job_token(handler):
+def extract_job_token(
+    handler,
+):
 
     parsed = urlparse(
         handler.path
@@ -153,7 +166,9 @@ def extract_job_token(handler):
     ).strip()
 
 
-def extract_output_text(response):
+def extract_output_text(
+    response,
+):
 
     output = response.get(
         "output"
@@ -196,16 +211,20 @@ def extract_output_text(response):
                     "text"
                 )
 
-                if isinstance(
-                    text,
-                    str,
-                ) and text.strip():
+                if (
+                    isinstance(
+                        text,
+                        str,
+                    )
+                    and text.strip()
+                ):
 
                     pieces.append(
                         text
                     )
 
         if pieces:
+
             return "\n".join(
                 pieces
             ).strip()
@@ -214,10 +233,13 @@ def extract_output_text(response):
         "output_text"
     )
 
-    if isinstance(
-        value,
-        str,
-    ) and value.strip():
+    if (
+        isinstance(
+            value,
+            str,
+        )
+        and value.strip()
+    ):
 
         return value.strip()
 
@@ -270,12 +292,18 @@ def parse_result(
         result,
         dict,
     ):
+
         raise ValueError(
             "Analysis result is not valid JSON."
         )
 
-    result["instrument"] = instrument
-    result["trade_focus"] = trade_focus
+    result["instrument"] = (
+        instrument
+    )
+
+    result["trade_focus"] = (
+        trade_focus
+    )
 
     signal = str(
         result.get(
@@ -289,6 +317,7 @@ def parse_result(
         "SELL",
         "NO TRADE",
     }:
+
         raise ValueError(
             "Analysis returned an invalid signal."
         )
@@ -306,7 +335,9 @@ def parse_result(
     return result
 
 
-def encode_result(result):
+def encode_result(
+    result,
+):
 
     raw = json.dumps(
         result,
@@ -361,10 +392,12 @@ def save_completed_history(
 
     request = urllib.request.Request(
         url,
+
         data=json.dumps(
             payload,
             separators=(",", ":"),
         ).encode("utf-8"),
+
         headers={
             "apikey":
                 get_supabase_service_key(),
@@ -382,6 +415,7 @@ def save_completed_history(
             "Prefer":
                 "return=minimal",
         },
+
         method="PATCH",
     )
 
@@ -406,9 +440,13 @@ def save_completed_history(
         return False
 
 
-class handler(BaseHTTPRequestHandler):
+class handler(
+    BaseHTTPRequestHandler
+):
 
-    def do_OPTIONS(self):
+    def do_OPTIONS(
+        self
+    ):
 
         json_response(
             self,
@@ -416,12 +454,16 @@ class handler(BaseHTTPRequestHandler):
             {},
         )
 
-    def do_GET(self):
+    def do_GET(
+        self
+    ):
 
         try:
 
-            access_token = extract_bearer_token(
-                self
+            access_token = (
+                extract_bearer_token(
+                    self
+                )
             )
 
             user = verify_access_token(
@@ -432,11 +474,14 @@ class handler(BaseHTTPRequestHandler):
                 user["id"]
             )
 
-            token = extract_job_token(
-                self
+            token = (
+                extract_job_token(
+                    self
+                )
             )
 
             if not token:
+
                 raise ValueError(
                     "Analysis job ID is required."
                 )
@@ -536,6 +581,58 @@ class handler(BaseHTTPRequestHandler):
                 "expired",
             }:
 
+                incomplete_details = (
+                    response.get(
+                        "incomplete_details"
+                    )
+                )
+
+                error_object = (
+                    response.get(
+                        "error"
+                    )
+                )
+
+                reason = ""
+
+                if isinstance(
+                    incomplete_details,
+                    dict,
+                ):
+
+                    reason = str(
+                        incomplete_details.get(
+                            "reason",
+                            "",
+                        )
+                    ).strip()
+
+                if (
+                    not reason
+                    and isinstance(
+                        error_object,
+                        dict,
+                    )
+                ):
+
+                    reason = str(
+                        error_object.get(
+                            "message",
+                            "",
+                        )
+                    ).strip()
+
+                message = (
+                    "The analysis did not complete."
+                )
+
+                if reason:
+
+                    message += (
+                        " Reason: "
+                        + reason
+                    )
+
                 json_response(
                     self,
                     200,
@@ -544,7 +641,7 @@ class handler(BaseHTTPRequestHandler):
                             "failed",
 
                         "error":
-                            "The analysis did not complete.",
+                            message,
                     },
                 )
 
@@ -597,6 +694,7 @@ class handler(BaseHTTPRequestHandler):
                 {
                     "error":
                         "Analysis status failed.",
+
                     "details":
                         str(exc),
                 },
