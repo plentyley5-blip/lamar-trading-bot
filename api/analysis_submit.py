@@ -1,14 +1,15 @@
 import json
-import os
 import time
-import uuid
 import urllib.error
 import urllib.request
-
 from http.server import BaseHTTPRequestHandler
 
 from analysis_common import (
-    create_background_response,
+    OPENAI_URL,
+    MODEL,
+    OUTPUT_SCHEMA,
+    SYSTEM_PROMPT,
+    api_key,
     json_response,
     validate_focus,
     validate_image_data_url,
@@ -18,6 +19,8 @@ from analysis_common import (
 from api.user_security import (
     create_secure_job_token,
     extract_bearer_token,
+    get_supabase_service_key,
+    get_supabase_url,
     is_owner_user,
     release_analysis_slot,
     reserve_analysis_slot,
@@ -25,20 +28,41 @@ from api.user_security import (
 )
 
 
-SUPABASE_URL = os.environ.get(
-    "SUPABASE_URL",
-    ""
-).strip().rstrip("/")
+def _read_json(handler):
+    try:
+        length = int(handler.headers.get("Content-Length", "0"))
+    except ValueError:
+        raise ValueError("Invalid request.")
 
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get(
-    "SUPABASE_SERVICE_ROLE_KEY",
-    ""
-).strip()
+    if length <= 0 or length > 25 * 1024 * 1024:
+        raise ValueError("Invalid chart request.")
+
+    raw = handler.rfile.read(length)
+
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid request JSON.") from exc
+
+    if not isinstance(data, dict):
+        raise ValueError("Invalid request.")
+
+    return data
 
 
-def supabase_insert_job(
+def _supabase_headers():
+    key = get_supabase_service_key()
+
+    return {
+        "apikey": key,
+        "Authorization": "Bearer " + key,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+def _save_queued_job(
     user_id,
-    job_nonce,
     instrument,
     trade_focus,
     response_id,
@@ -46,368 +70,333 @@ def supabase_insert_job(
     lower_image,
     status,
 ):
-    if not SUPABASE_URL:
-        raise RuntimeError(
-            "SUPABASE_URL is missing."
-        )
+    """
+    Save the OpenAI response ID immediately after the background job
+    is successfully created.
 
-    if not SUPABASE_SERVICE_ROLE_KEY:
-        raise RuntimeError(
-            "SUPABASE_SERVICE_ROLE_KEY is missing."
-        )
+    openai_response_id is NOT allowed to be null because the database
+    column is NOT NULL.
+    """
 
     payload = {
-        "id":
-            str(uuid.uuid4()),
-
-        "job_nonce":
-            job_nonce,
-
-        "user_id":
-            user_id,
-
-        "instrument":
-            instrument,
-
-        "trade_focus":
-            trade_focus,
-
-        "status":
-            status,
-
-        # This column is NOT NULL.
-        "openai_response_id":
-            response_id,
-
-        "higher_timeframe_image":
-            higher_image,
-
-        "lower_timeframe_image":
-            lower_image,
-
-        "error_message":
-            None,
+        "user_id": str(user_id),
+        "instrument": str(instrument),
+        "trade_focus": str(trade_focus),
+        "status": str(status or "queued"),
+        "openai_response_id": str(response_id),
+        "higher_timeframe_image": higher_image,
+        "lower_timeframe_image": lower_image,
     }
 
-    body = json.dumps(
-        payload,
-        ensure_ascii=False,
-    ).encode("utf-8")
+    url = get_supabase_url() + "/rest/v1/analysis_jobs"
 
     request = urllib.request.Request(
-        SUPABASE_URL
-        + "/rest/v1/analysis_jobs",
-        data=body,
+        url,
+        data=json.dumps(
+            payload,
+            separators=(",", ":"),
+        ).encode("utf-8"),
         headers={
-            "apikey":
-                SUPABASE_SERVICE_ROLE_KEY,
-
-            "Authorization":
-                "Bearer "
-                + SUPABASE_SERVICE_ROLE_KEY,
-
-            "Content-Type":
-                "application/json",
-
-            "Accept":
-                "application/json",
-
-            "Prefer":
-                "return=minimal",
+            **_supabase_headers(),
+            "Prefer": "return=minimal",
         },
         method="POST",
     )
 
     try:
-
-        with urllib.request.urlopen(
-            request,
-            timeout=20,
-        ) as response:
-
+        with urllib.request.urlopen(request, timeout=20) as response:
             response.read()
 
+        return True
+
     except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        print("Supabase history insert failed:", raw)
+        return False
 
-        detail = (
-            exc.read()
-            .decode(
-                "utf-8",
-                errors="replace",
-            )
-        )
+    except Exception as exc:
+        print("Supabase history insert failed:", str(exc))
+        return False
 
+
+def _openai_request(
+    instrument,
+    trade_focus,
+    higher_image,
+    lower_image,
+    output_tokens=1200,
+):
+    key = api_key()
+
+    if not key:
         raise RuntimeError(
-            "Supabase request failed "
-            f"({exc.code}) "
-            + detail
+            "OPENAI_API_KEY is missing from Vercel Production."
         )
 
+    payload = {
+        "model": MODEL,
+        "background": True,
+        "store": True,
+        "instructions": SYSTEM_PROMPT,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            f"Instrument: {instrument}\n"
+                            f"Trade focus: {trade_focus}\n\n"
+                            "Analyze both supplied charts together.\n"
+                            "Image 1 = 4H higher timeframe.\n"
+                            "Image 2 = 15M execution timeframe.\n"
+                            "Use only visible chart evidence.\n"
+                            "Do not invent exact prices."
+                        ),
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": higher_image,
+                        "detail": "low",
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": lower_image,
+                        "detail": "low",
+                    },
+                ],
+            }
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "lamar_trade_analysis",
+                "strict": True,
+                "schema": OUTPUT_SCHEMA,
+            }
+        },
+        "max_output_tokens": output_tokens,
+    }
 
-def read_json(handler):
+    body = json.dumps(
+        payload,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
-    try:
-        length = int(
-            handler.headers.get(
-                "Content-Length",
-                "0",
-            )
-        )
-
-    except ValueError:
-
-        raise ValueError(
-            "Invalid request."
-        )
-
-    if (
-        length <= 0
-        or length > 25 * 1024 * 1024
-    ):
-
-        raise ValueError(
-            "Invalid chart request."
-        )
-
-    raw = handler.rfile.read(
-        length
+    request = urllib.request.Request(
+        OPENAI_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": "Bearer " + key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
     )
 
     try:
+        with urllib.request.urlopen(
+            request,
+            timeout=55,
+        ) as response:
+            raw = response.read().decode("utf-8")
+            result = json.loads(raw)
 
-        data = json.loads(
-            raw.decode(
-                "utf-8"
-            )
+            if not isinstance(result, dict):
+                raise RuntimeError(
+                    "The AI service returned an invalid response."
+                )
+
+            return result
+
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode(
+            "utf-8",
+            errors="replace",
         )
 
-    except json.JSONDecodeError as exc:
+        if exc.code == 401:
+            raise RuntimeError(
+                "The server AI credential was rejected."
+            ) from exc
 
-        raise ValueError(
-            "Invalid request JSON."
+        if exc.code == 429:
+            raise RuntimeError(
+                "The AI service is temporarily rate limited."
+            ) from exc
+
+        print(
+            "OpenAI HTTP error:",
+            exc.code,
+            raw,
+        )
+
+        raise RuntimeError(
+            "The AI analysis service could not start."
         ) from exc
 
-    if not isinstance(
-        data,
-        dict
-    ):
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            "The AI analysis service could not be reached."
+        ) from exc
 
-        raise ValueError(
-            "Invalid request."
+    except TimeoutError as exc:
+        raise RuntimeError(
+            "The AI analysis service timed out."
+        ) from exc
+
+
+def _create_background_analysis(
+    instrument,
+    trade_focus,
+    higher_image,
+    lower_image,
+):
+    try:
+        return _openai_request(
+            instrument=instrument,
+            trade_focus=trade_focus,
+            higher_image=higher_image,
+            lower_image=lower_image,
+            output_tokens=1200,
         )
 
-    return data
+    except RuntimeError as exc:
+        if "rate limited" not in str(exc).lower():
+            raise
+
+        return _openai_request(
+            instrument=instrument,
+            trade_focus=trade_focus,
+            higher_image=higher_image,
+            lower_image=lower_image,
+            output_tokens=700,
+        )
 
 
-class handler(
-    BaseHTTPRequestHandler
-):
+class handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
-
         json_response(
             self,
             204,
-            {}
+            {},
         )
-
-
-    def do_GET(self):
-
-        json_response(
-            self,
-            200,
-            {
-                "status":
-                    "analysis submit online"
-            }
-        )
-
 
     def do_POST(self):
-
         reserved = False
         user = None
-        user_id = ""
 
         try:
-
-            # =========================================
-            # AUTHENTICATION
-            # =========================================
-
-            access_token = (
-                extract_bearer_token(
-                    self
-                )
-            )
+            access_token = extract_bearer_token(self)
 
             user = verify_access_token(
                 access_token
             )
 
             user_id = str(
-                user.get(
-                    "id",
-                    ""
-                )
-            ).strip()
-
-            if not user_id:
-
-                raise ValueError(
-                    "Invalid authenticated user."
-                )
+                user["id"]
+            )
 
             owner = is_owner_user(
                 user
             )
 
-
-            # =========================================
-            # INPUT
-            # =========================================
-
-            data = read_json(
+            data = _read_json(
                 self
             )
 
             instrument = validate_instrument(
-                data.get(
-                    "instrument"
-                )
+                data.get("instrument")
             )
 
             trade_focus = validate_focus(
                 data.get(
                     "trade_focus",
-                    "DAY TRADE"
+                    "DAY TRADE",
                 )
             )
 
-            higher_image = (
-                validate_image_data_url(
-                    data.get(
-                        "higher_timeframe_image"
-                    ),
-                    "4H chart"
-                )
+            higher_image = validate_image_data_url(
+                data.get(
+                    "higher_timeframe_image"
+                ),
+                "4H chart",
             )
 
-            lower_image = (
-                validate_image_data_url(
-                    data.get(
-                        "lower_timeframe_image"
-                    ),
-                    "15M chart"
-                )
+            lower_image = validate_image_data_url(
+                data.get(
+                    "lower_timeframe_image"
+                ),
+                "15M chart",
             )
-
-
-            # =========================================
-            # DAILY LIMIT
-            # =========================================
 
             if not owner:
-
                 slot = reserve_analysis_slot(
                     user_id
                 )
 
                 if slot == -1:
-
                     json_response(
                         self,
                         429,
                         {
                             "error":
                                 "Daily analysis limit reached.",
-
                             "daily_limit":
                                 4,
-
                             "remaining":
                                 0,
-
                             "is_owner":
-                                False
-                        }
+                                False,
+                        },
                     )
-
                     return
 
                 reserved = True
-
                 remaining = max(
                     0,
-                    4 - int(slot)
+                    4 - slot,
                 )
 
             else:
-
                 remaining = None
 
-
-            # =========================================
-            # START OPENAI BACKGROUND JOB
-            # =========================================
-
             try:
-
-                response = (
-                    create_background_response(
-                        instrument=
-                            instrument,
-
-                        trade_focus=
-                            trade_focus,
-
-                        higher_image=
-                            higher_image,
-
-                        lower_image=
-                            lower_image
-                    )
+                response = _create_background_analysis(
+                    instrument=instrument,
+                    trade_focus=trade_focus,
+                    higher_image=higher_image,
+                    lower_image=lower_image,
                 )
 
             except Exception:
-
                 if reserved:
-
                     try:
                         release_analysis_slot(
                             user_id
                         )
                     except Exception:
                         pass
-
-                    reserved = False
-
                 raise
 
-
-            # =========================================
-            # OPENAI RESPONSE ID
-            # =========================================
-
+            # IMPORTANT:
+            # OpenAI Background Responses returns the job ID here.
             response_id = str(
-                response.get(
-                    "id",
-                    ""
-                )
+                response.get("id")
+                or response.get("response_id")
+                or ""
             ).strip()
 
             status = str(
                 response.get(
                     "status",
-                    "queued"
+                    "queued",
                 )
-            ).strip().lower()
+            ).strip()
 
             if not response_id:
-
                 if reserved:
-
                     try:
                         release_analysis_slot(
                             user_id
@@ -415,84 +404,40 @@ class handler(
                     except Exception:
                         pass
 
+                print(
+                    "OpenAI response had no ID:",
+                    response,
+                )
+
                 raise RuntimeError(
-                    "The analysis service returned no job ID."
+                    "The AI service returned an invalid job response."
                 )
 
-
-            # =========================================
-            # OUR DATABASE JOB
-            # =========================================
-
-            job_nonce = uuid.uuid4().hex
-
-            database_status = (
-                "completed"
-                if status == "completed"
-                else "processing"
+            # Save the job immediately.
+            history_saved = _save_queued_job(
+                user_id=user_id,
+                instrument=instrument,
+                trade_focus=trade_focus,
+                response_id=response_id,
+                higher_image=higher_image,
+                lower_image=lower_image,
+                status=status or "queued",
             )
 
-            try:
-
-                supabase_insert_job(
-
-                    user_id=
-                        user_id,
-
-                    job_nonce=
-                        job_nonce,
-
-                    instrument=
-                        instrument,
-
-                    trade_focus=
-                        trade_focus,
-
-                    response_id=
-                        response_id,
-
-                    higher_image=
-                        higher_image,
-
-                    lower_image=
-                        lower_image,
-
-                    status=
-                        database_status
-                )
-
-            except Exception:
-
-                # OpenAI job is already valid.
-                # Do not destroy a working analysis because
-                # History storage failed.
-                pass
-
-
-            # =========================================
-            # SECURE POLLING TOKEN
-            # =========================================
-
-            job_id = (
-                create_secure_job_token(
-                    response_id,
-                    instrument,
-                    trade_focus,
-                    user_id
-                )
+            # Secure Android-facing job token.
+            job_id = create_secure_job_token(
+                response_id,
+                instrument,
+                trade_focus,
+                user_id,
             )
-
-
-            # =========================================
-            # RETURN JOB TO APP
-            # =========================================
 
             json_response(
                 self,
                 202,
                 {
                     "status":
-                        status,
+                        status or "queued",
 
                     "job_id":
                         job_id,
@@ -509,51 +454,52 @@ class handler(
                         else 4,
 
                     "remaining":
-                        remaining
-                }
+                        remaining,
+
+                    "history_saved":
+                        history_saved,
+                },
             )
 
         except ValueError as exc:
-
             json_response(
                 self,
                 400,
                 {
                     "error":
                         str(exc)
-                }
+                },
             )
 
         except RuntimeError as exc:
-
             json_response(
                 self,
                 503,
                 {
                     "error":
                         str(exc)
-                }
+                },
             )
 
         except Exception as exc:
-
-            if (
-                reserved
-                and user_id
-            ):
-
+            if reserved and user:
                 try:
                     release_analysis_slot(
-                        user_id
+                        str(user["id"])
                     )
                 except Exception:
                     pass
+
+            print(
+                "analysis_submit error:",
+                str(exc),
+            )
 
             json_response(
                 self,
                 500,
                 {
                     "error":
-                        str(exc)
-                }
+                        "The analysis could not be started."
+                },
             )
