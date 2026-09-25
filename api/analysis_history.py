@@ -4,6 +4,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+
 from http.server import BaseHTTPRequestHandler
 
 
@@ -28,6 +29,7 @@ def send_json(
     status,
     data,
 ):
+
     body = json.dumps(
         data,
         ensure_ascii=False,
@@ -70,29 +72,26 @@ def send_json(
 
     handler.end_headers()
 
-    handler.wfile.write(body)
+    handler.wfile.write(
+        body
+    )
 
 
-def get_supabase_url():
-    if not SUPABASE_URL:
-        raise RuntimeError(
-            "SUPABASE_URL is missing."
-        )
-
-    return SUPABASE_URL
-
-
-def get_user_from_token(
+def get_user(
     handler,
 ):
-    authorization = handler.headers.get(
-        "Authorization",
-        "",
+
+    authorization = str(
+        handler.headers.get(
+            "Authorization",
+            "",
+        )
     ).strip()
 
-    if not authorization.startswith(
-        "Bearer "
+    if not authorization.lower().startswith(
+        "bearer "
     ):
+
         raise ValueError(
             "Authorization bearer token is required."
         )
@@ -102,45 +101,59 @@ def get_user_from_token(
     ].strip()
 
     if not token:
+
         raise ValueError(
             "Authorization bearer token is required."
         )
 
     if not SUPABASE_ANON_KEY:
+
         raise RuntimeError(
             "SUPABASE_ANON_KEY is missing."
         )
 
     request = urllib.request.Request(
-        get_supabase_url()
+
+        SUPABASE_URL
         + "/auth/v1/user",
+
         headers={
             "apikey":
                 SUPABASE_ANON_KEY,
+
             "Authorization":
-                "Bearer " + token,
+                "Bearer "
+                + token,
+
             "Accept":
                 "application/json",
         },
+
         method="GET",
     )
 
     try:
+
         with urllib.request.urlopen(
             request,
             timeout=15,
         ) as response:
 
             user = json.loads(
-                response.read().decode(
+                response.read()
+                .decode(
                     "utf-8"
                 )
             )
 
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(
-            "utf-8",
-            errors="replace",
+
+        detail = (
+            exc.read()
+            .decode(
+                "utf-8",
+                errors="replace",
+            )
         )
 
         raise ValueError(
@@ -148,75 +161,96 @@ def get_user_from_token(
             + detail[:500]
         )
 
-    if not isinstance(
-        user,
-        dict,
-    ) or not user.get("id"):
+    user_id = str(
+        user.get(
+            "id",
+            "",
+        )
+    ).strip()
+
+    if not user_id:
 
         raise ValueError(
             "Invalid user session."
         )
 
-    return (
-        str(user["id"]).strip(),
-        token,
-    )
+    return user_id
 
 
-def load_history(
+def load_rows(
     user_id,
 ):
+
     if not SUPABASE_SERVICE_ROLE_KEY:
+
         raise RuntimeError(
             "SUPABASE_SERVICE_ROLE_KEY is missing."
         )
 
-    encoded_user = urllib.parse.quote(
-        user_id,
-        safe="",
+    encoded_user = (
+        urllib.parse.quote(
+            user_id,
+            safe="",
+        )
     )
 
     path = (
         "/rest/v1/analysis_jobs"
-        "?user_id=eq."
+        "?select=id,instrument,trade_focus,created_at,status,openai_response_id,error_message"
+        "&user_id=eq."
         + encoded_user
         + "&status=eq.completed"
-        + "&order=created_at.desc"
-        + "&limit=50"
+        "&order=created_at.desc"
+        "&limit=50"
     )
 
     request = urllib.request.Request(
-        get_supabase_url()
+
+        SUPABASE_URL
         + path,
+
         headers={
             "apikey":
                 SUPABASE_SERVICE_ROLE_KEY,
+
             "Authorization":
                 "Bearer "
                 + SUPABASE_SERVICE_ROLE_KEY,
+
             "Accept":
                 "application/json",
         },
+
         method="GET",
     )
 
     try:
+
         with urllib.request.urlopen(
             request,
-            timeout=15,
+            timeout=20,
         ) as response:
 
-            raw = response.read().decode(
+            raw = (
+                response.read()
+                .decode(
+                    "utf-8",
+                    errors="replace",
+                )
+            )
+
+            rows = json.loads(
+                raw
+            )
+
+    except urllib.error.HTTPError as exc:
+
+        detail = (
+            exc.read()
+            .decode(
                 "utf-8",
                 errors="replace",
             )
-
-            return json.loads(raw)
-
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(
-            "utf-8",
-            errors="replace",
         )
 
         raise RuntimeError(
@@ -224,45 +258,77 @@ def load_history(
             + detail[:1000]
         )
 
+    if not isinstance(
+        rows,
+        list,
+    ):
+
+        return []
+
+    return rows
+
 
 def decode_result(
-    encoded_result,
+    value,
 ):
+
     if not isinstance(
-        encoded_result,
+        value,
         str,
-    ) or not encoded_result:
-        return {}
+    ) or not value:
+
+        return None
+
+    if value in {
+        "pending",
+        "failed",
+    }:
+
+        return None
 
     try:
+
         padded = (
-            encoded_result
+            value
             + "="
-            * (-len(encoded_result) % 4)
+            * (-len(value) % 4)
         )
 
-        raw = base64.urlsafe_b64decode(
-            padded.encode("ascii")
+        raw = (
+            base64.urlsafe_b64decode(
+                padded
+            )
         )
 
         result = json.loads(
-            raw.decode("utf-8")
+            raw.decode(
+                "utf-8"
+            )
         )
 
-        return (
-            result
-            if isinstance(result, dict)
-            else {}
-        )
+        if isinstance(
+            result,
+            dict,
+        ):
+
+            return result
 
     except Exception:
-        return {}
+
+        return None
+
+    return None
 
 
-class handler(BaseHTTPRequestHandler):
+class handler(
+    BaseHTTPRequestHandler
+):
 
     def do_OPTIONS(self):
-        self.send_response(204)
+
+        self.send_response(
+            204
+        )
 
         self.send_header(
             "Access-Control-Allow-Origin",
@@ -281,33 +347,34 @@ class handler(BaseHTTPRequestHandler):
 
         self.end_headers()
 
+
     def do_GET(self):
 
         try:
 
             # -----------------------------------------
-            # AUTHENTICATED USER
+            # USER
             # -----------------------------------------
-            user_id, token = (
-                get_user_from_token(
-                    self
-                )
+
+            user_id = get_user(
+                self
             )
 
+
             # -----------------------------------------
-            # HISTORY
+            # DATABASE
             # -----------------------------------------
-            rows = load_history(
+
+            rows = load_rows(
                 user_id
             )
 
-            if not isinstance(
-                rows,
-                list,
-            ):
-                rows = []
-
             history = []
+
+
+            # -----------------------------------------
+            # BUILD ANDROID-FRIENDLY HISTORY
+            # -----------------------------------------
 
             for row in rows:
 
@@ -317,53 +384,57 @@ class handler(BaseHTTPRequestHandler):
                     )
                 )
 
-                item = {
-                    "job_id":
-                        row.get(
-                            "job_nonce"
-                        ),
+                if result is None:
 
-                    "trade_focus":
-                        row.get(
-                            "trade_focus"
-                        ),
+                    continue
 
-                    "created_at":
-                        row.get(
-                            "created_at"
-                        ),
-
-                    "status":
-                        "completed",
-                }
-
-                # Put the saved analysis
-                # fields directly into the item.
-                if result:
-                    item.update(
-                        result
-                    )
-
-                # Always preserve the database
-                # instrument as fallback.
-                if not item.get(
-                    "instrument"
-                ):
-                    item[
-                        "instrument"
-                    ] = str(
-                        row.get(
-                            "instrument",
-                            "",
-                        )
-                    ).split(
-                        "|",
-                        1
-                    )[0]
 
                 history.append(
-                    item
+                    {
+                        "job_id":
+                            str(
+                                row.get(
+                                    "id",
+                                    "",
+                                )
+                            ),
+
+                        "instrument":
+                            str(
+                                row.get(
+                                    "instrument",
+                                    "",
+                                )
+                            ),
+
+                        "trade_focus":
+                            str(
+                                row.get(
+                                    "trade_focus",
+                                    "",
+                                )
+                            ),
+
+                        "created_at":
+                            str(
+                                row.get(
+                                    "created_at",
+                                    "",
+                                )
+                            ),
+
+                        # IMPORTANT:
+                        # MainActivity expects result
+                        # to be an object here.
+                        "result":
+                            result,
+                    }
                 )
+
+
+            # -----------------------------------------
+            # RESPONSE
+            # -----------------------------------------
 
             send_json(
                 self,
@@ -371,11 +442,11 @@ class handler(BaseHTTPRequestHandler):
                 {
                     "status":
                         "ok",
+
                     "count":
                         len(history),
+
                     "history":
-                        history,
-                    "analyses":
                         history,
                 },
             )
@@ -386,8 +457,6 @@ class handler(BaseHTTPRequestHandler):
                 self,
                 401,
                 {
-                    "status":
-                        "error",
                     "error":
                         str(exc),
                 },
@@ -399,8 +468,6 @@ class handler(BaseHTTPRequestHandler):
                 self,
                 500,
                 {
-                    "status":
-                        "error",
                     "error":
                         str(exc),
                 },
@@ -412,8 +479,6 @@ class handler(BaseHTTPRequestHandler):
                 self,
                 500,
                 {
-                    "status":
-                        "error",
                     "error":
                         str(exc),
                 },
