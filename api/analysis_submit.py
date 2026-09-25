@@ -44,7 +44,7 @@ GEMINI_BASE_URL = (
 
 MAX_REQUEST_BYTES = 15 * 1024 * 1024
 
-GEMINI_TIMEOUT_SECONDS = 10
+GEMINI_TIMEOUT_SECONDS = 15
 
 MAX_TRANSIENT_RETRIES = 1
 
@@ -107,6 +107,7 @@ def json_response(handler, status_code, payload):
 def read_json(handler):
 
     try:
+
         length = int(
             handler.headers.get(
                 "Content-Length",
@@ -273,7 +274,7 @@ def validate_image(value, label):
 
 
 # ============================================================
-# PROMPT
+# ANALYSIS PROMPT
 # ============================================================
 
 def build_prompt(
@@ -282,148 +283,429 @@ def build_prompt(
 ):
 
     return f"""
-You are LM ANALYZER, the professional chart-analysis engine for
-LAMAR TRADING BOT.
+You are LM ANALYZER, the professional chart-analysis engine
+for LAMAR TRADING BOT.
 
-Analyze TWO supplied trading chart screenshots.
+You are given TWO actual trading chart screenshots.
 
-IMAGE 1 = 4H higher timeframe.
-IMAGE 2 = 15M lower timeframe.
+IMAGE 1 = 4H chart.
+IMAGE 2 = 15M chart.
 
 Instrument: {instrument}
 Trade focus: {trade_focus}
 
+============================================================
+PRIMARY INSTRUCTION
+============================================================
+
+ACTUALLY INSPECT BOTH IMAGES.
+
+Do not answer from the text prompt alone.
+
+Read the visible candles, market structure, price action,
+support/resistance and price labels where they are readable.
+
+The purpose of this analysis is to determine whether the
+visible chart currently presents a defensible BUY setup,
+SELL setup, or genuinely NO TRADE situation.
+
+Do NOT automatically choose NO TRADE simply because the setup
+is not perfect.
+
+Trading setups are allowed to have normal pullbacks,
+retracements, liquidity events, imperfect confirmations,
+and areas of uncertainty.
+
+Use the strongest visible evidence.
+
+============================================================
+STEP 1 — ANALYZE THE 4H CHART
+============================================================
+
+Determine:
+
+- overall market direction
+- higher highs / higher lows
+- lower highs / lower lows
+- range conditions
+- recent break of structure
+- CHoCH where visible
+- major support
+- major resistance
+- liquidity pools
+- important swing high
+- important swing low
+- displacement
+- major order block if visible
+- fair value gap if visible
+- premium/discount location if meaningful
+- current price position relative to important levels
+
+Give a clear 4H structural conclusion:
+
+BULLISH
+BEARISH
+RANGE
+or UNCLEAR
+
+Do not call the 4H UNCLEAR merely because there are
+minor conflicting candles.
+
+============================================================
+STEP 2 — ANALYZE THE 15M CHART
+============================================================
+
+Determine:
+
+- current short-term direction
+- latest market structure
+- BOS
+- CHoCH
+- liquidity sweep
+- rejection
+- displacement
+- pullback/retest
+- support/resistance
+- order block
+- fair value gap
+- candlestick confirmation
+- current price location
+- whether the 15M chart confirms or invalidates the 4H idea
+
+Give a clear 15M structural conclusion:
+
+BULLISH
+BEARISH
+RANGE
+or UNCLEAR
+
+============================================================
+STEP 3 — DETERMINE ALIGNMENT
+============================================================
+
+Compare the 4H and 15M.
+
+Use:
+
+ALIGNED
+PARTIALLY ALIGNED
+CONFLICTING
+or INSUFFICIENT DATA
+
+Important:
+
+A 4H bullish structure with a temporary 15M bearish
+retracement is NOT automatically conflicting.
+
+A 4H bearish structure with a temporary 15M bullish
+retracement is NOT automatically conflicting.
+
+A lower-timeframe pullback can provide an opportunity
+to enter in the direction of the higher-timeframe structure.
+
+Look for whether the 15M is:
+
+- continuing the 4H trend
+- retracing into a meaningful area
+- sweeping liquidity before continuation
+- breaking back in the 4H direction
+- rejecting an important level
+
+============================================================
+STEP 4 — DETERMINE DIRECTIONAL BIAS
+============================================================
+
+Based on the combined evidence determine:
+
+BUY
+SELL
+or NEUTRAL
+
+The directional bias should represent the strongest
+defensible direction visible on the charts.
+
+Do NOT make the bias neutral simply because every technical
+method does not agree.
+
+Technical methods can disagree while the overall market
+structure still provides a directional bias.
+
+============================================================
+STEP 5 — DETERMINE TRADE DECISION
+============================================================
+
+The final signal must be:
+
+BUY
+SELL
+or NO TRADE
+
+Use BUY when:
+
+- the overall evidence supports bullish direction
+- there is sufficient visible confirmation
+- the entry can be based on a visible price level or
+  defensible price action
+- there is no major unresolved contradiction
+
+Use SELL when:
+
+- the overall evidence supports bearish direction
+- there is sufficient visible confirmation
+- the entry can be based on a visible price level or
+  defensible price action
+- there is no major unresolved contradiction
+
+Use NO TRADE ONLY when:
+
+- the charts genuinely cannot be read sufficiently
+OR
+- the market is genuinely directionless/ranging with no
+  defensible setup
+OR
+- the 4H and 15M evidence creates a major unresolved conflict
+OR
+- exact execution levels cannot reasonably be identified
+  from the visible chart
+
+Do NOT use NO TRADE merely because:
+
+- one candle disagrees with the trend
+- a minor method is conflicting
+- the setup is not perfect
+- the 15M is retracing
+- there is normal market noise
+- one technical concept is absent
+
+============================================================
+TRADE FOCUS
+============================================================
+
+SCALP:
+
+Prioritize the 15M execution structure while respecting
+the 4H directional context.
+
+DAY TRADE:
+
+Balance the 4H structure with 15M confirmation.
+
+SWING:
+
+Prioritize the 4H structure and use 15M for confirmation.
+
+============================================================
+ENTRY / SL / TP RULES
+============================================================
+
+Never invent exact prices.
+
+Only provide numerical entry, stop loss and target levels
+when they can be reasonably read or derived from visible
+chart levels.
+
+For a BUY:
+
+Entry should be near a defensible visible support,
+retest, breakout/retest, liquidity event, order block,
+FVG or other clearly visible execution area.
+
+Stop loss should be beyond a defensible invalidation point.
+
+Targets should be based on visible liquidity, support,
+resistance, swing levels or other defensible chart levels.
+
+For a SELL:
+
+Entry should be near a defensible visible resistance,
+retest, breakdown/retest, liquidity event, order block,
+FVG or other clearly visible execution area.
+
+Stop loss should be beyond a defensible invalidation point.
+
+Targets should be based on visible liquidity, support,
+resistance, swing levels or other defensible chart levels.
+
+If exact numerical prices genuinely cannot be read:
+
+Use N/A for the exact numerical fields.
+
+Do NOT fabricate prices.
+
+============================================================
+CONFIDENCE
+============================================================
+
+Confidence is an ANALYSIS CONFIDENCE score from 0 to 100.
+
+It is NOT a probability of profit.
+
+Use the following general guidance:
+
+80-100:
+Strong visible structure, strong alignment and clear
+execution evidence.
+
+65-79:
+Good directional evidence with some manageable uncertainty.
+
+50-64:
+Moderate evidence but important uncertainty remains.
+
+25-49:
+Weak or conflicting evidence.
+
+0-24:
+Charts are genuinely unreadable or there is almost no
+defensible analytical evidence.
+
 IMPORTANT:
-You MUST actually inspect both supplied images before producing
-the analysis.
 
-Do NOT return empty fields simply because the final decision is
-NO TRADE.
+Do NOT automatically assign 0% to NO TRADE.
 
-A NO TRADE decision still requires a complete market analysis.
+A NO TRADE caused by conflicting or incomplete confirmation
+can still have a meaningful analysis confidence score.
 
-Use ONLY visible chart evidence.
+Example:
 
-Analyze:
+4H clearly bearish, 15M bullish retracement,
+no confirmed bearish continuation yet.
 
-- market structure
-- support and resistance
+This can be:
+
+TREND = BEARISH
+BIAS = SELL
+SIGNAL = NO TRADE
+CONFIDENCE = 65
+
+because the market analysis is clear even though execution
+confirmation is currently insufficient.
+
+============================================================
+NEWS
+============================================================
+
+You do NOT have live news access through this request.
+
+Do not claim that you checked ForexFactory, Investing.com,
+Reuters, Bloomberg or any other live news source.
+
+The news_fundamental_risk field must clearly state that
+live news was not checked and, where appropriate, mention
+that scheduled fundamental events could affect the setup.
+
+============================================================
+METHODS
+============================================================
+
+Analyze where meaningful:
+
+- support/resistance
 - pure price action
+- market structure
 - liquidity
 - liquidity sweeps
 - BOS
 - CHoCH
-- candlestick behavior
-- Smart Money Concepts
+- candlesticks
+- SMC
 - order blocks
 - Fair Value Gaps
-- Fibonacci where meaningful
+- Fibonacci
 - premium/discount
 - displacement
 - inducement
 - mitigation
 - invalidation
-- 4H structure
-- 15M confirmation
 
-TIMEFRAME RULES:
+Do not require every method to agree.
 
-SCALP:
-Prioritize 15M execution confirmation while respecting 4H context.
+The overall market structure and price action should carry
+the greatest weight.
 
-DAY TRADE:
-Balance 4H structure with 15M confirmation.
+Strategy names should be discussed inside the explanation.
 
-SWING:
-Prioritize 4H structure and use 15M for confirmation.
+============================================================
+NO TRADE REQUIREMENT
+============================================================
 
-IMPORTANT:
+Even when the final signal is NO TRADE, you MUST still
+populate ALL of these:
 
-1. Signal must be BUY, SELL, or NO TRADE.
+higher_timeframe_context
+lower_timeframe_confirmation
+data_analysis
+explanation
+news_fundamental_risk
 
-2. Never invent exact entry,
-   stop-loss, or target prices.
+These fields must describe the actual chart evidence.
 
-3. Use only visible and defensible levels.
+Do NOT return N/A for the entire analysis.
 
-4. If price labels are unreadable,
-   use NO TRADE.
+Only execution-specific fields may be N/A when there is
+no valid trade.
 
-5. If chart evidence is insufficient,
-   use NO TRADE.
+============================================================
+FINAL INTERNAL CHECK
+============================================================
 
-6. If 4H and 15M conflict without
-   a defensible resolution,
-   use NO TRADE.
+Before returning the JSON, check:
 
-7. Do not claim to have live news data.
+1. Did I actually inspect the 4H image?
+2. Did I actually inspect the 15M image?
+3. Did I identify the 4H structure?
+4. Did I identify the 15M structure?
+5. Did I determine alignment?
+6. Did I determine a directional bias?
+7. Did I decide BUY, SELL or NO TRADE based on evidence?
+8. If NO TRADE, did I explain exactly why?
+9. Did I avoid invented prices?
+10. Did I populate the analysis fields?
+11. Did I avoid claiming live news access?
 
-8. Confidence is an analysis-confidence
-   score from 0 to 100.
-   It is NOT a probability of profit.
-
-9. For NO TRADE:
-   entry = "N/A"
-   stop_loss = "N/A"
-   take_profit_1 = "N/A"
-   take_profit_2 = "N/A"
-   risk_reward = "N/A"
-
-10. IMPORTANT:
-    Even when the signal is NO TRADE, you MUST populate:
-
-    higher_timeframe_context
-    lower_timeframe_confirmation
-    data_analysis
-    explanation
-    news_fundamental_risk
-
-    These fields must explain what was actually visible
-    on the charts and why a trade was or was not justified.
-
-11. For NO TRADE, confidence should reflect the quality
-    and clarity of the market analysis.
-
-    Do NOT automatically use 0%.
-
-    Use 0% only if the charts genuinely cannot be analyzed.
-
-12. If the 4H chart is readable but the 15M setup is not
-    confirmed, describe the 4H structure and explain why
-    the 15M confirmation is insufficient.
-
-13. If the 15M chart is readable but conflicts with the 4H,
-    describe both and explain the conflict.
-
-14. Strategy names should be discussed inside the explanation
-    rather than presented as separate result categories.
-
-15. Never guarantee profit.
-
-16. Return ONLY valid JSON.
+Return ONLY valid JSON.
 
 Return exactly this structure:
 
 {{
   "signal": "BUY | SELL | NO TRADE",
+
   "confidence": 0,
+
   "instrument": "{instrument}",
+
   "trend": "BULLISH | BEARISH | RANGE | UNCLEAR",
+
   "trade_idea": "BUY {instrument} | SELL {instrument} | NO TRADE",
+
   "entry": "N/A",
+
   "stop_loss": "N/A",
+
   "take_profit_1": "N/A",
+
   "take_profit_2": "N/A",
+
   "risk_reward": "N/A",
+
   "duration": "N/A",
+
   "higher_timeframe_context": "",
+
   "lower_timeframe_confirmation": "",
+
   "data_analysis": "",
+
   "explanation": "",
+
   "contributing_methods": [],
+
   "weak_methods": [],
+
   "conflicting_methods": [],
+
   "news_fundamental_risk": "",
+
   "warnings": []
 }}
 """.strip()
@@ -616,14 +898,19 @@ def send_gemini_request(
                 {
                     "text": (
                         "You are LM ANALYZER. "
-                        "You are analyzing two actual "
-                        "trading chart images. "
-                        "You MUST inspect the images. "
-                        "You MUST return a complete "
-                        "analysis JSON. "
-                        "A NO TRADE result is still a "
-                        "complete analysis. "
-                        "Never invent prices."
+                        "You are a professional "
+                        "multimodal chart-analysis engine. "
+                        "You MUST inspect both supplied "
+                        "chart images. "
+                        "Determine 4H structure first, "
+                        "then 15M structure, then alignment, "
+                        "then directional bias, then final "
+                        "trade decision. "
+                        "Do not default to NO TRADE merely "
+                        "because the setup is imperfect. "
+                        "Do not invent prices. "
+                        "A NO TRADE decision must still "
+                        "contain a complete analysis."
                     )
                 }
             ]
@@ -673,7 +960,10 @@ def send_gemini_request(
                 OUTPUT_SCHEMA,
 
             "temperature":
-                0.2,
+                0.25,
+
+            "maxOutputTokens":
+                5000,
         },
     }
 
@@ -776,7 +1066,7 @@ def send_gemini_request(
 
 
 # ============================================================
-# JSON PARSER
+# PARSE JSON
 # ============================================================
 
 def parse_analysis_json(text):
@@ -800,6 +1090,7 @@ def parse_analysis_json(text):
         value = json.loads(cleaned)
 
         if isinstance(value, dict):
+
             return value
 
     except json.JSONDecodeError:
@@ -836,6 +1127,7 @@ def parse_analysis_json(text):
         value = json.loads(cleaned)
 
         if isinstance(value, dict):
+
             return value
 
     except json.JSONDecodeError:
@@ -853,6 +1145,7 @@ def parse_analysis_json(text):
             )
 
             if isinstance(value, dict):
+
                 return value
 
         except json.JSONDecodeError:
@@ -880,7 +1173,10 @@ def extract_gemini_analysis(response):
         []
     )
 
-    if not isinstance(candidates, list) or not candidates:
+    if (
+        not isinstance(candidates, list)
+        or not candidates
+    ):
 
         prompt_feedback = response.get(
             "promptFeedback"
@@ -924,7 +1220,10 @@ def extract_gemini_analysis(response):
         []
     )
 
-    if not isinstance(parts, list) or not parts:
+    if (
+        not isinstance(parts, list)
+        or not parts
+    ):
 
         finish_reason = candidate.get(
             "finishReason",
@@ -980,6 +1279,99 @@ def extract_gemini_analysis(response):
 
 
 # ============================================================
+# VALIDATE ANALYSIS CONTENT
+# ============================================================
+
+def validate_analysis_content(
+    result
+):
+
+    if not isinstance(result, dict):
+
+        raise RuntimeError(
+            "Gemini analysis is not a valid object."
+        )
+
+    required_fields = [
+
+        "signal",
+
+        "confidence",
+
+        "instrument",
+
+        "trend",
+
+        "trade_idea",
+
+        "higher_timeframe_context",
+
+        "lower_timeframe_confirmation",
+
+        "data_analysis",
+
+        "explanation",
+
+        "news_fundamental_risk",
+    ]
+
+    missing = []
+
+    for field in required_fields:
+
+        if field not in result:
+
+            missing.append(field)
+
+    if missing:
+
+        raise RuntimeError(
+            "Gemini returned incomplete analysis. "
+            "Missing: "
+            + ", ".join(missing)
+        )
+
+    # Do not allow the model to return a blank
+    # analysis disguised as NO TRADE.
+
+    descriptive_fields = [
+
+        "higher_timeframe_context",
+
+        "lower_timeframe_confirmation",
+
+        "data_analysis",
+
+        "explanation",
+    ]
+
+    blank_fields = []
+
+    for field in descriptive_fields:
+
+        value = result.get(field)
+
+        if (
+            value is None
+            or not str(value).strip()
+            or str(value).strip().upper() == "N/A"
+        ):
+
+            blank_fields.append(field)
+
+    if blank_fields:
+
+        raise RuntimeError(
+            "Gemini returned a NO TRADE or incomplete "
+            "analysis without chart reasoning. "
+            "Blank fields: "
+            + ", ".join(blank_fields)
+        )
+
+    return result
+
+
+# ============================================================
 # RESILIENT GEMINI ENGINE
 # ============================================================
 
@@ -1014,48 +1406,19 @@ def call_gemini(
                     lower=lower,
                 )
 
-                # IMPORTANT:
-                # Gemini returns a GenerateContentResponse
-                # wrapper. Extract the actual JSON generated
-                # by the model before normalization.
-
-                actual_analysis = extract_gemini_analysis(
-                    raw_response
+                actual_analysis = (
+                    extract_gemini_analysis(
+                        raw_response
+                    )
                 )
 
-                # Validate that this is actually an
-                # analysis object and not an empty response.
+                validate_analysis_content(
+                    actual_analysis
+                )
 
-                required_analysis_fields = [
-                    "signal",
-                    "confidence",
-                    "instrument",
-                    "trend",
-                    "trade_idea",
-                    "higher_timeframe_context",
-                    "lower_timeframe_confirmation",
-                    "data_analysis",
-                    "explanation",
-                    "news_fundamental_risk",
-                ]
-
-                missing_fields = [
-                    field
-                    for field in required_analysis_fields
-                    if field not in actual_analysis
-                ]
-
-                if missing_fields:
-
-                    raise RuntimeError(
-                        "Gemini returned incomplete analysis. "
-                        "Missing: "
-                        + ", ".join(
-                            missing_fields
-                        )
-                    )
-
-                actual_analysis["_engine_model"] = model
+                actual_analysis[
+                    "_engine_model"
+                ] = model
 
                 return actual_analysis
 
@@ -1069,24 +1432,18 @@ def call_gemini(
                     None
                 )
 
-                # Parsing/schema errors are NOT capacity
-                # errors. Do not keep hammering models if
-                # Gemini actually answered but returned bad data.
-                if (
-                    status is None
-                    and not isinstance(
-                        exc,
-                        urllib.error.URLError
-                    )
-                ):
+                # If Gemini actually answered but the
+                # answer was malformed/incomplete, do not
+                # silently turn it into NO TRADE.
+
+                if status is None:
+
                     raise
 
-                if (
-                    status is not None
-                    and not is_transient_error(
-                        status
-                    )
+                if not is_transient_error(
+                    status
                 ):
+
                     raise
 
                 if retry_number < MAX_TRANSIENT_RETRIES:
@@ -1221,17 +1578,18 @@ def normalize_result(
         value = result.get(name)
 
         if value is None:
+
             return "N/A"
 
         if isinstance(value, str):
 
             cleaned = value.strip()
 
-            return (
-                cleaned
-                if cleaned
-                else "N/A"
-            )
+            if not cleaned:
+
+                return "N/A"
+
+            return cleaned
 
         return str(value)
 
@@ -1239,7 +1597,11 @@ def normalize_result(
 
         value = result.get(name)
 
-        if not isinstance(value, list):
+        if not isinstance(
+            value,
+            list
+        ):
+
             return []
 
         return [
@@ -1337,10 +1699,16 @@ def normalize_result(
             ),
     }
 
-    # Only trade price fields are forced to N/A for
-    # a NO TRADE decision.
+    # Only execution fields become N/A for NO TRADE.
     #
-    # The descriptive analysis fields remain intact.
+    # We deliberately preserve:
+    # - trend
+    # - confidence
+    # - 4H analysis
+    # - 15M analysis
+    # - data analysis
+    # - explanation
+    # - news/fundamental risk
 
     if signal == "NO TRADE":
 
@@ -1524,6 +1892,7 @@ class handler(
     def do_POST(self):
 
         reserved = False
+
         user_id = ""
 
         try:
