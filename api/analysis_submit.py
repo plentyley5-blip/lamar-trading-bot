@@ -1,9 +1,11 @@
 import base64
 import json
 import os
+import random
 import time
 import urllib.error
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
@@ -17,72 +19,93 @@ from api.user_security import (
     verify_access_token,
 )
 
-# Existing Gemini credential.
-# GEMINI_OPENAI_KEY is preferred, with GEMINI_API_KEY as fallback.
+
+# ============================================================
+# GEMINI CONFIGURATION
+# ============================================================
+
 GEMINI_API_KEY = (
     os.environ.get("GEMINI_OPENAI_KEY", "").strip()
     or os.environ.get("GEMINI_API_KEY", "").strip()
 )
 
-# Never read GEMINI_MODEL from Vercel.
-# This prevents an old agent-model value from being selected.
+# IMPORTANT:
+# Do not use GEMINI_MODEL from Vercel.
 #
-# 3.8 is the primary model.
-# The other Flash models are automatic capacity fallbacks.
+# These are real multimodal Gemini models.
+# The order is intentional:
+#
+# 1. High quality Flash
+# 2. Alternate Flash capacity
+# 3. Previous-generation Flash
+# 4. Stable high-throughput Flash
+# 5. Cheap/high-volume Flash-Lite
+# 6. Additional Flash-Lite fallback
+#
 GEMINI_MODELS = [
     "gemini-3.8-flash",
+    "gemini-3.7-flash",
     "gemini-3.6-flash",
     "gemini-3.5-flash",
-    "gemini-3.7-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
 ]
 
 GEMINI_BASE_URL = (
-    "https://generativelanguage.googleapis.com/"
-    "v1beta/models/"
+    "https://generativelanguage.googleapis.com/v1beta/models/"
 )
 
 MAX_REQUEST_BYTES = 15 * 1024 * 1024
-GEMINI_TIMEOUT_SECONDS = 45
 
+# Keep individual requests short so a failed capacity attempt
+# does not consume the entire Vercel execution window.
+GEMINI_TIMEOUT_SECONDS = 10
+
+# Number of retries for transient capacity/service errors
+# on the SAME model.
+MAX_TRANSIENT_RETRIES = 1
+
+
+# ============================================================
+# HTTP RESPONSE
+# ============================================================
 
 def json_response(handler, status_code, payload):
     body = json.dumps(
         payload,
-        ensure_ascii=False,
+        ensure_ascii=False
     ).encode("utf-8")
 
-    handler.send_response(
-        status_code
-    )
+    handler.send_response(status_code)
 
     handler.send_header(
         "Content-Type",
-        "application/json; charset=utf-8",
+        "application/json; charset=utf-8"
     )
 
     handler.send_header(
         "Access-Control-Allow-Origin",
-        "*",
+        "*"
     )
 
     handler.send_header(
         "Access-Control-Allow-Headers",
-        "Content-Type, Authorization",
+        "Content-Type, Authorization"
     )
 
     handler.send_header(
         "Access-Control-Allow-Methods",
-        "GET, POST, OPTIONS",
+        "GET, POST, OPTIONS"
     )
 
     handler.send_header(
         "Cache-Control",
-        "no-store, no-cache, must-revalidate",
+        "no-store, no-cache, must-revalidate"
     )
 
     handler.send_header(
         "Content-Length",
-        str(len(body)),
+        str(len(body))
     )
 
     handler.end_headers()
@@ -93,12 +116,16 @@ def json_response(handler, status_code, payload):
         pass
 
 
+# ============================================================
+# REQUEST PARSING
+# ============================================================
+
 def read_json(handler):
     try:
         length = int(
             handler.headers.get(
                 "Content-Length",
-                "0",
+                "0"
             )
         )
     except ValueError as exc:
@@ -129,6 +156,10 @@ def read_json(handler):
 
     return data
 
+
+# ============================================================
+# VALIDATION
+# ============================================================
 
 def validate_instrument(value):
     instrument = str(
@@ -166,7 +197,7 @@ def validate_focus(value):
     if focus not in {
         "SCALP",
         "DAY TRADE",
-        "SWING",
+        "SWING"
     }:
         raise ValueError(
             "Trade focus must be SCALP, DAY TRADE, or SWING."
@@ -175,10 +206,7 @@ def validate_focus(value):
     return focus
 
 
-def validate_image(
-    value,
-    label,
-):
+def validate_image(value, label):
     if (
         not isinstance(value, str)
         or not value.strip()
@@ -199,20 +227,19 @@ def validate_image(
 
     header, encoded = value.split(
         ";base64,",
-        1,
+        1
     )
 
-    mime_type = header[
-        5:
-    ].strip().lower()
+    mime_type = header[5:].strip().lower()
 
     if mime_type not in {
         "image/jpeg",
         "image/png",
-        "image/webp",
+        "image/webp"
     }:
         raise ValueError(
-            label + " must be JPEG, PNG, or WEBP."
+            label
+            + " must be JPEG, PNG, or WEBP."
         )
 
     if not encoded.strip():
@@ -223,7 +250,7 @@ def validate_image(
     try:
         decoded = base64.b64decode(
             encoded,
-            validate=False,
+            validate=False
         )
     except Exception as exc:
         raise ValueError(
@@ -238,16 +265,21 @@ def validate_image(
 
     return {
         "mime_type": mime_type,
-        "data": encoded,
+        "data": encoded
     }
 
 
+# ============================================================
+# PROMPT
+# ============================================================
+
 def build_prompt(
     instrument,
-    trade_focus,
+    trade_focus
 ):
     return f"""
-You are LM ANALYZER, the chart-analysis engine for LAMAR TRADING BOT.
+You are LM ANALYZER, the professional chart-analysis engine for
+LAMAR TRADING BOT.
 
 Analyze TWO supplied trading chart screenshots.
 
@@ -257,9 +289,10 @@ IMAGE 2 = 15M lower timeframe.
 Instrument: {instrument}
 Trade focus: {trade_focus}
 
-Use only visible chart evidence.
+Use ONLY visible chart evidence.
 
 Analyze:
+
 - market structure
 - support and resistance
 - pure price action
@@ -277,10 +310,13 @@ Analyze:
 - inducement
 - mitigation
 - invalidation
-- 4H and 15M confluence
+- 4H structure
+- 15M confirmation
+
+TIMEFRAME RULES:
 
 SCALP:
-Prioritize 15M confirmation.
+Prioritize 15M execution confirmation while respecting 4H context.
 
 DAY TRADE:
 Balance 4H structure with 15M confirmation.
@@ -288,25 +324,48 @@ Balance 4H structure with 15M confirmation.
 SWING:
 Prioritize 4H structure and use 15M for confirmation.
 
-IMPORTANT RULES:
+IMPORTANT:
 
 1. Signal must be BUY, SELL, or NO TRADE.
-2. Never invent exact entry, stop-loss, or target prices.
-3. Use only visible and defensible levels.
-4. If price labels are unreadable, use NO TRADE.
-5. If evidence is insufficient, use NO TRADE.
-6. If 4H and 15M conflict without a defensible resolution, use NO TRADE.
-7. Do not claim to have live news data.
-8. Confidence is an analysis-confidence score from 0 to 100.
-9. For NO TRADE, entry, stop_loss, take_profit_1,
-   take_profit_2, and risk_reward must be N/A.
-10. Explain the evidence and methods inside the explanation.
-11. Do not turn strategy names into separate result categories.
-12. Do not guarantee profit.
-13. Return only valid JSON.
-14. Do not use markdown code fences.
 
-Return exactly this structure:
+2. Never invent exact entry,
+   stop-loss, or target prices.
+
+3. Use only visible and defensible levels.
+
+4. If price labels are unreadable,
+   use NO TRADE.
+
+5. If chart evidence is insufficient,
+   use NO TRADE.
+
+6. If 4H and 15M conflict without
+   a defensible resolution,
+   use NO TRADE.
+
+7. Do not claim to have live news data.
+
+8. Confidence is an analysis-confidence
+   score from 0 to 100.
+   It is NOT a probability of profit.
+
+9. For NO TRADE:
+   entry = "N/A"
+   stop_loss = "N/A"
+   take_profit_1 = "N/A"
+   take_profit_2 = "N/A"
+   risk_reward = "N/A"
+
+10. Explain the actual visible evidence.
+    Strategy names should be discussed
+    inside the explanation rather than
+    presented as separate result categories.
+
+11. Never guarantee profit.
+
+12. Return ONLY valid JSON.
+
+Return this structure:
 
 {{
   "signal": "BUY | SELL | NO TRADE",
@@ -333,25 +392,30 @@ Return exactly this structure:
 """.strip()
 
 
+# ============================================================
+# GEMINI RESPONSE SCHEMA
+# ============================================================
+
 OUTPUT_SCHEMA = {
     "type": "object",
 
     "properties": {
+
         "signal": {
             "type": "string",
             "enum": [
                 "BUY",
                 "SELL",
-                "NO TRADE",
-            ],
+                "NO TRADE"
+            ]
         },
 
         "confidence": {
-            "type": "number",
+            "type": "number"
         },
 
         "instrument": {
-            "type": "string",
+            "type": "string"
         },
 
         "trend": {
@@ -360,84 +424,84 @@ OUTPUT_SCHEMA = {
                 "BULLISH",
                 "BEARISH",
                 "RANGE",
-                "UNCLEAR",
-            ],
+                "UNCLEAR"
+            ]
         },
 
         "trade_idea": {
-            "type": "string",
+            "type": "string"
         },
 
         "entry": {
-            "type": "string",
+            "type": "string"
         },
 
         "stop_loss": {
-            "type": "string",
+            "type": "string"
         },
 
         "take_profit_1": {
-            "type": "string",
+            "type": "string"
         },
 
         "take_profit_2": {
-            "type": "string",
+            "type": "string"
         },
 
         "risk_reward": {
-            "type": "string",
+            "type": "string"
         },
 
         "duration": {
-            "type": "string",
+            "type": "string"
         },
 
         "higher_timeframe_context": {
-            "type": "string",
+            "type": "string"
         },
 
         "lower_timeframe_confirmation": {
-            "type": "string",
+            "type": "string"
         },
 
         "data_analysis": {
-            "type": "string",
+            "type": "string"
         },
 
         "explanation": {
-            "type": "string",
+            "type": "string"
         },
 
         "contributing_methods": {
             "type": "array",
             "items": {
-                "type": "string",
-            },
+                "type": "string"
+            }
         },
 
         "weak_methods": {
             "type": "array",
             "items": {
-                "type": "string",
-            },
+                "type": "string"
+            }
         },
 
         "conflicting_methods": {
             "type": "array",
             "items": {
-                "type": "string",
-            },
+                "type": "string"
+            }
         },
 
         "news_fundamental_risk": {
-            "type": "string",
+            "type": "string"
         },
 
         "warnings": {
             "type": "array",
             "items": {
-                "type": "string",
-            },
+                "type": "string"
+            }
         },
     },
 
@@ -466,30 +530,59 @@ OUTPUT_SCHEMA = {
 }
 
 
-def call_gemini(
+# ============================================================
+# ERROR CLASSIFICATION
+# ============================================================
+
+def is_transient_error(status_code):
+    return status_code in {
+        408,
+        429,
+        500,
+        502,
+        503,
+        504,
+    }
+
+
+# ============================================================
+# SINGLE GEMINI REQUEST
+# ============================================================
+
+def send_gemini_request(
+    model,
     instrument,
     trade_focus,
     higher,
-    lower,
+    lower
 ):
+
     if not GEMINI_API_KEY:
         raise RuntimeError(
             "Gemini key is missing from Vercel. "
             "Set GEMINI_OPENAI_KEY."
         )
 
+    url = (
+        GEMINI_BASE_URL
+        + model
+        + ":generateContent"
+    )
+
     payload = {
+
         "system_instruction": {
             "parts": [
                 {
                     "text": (
                         "You are a strict JSON "
-                        "chart-analysis service. "
-                        "Follow the user's schema "
-                        "and never invent prices."
-                    ),
-                },
-            ],
+                        "financial chart-analysis "
+                        "service. "
+                        "Follow the supplied schema. "
+                        "Never invent prices."
+                    )
+                }
+            ]
         },
 
         "contents": [
@@ -497,34 +590,33 @@ def call_gemini(
                 "role": "user",
 
                 "parts": [
+
                     {
                         "text": build_prompt(
                             instrument,
-                            trade_focus,
-                        ),
+                            trade_focus
+                        )
                     },
 
                     {
                         "inline_data": {
                             "mime_type":
                                 higher["mime_type"],
-
                             "data":
                                 higher["data"],
-                        },
+                        }
                     },
 
                     {
                         "inline_data": {
                             "mime_type":
                                 lower["mime_type"],
-
                             "data":
                                 lower["data"],
-                        },
+                        }
                     },
-                ],
-            },
+                ]
+            }
         ],
 
         "generationConfig": {
@@ -534,274 +626,264 @@ def call_gemini(
             "responseSchema":
                 OUTPUT_SCHEMA,
 
-            "maxOutputTokens":
-                6000,
+            "temperature":
+                0.2,
         },
     }
 
     body = json.dumps(
         payload,
-        separators=(",", ":"),
+        separators=(",", ":")
     ).encode("utf-8")
 
-    last_capacity_error = None
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+
+        headers={
+            "Content-Type":
+                "application/json",
+
+            "Accept":
+                "application/json",
+
+            "x-goog-api-key":
+                GEMINI_API_KEY,
+        },
+    )
+
+    try:
+
+        with urllib.request.urlopen(
+            request,
+            timeout=GEMINI_TIMEOUT_SECONDS
+        ) as response:
+
+            raw = (
+                response
+                .read()
+                .decode(
+                    "utf-8",
+                    errors="replace"
+                )
+            )
+
+        return json.loads(raw)
+
+    except urllib.error.HTTPError as exc:
+
+        detail = (
+            exc.read()
+            .decode(
+                "utf-8",
+                errors="replace"
+            )
+        )
+
+        try:
+
+            obj = json.loads(
+                detail
+            )
+
+            message = str(
+                obj.get(
+                    "error",
+                    {}
+                ).get(
+                    "message"
+                )
+                or detail[:2000]
+            )
+
+        except Exception:
+
+            message = detail[:2000]
+
+        error = RuntimeError(
+            "Gemini "
+            + str(exc.code)
+            + ": "
+            + message
+        )
+
+        error.http_status = exc.code
+        error.gemini_message = message
+
+        raise error from exc
+
+    except (
+        urllib.error.URLError,
+        TimeoutError
+    ) as exc:
+
+        error = RuntimeError(
+            "Gemini connection error: "
+            + str(exc)
+        )
+
+        error.http_status = 503
+
+        raise error from exc
+
+
+# ============================================================
+# RESILIENT GEMINI ENGINE
+# ============================================================
+
+def call_gemini(
+    instrument,
+    trade_focus,
+    higher,
+    lower
+):
+
+    last_error = None
+
+    total_models = len(
+        GEMINI_MODELS
+    )
 
     for model_index, model in enumerate(
         GEMINI_MODELS
     ):
 
-        url = (
-            GEMINI_BASE_URL
-            + model
-            + ":generateContent"
-        )
-
-        # Give the primary 3.8 model one automatic retry.
-        # Fallback models are each attempted once.
-        attempts = (
-            2
-            if model_index == 0
-            else 1
-        )
-
-        for attempt in range(attempts):
-
-            request = urllib.request.Request(
-                url,
-                data=body,
-                method="POST",
-                headers={
-                    "Content-Type":
-                        "application/json",
-
-                    "Accept":
-                        "application/json",
-
-                    "x-goog-api-key":
-                        GEMINI_API_KEY,
-                },
-            )
+        # Two attempts maximum per model.
+        for retry_number in range(
+            MAX_TRANSIENT_RETRIES + 1
+        ):
 
             try:
 
-                with urllib.request.urlopen(
-                    request,
-                    timeout=GEMINI_TIMEOUT_SECONDS,
-                ) as response:
-
-                    raw = response.read().decode(
-                        "utf-8",
-                        errors="replace",
-                    )
-
-                try:
-                    api_obj = json.loads(
-                        raw
-                    )
-                except json.JSONDecodeError as exc:
-                    raise RuntimeError(
-                        "Gemini returned invalid API JSON."
-                    ) from exc
-
-                candidates = api_obj.get(
-                    "candidates"
+                result = send_gemini_request(
+                    model=model,
+                    instrument=instrument,
+                    trade_focus=trade_focus,
+                    higher=higher,
+                    lower=lower,
                 )
 
-                pieces = []
+                # Record which model actually
+                # answered, but do not expose
+                # implementation details to
+                # the Android app.
+                if isinstance(result, dict):
+                    result["_engine_model"] = model
 
-                if isinstance(
-                    candidates,
-                    list,
-                ):
+                return result
 
-                    for candidate in candidates:
+            except Exception as exc:
 
-                        if not isinstance(
-                            candidate,
-                            dict,
-                        ):
-                            continue
+                last_error = exc
 
-                        content = candidate.get(
-                            "content"
-                        )
-
-                        if not isinstance(
-                            content,
-                            dict,
-                        ):
-                            continue
-
-                        parts = content.get(
-                            "parts"
-                        )
-
-                        if not isinstance(
-                            parts,
-                            list,
-                        ):
-                            continue
-
-                        for part in parts:
-
-                            if (
-                                isinstance(
-                                    part,
-                                    dict,
-                                )
-                                and isinstance(
-                                    part.get(
-                                        "text"
-                                    ),
-                                    str,
-                                )
-                            ):
-
-                                pieces.append(
-                                    part["text"]
-                                )
-
-                response_text = (
-                    "\n".join(
-                        pieces
-                    ).strip()
+                status = getattr(
+                    exc,
+                    "http_status",
+                    None
                 )
 
-                if not response_text:
-
-                    raise RuntimeError(
-                        "Gemini returned no analysis text."
-                    )
-
-                return parse_analysis_json(
-                    response_text
-                )
-
-            except urllib.error.HTTPError as exc:
-
-                detail = exc.read().decode(
-                    "utf-8",
-                    errors="replace",
-                )
-
-                try:
-
-                    obj = json.loads(
-                        detail
-                    )
-
-                    message = str(
-                        obj.get(
-                            "error",
-                            {},
-                        ).get(
-                            "message"
-                        )
-                        or detail[:3000]
-                    )
-
-                except Exception:
-
-                    message = detail[:3000]
-
-
-                # Capacity / rate / service errors.
-                # Automatically move to the next model.
-                if exc.code in {
-                    429,
-                    500,
-                    502,
-                    503,
-                    504,
-                }:
-
-                    last_capacity_error = (
-                        model
-                        + ": "
-                        + message
-                    )
-
-                    if (
-                        attempt + 1
-                        < attempts
-                    ):
-
-                        time.sleep(
-                            1.5
-                        )
-
-                        continue
-
-                    break
-
-
-                # Real request problems should not be hidden
-                # by silently switching models.
-                raise RuntimeError(
-                    "Gemini error: "
-                    + model
-                    + ": "
-                    + message
-                ) from exc
-
-
-            except (
-                urllib.error.URLError,
-                TimeoutError,
-            ) as exc:
-
-                last_capacity_error = (
-                    model
-                    + ": connection/service error: "
-                    + str(exc)
-                )
-
+                # Non-transient errors should
+                # NOT be hammered or sent
+                # through pointless retries.
                 if (
-                    attempt + 1
-                    < attempts
+                    status is not None
+                    and not is_transient_error(
+                        status
+                    )
                 ):
+                    raise
+
+                # Connection errors are treated
+                # as transient.
+                if retry_number < MAX_TRANSIENT_RETRIES:
+
+                    # Exponential backoff:
+                    #
+                    # first retry ≈ 1s
+                    # plus random jitter.
+                    #
+                    # This follows Google's
+                    # recommended retry strategy.
+                    base_delay = 1.0 * (
+                        2 ** retry_number
+                    )
+
+                    jitter = random.uniform(
+                        0.2,
+                        0.8
+                    )
+
+                    delay = (
+                        base_delay
+                        + jitter
+                    )
 
                     time.sleep(
-                        1.5
+                        delay
                     )
 
                     continue
 
+                # This model is unavailable.
+                # Move immediately to the next
+                # model instead of waiting forever.
                 break
 
+        # Optional tiny stagger before the next
+        # model to avoid hammering multiple
+        # capacity pools simultaneously.
+        if model_index < total_models - 1:
 
-            except RuntimeError:
+            time.sleep(
+                random.uniform(
+                    0.15,
+                    0.45
+                )
+            )
 
-                raise
+    # Every available model failed.
+    #
+    # Return a clean customer-facing message
+    # instead of exposing internal model names.
+    if last_error is not None:
 
-
-            except Exception as exc:
-
-                raise RuntimeError(
-                    "Gemini error on "
-                    + model
-                    + ": "
-                    + str(exc)
-                ) from exc
-
-
-    if last_capacity_error:
-
-        raise RuntimeError(
-            "Gemini capacity error after automatic "
-            "model failover. "
-            "The service was unavailable on the "
-            "available Flash models. Last response: "
-            + last_capacity_error
+        status = getattr(
+            last_error,
+            "http_status",
+            None
         )
 
+        if status in {
+            408,
+            429,
+            500,
+            502,
+            503,
+            504
+        }:
+
+            raise RuntimeError(
+                "The chart-analysis service is "
+                "temporarily at capacity. "
+                "All available Gemini analysis "
+                "models were attempted. "
+                "Please retry shortly."
+            )
+
+        raise last_error
 
     raise RuntimeError(
-        "Gemini could not complete the analysis."
+        "Gemini analysis failed."
     )
 
 
+# ============================================================
+# JSON PARSER
+# ============================================================
+
 def parse_analysis_json(text):
+
     cleaned = text.strip()
 
     try:
@@ -810,15 +892,11 @@ def parse_analysis_json(text):
             cleaned
         )
 
-        if isinstance(
-            value,
-            dict,
-        ):
+        if isinstance(value, dict):
             return value
 
     except json.JSONDecodeError:
         pass
-
 
     if cleaned.startswith(
         "```"
@@ -828,29 +906,28 @@ def parse_analysis_json(text):
 
         if (
             lines
-            and lines[0].strip().startswith("```")
+            and lines[0]
+            .strip()
+            .startswith("```")
         ):
-
             lines = lines[1:]
 
         if (
             lines
-            and lines[-1].strip() == "```"
+            and lines[-1]
+            .strip()
+            == "```"
         ):
-
             lines = lines[:-1]
 
         cleaned = "\n".join(
             lines
         ).strip()
 
-
     if cleaned.lower().startswith(
         "json"
     ):
-
         cleaned = cleaned[4:].strip()
-
 
     try:
 
@@ -858,28 +935,16 @@ def parse_analysis_json(text):
             cleaned
         )
 
-        if isinstance(
-            value,
-            dict,
-        ):
+        if isinstance(value, dict):
             return value
 
     except json.JSONDecodeError:
         pass
 
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
 
-    start = cleaned.find(
-        "{"
-    )
-
-    end = cleaned.rfind(
-        "}"
-    )
-
-    if (
-        start >= 0
-        and end > start
-    ):
+    if start >= 0 and end > start:
 
         try:
 
@@ -889,47 +954,46 @@ def parse_analysis_json(text):
                 ]
             )
 
-            if isinstance(
-                value,
-                dict,
-            ):
+            if isinstance(value, dict):
                 return value
 
         except json.JSONDecodeError:
             pass
-
 
     raise RuntimeError(
         "Gemini returned invalid analysis JSON."
     )
 
 
+# ============================================================
+# NORMALIZE RESULT
+# ============================================================
+
 def normalize_result(
     result,
-    instrument,
+    instrument
 ):
+
     signal = str(
         result.get(
             "signal",
-            "NO TRADE",
+            "NO TRADE"
         )
     ).strip().upper()
 
     if signal not in {
         "BUY",
         "SELL",
-        "NO TRADE",
+        "NO TRADE"
     }:
-
         signal = "NO TRADE"
-
 
     try:
 
         confidence = float(
             result.get(
                 "confidence",
-                0,
+                0
             )
         )
 
@@ -937,20 +1001,18 @@ def normalize_result(
 
         confidence = 0.0
 
-
     confidence = max(
         0.0,
         min(
             100.0,
-            confidence,
-        ),
+            confidence
+        )
     )
-
 
     trend = str(
         result.get(
             "trend",
-            "UNCLEAR",
+            "UNCLEAR"
         )
     ).strip().upper()
 
@@ -958,26 +1020,20 @@ def normalize_result(
         "BULLISH",
         "BEARISH",
         "RANGE",
-        "UNCLEAR",
+        "UNCLEAR"
     }:
-
         trend = "UNCLEAR"
-
 
     def text(name):
 
-        value = result.get(
-            name
-        )
+        value = result.get(name)
 
         if value is None:
-
             return "N/A"
-
 
         if isinstance(
             value,
-            str,
+            str
         ):
 
             return (
@@ -985,11 +1041,7 @@ def normalize_result(
                 or "N/A"
             )
 
-
-        return str(
-            value
-        )
-
+        return str(value)
 
     def list_value(name):
 
@@ -999,18 +1051,15 @@ def normalize_result(
 
         if not isinstance(
             value,
-            list,
+            list
         ):
-
             return []
-
 
         return [
             str(x).strip()
             for x in value
             if str(x).strip()
         ]
-
 
     output = {
 
@@ -1066,14 +1115,10 @@ def normalize_result(
             ),
 
         "data_analysis":
-            text(
-                "data_analysis"
-            ),
+            text("data_analysis"),
 
         "explanation":
-            text(
-                "explanation"
-            ),
+            text("explanation"),
 
         "contributing_methods":
             list_value(
@@ -1101,54 +1146,59 @@ def normalize_result(
             ),
     }
 
-
     if signal == "NO TRADE":
 
         output["entry"] = "N/A"
-
         output["stop_loss"] = "N/A"
-
         output["take_profit_1"] = "N/A"
-
         output["take_profit_2"] = "N/A"
-
         output["risk_reward"] = "N/A"
-
 
     return output
 
 
-def encode_result(
-    result
-):
+# ============================================================
+# HISTORY ENCODING
+# ============================================================
+
+def encode_result(result):
+
     raw = json.dumps(
         result,
         ensure_ascii=False,
-        separators=(",", ":"),
+        separators=(",", ":")
     ).encode("utf-8")
 
     return (
-        base64.urlsafe_b64encode(
-            raw
-        )
+        base64
+        .urlsafe_b64encode(raw)
         .decode("ascii")
         .rstrip("=")
     )
 
+
+# ============================================================
+# SAVE COMPLETED JOB
+# ============================================================
 
 def create_completed_job(
     job_id,
     user_id,
     instrument,
     trade_focus,
-    encoded_result,
+    encoded_result
 ):
+
     url = (
-        get_supabase_url().rstrip("/")
+        get_supabase_url()
+        .rstrip("/")
         + "/rest/v1/analysis_jobs"
     )
 
-    key = get_supabase_service_key().strip()
+    key = (
+        get_supabase_service_key()
+        .strip()
+    )
 
     payload = {
 
@@ -1172,24 +1222,25 @@ def create_completed_job(
         "status":
             "completed",
 
-        # Existing History reads completed
-        # results from this field.
+        # History system already reads
+        # completed results from here.
         "openai_response_id":
             encoded_result,
     }
 
-
     request = urllib.request.Request(
+
         url,
 
         data=json.dumps(
             payload,
-            separators=(",", ":"),
+            separators=(",", ":")
         ).encode("utf-8"),
 
         method="POST",
 
         headers={
+
             "apikey":
                 key,
 
@@ -1207,22 +1258,23 @@ def create_completed_job(
         },
     )
 
-
     try:
 
         with urllib.request.urlopen(
             request,
-            timeout=20,
+            timeout=20
         ) as response:
 
             response.read()
 
-
     except urllib.error.HTTPError as exc:
 
-        detail = exc.read().decode(
-            "utf-8",
-            errors="replace",
+        detail = (
+            exc.read()
+            .decode(
+                "utf-8",
+                errors="replace"
+            )
         )
 
         raise RuntimeError(
@@ -1230,10 +1282,9 @@ def create_completed_job(
             + detail[:3000]
         ) from exc
 
-
     except (
         urllib.error.URLError,
-        TimeoutError,
+        TimeoutError
     ) as exc:
 
         raise RuntimeError(
@@ -1242,29 +1293,31 @@ def create_completed_job(
         ) from exc
 
 
+# ============================================================
+# HTTP HANDLER
+# ============================================================
+
 class handler(
     BaseHTTPRequestHandler
 ):
 
     def do_OPTIONS(self):
 
-        self.send_response(
-            204
-        )
+        self.send_response(204)
 
         self.send_header(
             "Access-Control-Allow-Origin",
-            "*",
+            "*"
         )
 
         self.send_header(
             "Access-Control-Allow-Headers",
-            "Content-Type, Authorization",
+            "Content-Type, Authorization"
         )
 
         self.send_header(
             "Access-Control-Allow-Methods",
-            "GET, POST, OPTIONS",
+            "GET, POST, OPTIONS"
         )
 
         self.end_headers()
@@ -1273,11 +1326,13 @@ class handler(
     def do_POST(self):
 
         reserved = False
-
         user_id = ""
 
-
         try:
+
+            # ------------------------------------------------
+            # AUTHENTICATION
+            # ------------------------------------------------
 
             access_token = (
                 extract_bearer_token(
@@ -1292,10 +1347,9 @@ class handler(
             user_id = str(
                 user.get(
                     "id",
-                    "",
+                    ""
                 )
             ).strip()
-
 
             if not user_id:
 
@@ -1304,10 +1358,18 @@ class handler(
                 )
 
 
+            # ------------------------------------------------
+            # REQUEST
+            # ------------------------------------------------
+
             data = read_json(
                 self
             )
 
+
+            # ------------------------------------------------
+            # VALIDATION
+            # ------------------------------------------------
 
             instrument = validate_instrument(
                 data.get(
@@ -1315,41 +1377,40 @@ class handler(
                 )
             )
 
-
             trade_focus = validate_focus(
                 data.get(
                     "trade_focus"
                 )
             )
 
-
             higher = validate_image(
                 data.get(
                     "higher_timeframe_image"
                 ),
-                "4H chart",
+                "4H chart"
             )
-
 
             lower = validate_image(
                 data.get(
                     "lower_timeframe_image"
                 ),
-                "15M chart",
+                "15M chart"
             )
 
+
+            # ------------------------------------------------
+            # DAILY LIMIT
+            # ------------------------------------------------
 
             owner = is_owner_user(
                 user
             )
-
 
             if not owner:
 
                 slot = reserve_analysis_slot(
                     user_id
                 )
-
 
                 if slot == -1:
 
@@ -1368,24 +1429,26 @@ class handler(
 
                             "is_owner":
                                 False,
-                        },
+                        }
                     )
 
                     return
-
 
                 reserved = True
 
                 remaining = max(
                     0,
-                    4 - int(slot),
+                    4 - int(slot)
                 )
-
 
             else:
 
                 remaining = None
 
+
+            # ------------------------------------------------
+            # GEMINI ANALYSIS
+            # ------------------------------------------------
 
             try:
 
@@ -1393,37 +1456,27 @@ class handler(
                     instrument,
                     trade_focus,
                     higher,
-                    lower,
+                    lower
                 )
-
 
                 result = normalize_result(
                     raw_result,
-                    instrument,
+                    instrument
                 )
-
 
                 job_id = str(
-                    __import__(
-                        "uuid"
-                    ).uuid4()
+                    uuid.uuid4()
                 )
-
 
                 create_completed_job(
                     job_id,
-
                     user_id,
-
                     instrument,
-
                     trade_focus,
-
                     encode_result(
                         result
-                    ),
+                    )
                 )
-
 
             except Exception:
 
@@ -1444,12 +1497,15 @@ class handler(
             reserved = False
 
 
+            # ------------------------------------------------
+            # SUCCESS
+            # ------------------------------------------------
+
             json_response(
                 self,
-
                 202,
-
                 {
+
                     "status":
                         "completed",
 
@@ -1469,9 +1525,13 @@ class handler(
 
                     "remaining":
                         remaining,
-                },
+                }
             )
 
+
+        # ----------------------------------------------------
+        # CLIENT VALIDATION ERROR
+        # ----------------------------------------------------
 
         except ValueError as exc:
 
@@ -1481,9 +1541,13 @@ class handler(
                 {
                     "error":
                         str(exc)
-                },
+                }
             )
 
+
+        # ----------------------------------------------------
+        # EXPECTED BACKEND/GEMINI ERROR
+        # ----------------------------------------------------
 
         except RuntimeError as exc:
 
@@ -1493,9 +1557,13 @@ class handler(
                 {
                     "error":
                         str(exc)
-                },
+                }
             )
 
+
+        # ----------------------------------------------------
+        # UNEXPECTED ERROR
+        # ----------------------------------------------------
 
         except Exception as exc:
 
@@ -1510,7 +1578,6 @@ class handler(
                 except Exception:
                     pass
 
-
             json_response(
                 self,
                 500,
@@ -1518,5 +1585,5 @@ class handler(
                     "error":
                         "Analysis backend error: "
                         + str(exc)
-                },
+                }
             )
