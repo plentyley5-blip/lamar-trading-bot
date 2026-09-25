@@ -17,6 +17,7 @@ from api.user_security import (
 
 
 OPENAI_URL = "https://api.openai.com/v1/responses"
+
 MODEL = os.environ.get(
     "OPENAI_MODEL",
     "gpt-5.6-luna",
@@ -348,7 +349,10 @@ def create_openai_background_job(
         "model": MODEL,
         "background": True,
         "store": True,
-        "instructions": SYSTEM_PROMPT,
+
+        "instructions":
+            SYSTEM_PROMPT,
+
         "input": [
             {
                 "role": "user",
@@ -358,7 +362,8 @@ def create_openai_background_job(
                         "text": (
                             "Instrument: "
                             + instrument
-                            + "\nTrade focus: "
+                            + "\n"
+                            "Trade focus: "
                             + trade_focus
                             + "\n\n"
                             "Analyze the supplied charts.\n"
@@ -370,26 +375,42 @@ def create_openai_background_job(
                     },
                     {
                         "type": "input_image",
-                        "image_url": higher_image,
-                        "detail": "low",
+                        "image_url":
+                            higher_image,
+                        "detail":
+                            "low",
                     },
                     {
                         "type": "input_image",
-                        "image_url": lower_image,
-                        "detail": "low",
+                        "image_url":
+                            lower_image,
+                        "detail":
+                            "low",
                     },
                 ],
             }
         ],
+
         "text": {
             "format": {
-                "type": "json_schema",
-                "name": "lamar_trade_analysis",
-                "strict": True,
-                "schema": OUTPUT_SCHEMA,
+                "type":
+                    "json_schema",
+
+                "name":
+                    "lamar_trade_analysis",
+
+                "strict":
+                    True,
+
+                "schema":
+                    OUTPUT_SCHEMA,
             }
         },
-        "max_output_tokens": 1200,
+
+        # Increased to prevent the background response
+        # from finishing as incomplete because of token limits.
+        "max_output_tokens":
+            3000,
     }
 
     request = urllib.request.Request(
@@ -401,8 +422,10 @@ def create_openai_background_job(
         headers={
             "Authorization":
                 "Bearer " + api_key,
+
             "Content-Type":
                 "application/json",
+
             "Accept":
                 "application/json",
         },
@@ -410,6 +433,7 @@ def create_openai_background_job(
     )
 
     try:
+
         with urllib.request.urlopen(
             request,
             timeout=55,
@@ -421,7 +445,10 @@ def create_openai_background_job(
 
             data = json.loads(raw)
 
-            if not isinstance(data, dict):
+            if not isinstance(
+                data,
+                dict,
+            ):
                 raise RuntimeError(
                     "OpenAI returned an invalid response."
                 )
@@ -442,18 +469,24 @@ def create_openai_background_job(
         )
 
         try:
-            data = json.loads(raw)
+            error_data = json.loads(
+                raw
+            )
         except Exception:
-            data = {}
+            error_data = {}
 
         message = ""
 
+        error_object = error_data.get(
+            "error"
+        )
+
         if isinstance(
-            data.get("error"),
+            error_object,
             dict,
         ):
             message = str(
-                data["error"].get(
+                error_object.get(
                     "message",
                     "",
                 )
@@ -461,7 +494,7 @@ def create_openai_background_job(
 
         if not message:
             message = str(
-                data.get(
+                error_data.get(
                     "message",
                     "",
                 )
@@ -489,27 +522,31 @@ def create_openai_background_job(
 
 
 def extract_openai_id(response):
+
     if not isinstance(
         response,
         dict,
     ):
         return ""
 
-    for key in (
-        "id",
-        "response_id",
-    ):
-        value = str(
-            response.get(
-                key,
-                "",
-            )
-        ).strip()
+    value = str(
+        response.get(
+            "id",
+            "",
+        )
+    ).strip()
 
-        if value:
-            return value
+    if value:
+        return value
 
-    return ""
+    value = str(
+        response.get(
+            "response_id",
+            "",
+        )
+    ).strip()
+
+    return value
 
 
 def save_job(
@@ -522,11 +559,10 @@ def save_job(
     status,
 ):
     """
-    History persistence is deliberately non-fatal.
-    Analysis must continue even if this database write fails.
+    History saving must never stop a live analysis.
     """
 
-    base = {
+    payload = {
         "user_id":
             str(user_id),
 
@@ -541,71 +577,69 @@ def save_job(
 
         "openai_response_id":
             str(response_id),
+
+        "higher_timeframe_image":
+            higher_image,
+
+        "lower_timeframe_image":
+            lower_image,
     }
 
-    payloads = [
-        {
-            **base,
-            "higher_timeframe_image":
-                higher_image,
-            "lower_timeframe_image":
-                lower_image,
-        },
-        base,
-    ]
+    try:
 
-    for payload in payloads:
+        request = urllib.request.Request(
+            get_supabase_url()
+            + "/rest/v1/analysis_jobs",
 
-        try:
-            request = urllib.request.Request(
-                get_supabase_url()
-                + "/rest/v1/analysis_jobs",
-                data=json.dumps(
-                    payload,
-                    separators=(",", ":"),
-                ).encode("utf-8"),
-                headers={
-                    "apikey":
-                        get_supabase_service_key(),
+            data=json.dumps(
+                payload,
+                separators=(",", ":"),
+            ).encode("utf-8"),
 
-                    "Authorization":
-                        "Bearer "
-                        + get_supabase_service_key(),
+            headers={
+                "apikey":
+                    get_supabase_service_key(),
 
-                    "Content-Type":
-                        "application/json",
+                "Authorization":
+                    "Bearer "
+                    + get_supabase_service_key(),
 
-                    "Accept":
-                        "application/json",
+                "Content-Type":
+                    "application/json",
 
-                    "Prefer":
-                        "return=minimal",
-                },
-                method="POST",
-            )
+                "Accept":
+                    "application/json",
 
-            with urllib.request.urlopen(
-                request,
-                timeout=20,
-            ) as response:
+                "Prefer":
+                    "return=minimal",
+            },
 
-                response.read()
+            method="POST",
+        )
 
-            return True
+        with urllib.request.urlopen(
+            request,
+            timeout=20,
+        ) as response:
 
-        except Exception as exc:
+            response.read()
 
-            print(
-                "HISTORY SAVE ATTEMPT FAILED:",
-                repr(exc),
-            )
+        return True
 
-    return False
+    except Exception as exc:
+
+        print(
+            "HISTORY SAVE FAILED:",
+            repr(exc),
+        )
+
+        return False
 
 
 class handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
+
         json_response(
             self,
             204,
@@ -618,6 +652,7 @@ class handler(BaseHTTPRequestHandler):
         user = None
 
         try:
+
             access_token = extract_bearer_token(
                 self
             )
@@ -679,10 +714,13 @@ class handler(BaseHTTPRequestHandler):
                         {
                             "error":
                                 "Daily analysis limit reached.",
+
                             "daily_limit":
                                 4,
+
                             "remaining":
                                 0,
+
                             "is_owner":
                                 False,
                         },
@@ -698,11 +736,12 @@ class handler(BaseHTTPRequestHandler):
                 )
 
             else:
+
                 remaining = None
 
             try:
 
-                openai_response = (
+                response = (
                     create_openai_background_job(
                         instrument,
                         trade_focus,
@@ -714,6 +753,7 @@ class handler(BaseHTTPRequestHandler):
             except Exception:
 
                 if reserved:
+
                     try:
                         release_analysis_slot(
                             user_id
@@ -724,20 +764,21 @@ class handler(BaseHTTPRequestHandler):
                 raise
 
             print(
-                "OPENAI RESPONSE:",
+                "OPENAI CREATE RESPONSE:",
                 json.dumps(
-                    openai_response,
+                    response,
                     ensure_ascii=False,
                 ),
             )
 
             response_id = extract_openai_id(
-                openai_response
+                response
             )
 
             if not response_id:
 
                 if reserved:
+
                     try:
                         release_analysis_slot(
                             user_id
@@ -751,28 +792,29 @@ class handler(BaseHTTPRequestHandler):
                     {
                         "error":
                             "OpenAI did not return a response ID.",
+
                         "openai_response":
-                            openai_response,
+                            response,
                     },
                 )
 
                 return
 
             status = str(
-                openai_response.get(
+                response.get(
                     "status",
                     "queued",
                 )
             ).strip() or "queued"
 
             history_saved = save_job(
-                user_id=user_id,
-                instrument=instrument,
-                trade_focus=trade_focus,
-                response_id=response_id,
-                higher_image=higher_image,
-                lower_image=lower_image,
-                status=status,
+                user_id,
+                instrument,
+                trade_focus,
+                response_id,
+                higher_image,
+                lower_image,
+                status,
             )
 
             job_id = create_secure_job_token(
@@ -818,13 +860,14 @@ class handler(BaseHTTPRequestHandler):
                 400,
                 {
                     "error":
-                        str(exc)
+                        str(exc),
                 },
             )
 
         except RuntimeError as exc:
 
             if reserved and user:
+
                 try:
                     release_analysis_slot(
                         str(user["id"])
@@ -837,13 +880,14 @@ class handler(BaseHTTPRequestHandler):
                 503,
                 {
                     "error":
-                        str(exc)
+                        str(exc),
                 },
             )
 
         except Exception as exc:
 
             if reserved and user:
+
                 try:
                     release_analysis_slot(
                         str(user["id"])
@@ -862,6 +906,7 @@ class handler(BaseHTTPRequestHandler):
                 {
                     "error":
                         "Analysis submit failed.",
+
                     "details":
                         str(exc),
                 },
