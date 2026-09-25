@@ -1,19 +1,19 @@
-import json
 import base64
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler
-from urllib.request import Request, urlopen
-from urllib.parse import urlparse, parse_qs, quote
-from urllib.error import HTTPError, URLError
 
-from user_security import (
+from api.user_security import (
     extract_bearer_token,
-    verify_access_token,
-    get_supabase_url,
     get_supabase_service_key,
+    get_supabase_url,
+    verify_access_token,
 )
 
 
-def send_json(handler, status_code, payload):
+def json_response(handler, status_code, payload):
     body = json.dumps(
         payload,
         ensure_ascii=False
@@ -25,98 +25,92 @@ def send_json(handler, status_code, payload):
         "application/json; charset=utf-8"
     )
     handler.send_header(
-        "Cache-Control",
-        "no-store"
-    )
-    handler.send_header(
         "Access-Control-Allow-Origin",
         "*"
     )
     handler.send_header(
         "Access-Control-Allow-Headers",
-        "Authorization, Content-Type"
+        "Content-Type, Authorization"
     )
     handler.send_header(
         "Access-Control-Allow-Methods",
-        "GET, OPTIONS"
+        "GET, POST, OPTIONS"
+    )
+    handler.send_header(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate"
     )
     handler.send_header(
         "Content-Length",
         str(len(body))
     )
     handler.end_headers()
-    handler.wfile.write(body)
+
+    try:
+        handler.wfile.write(body)
+    except Exception:
+        pass
 
 
-def decode_saved_result(encoded):
-    if not encoded:
-        raise ValueError("Saved analysis result is empty.")
-
-    padding = "=" * (-len(encoded) % 4)
-
-    raw = base64.urlsafe_b64decode(
-        encoded + padding
+def get_job_id(handler):
+    parsed = urllib.parse.urlparse(
+        handler.path
     )
 
-    result = json.loads(
-        raw.decode("utf-8")
+    params = urllib.parse.parse_qs(
+        parsed.query
     )
 
-    if not isinstance(result, dict):
-        raise ValueError(
-            "Saved analysis result is invalid."
-        )
-
-    return result
+    return str(
+        params.get(
+            "job_id",
+            [""]
+        )[0]
+    ).strip()
 
 
 def get_job(job_id, user_id):
-    supabase_url = get_supabase_url().rstrip("/")
-    service_key = get_supabase_service_key().strip()
-
-    if not supabase_url:
-        raise RuntimeError(
-            "Supabase URL is not configured."
-        )
-
-    if not service_key:
-        raise RuntimeError(
-            "Supabase service key is not configured."
-        )
-
-    encoded_job_id = quote(
-        job_id,
-        safe=""
-    )
-
-    encoded_user_id = quote(
-        user_id,
-        safe=""
-    )
-
     url = (
-        f"{supabase_url}/rest/v1/analysis_jobs"
-        f"?select=id,user_id,instrument,trade_focus,status,"
-        f"openai_response_id,created_at,error_message"
-        f"&id=eq.{encoded_job_id}"
-        f"&user_id=eq.{encoded_user_id}"
-        f"&limit=1"
+        get_supabase_url().rstrip("/")
+        + "/rest/v1/analysis_jobs"
+        + "?select="
+        + "id,user_id,instrument,trade_focus,"
+        + "created_at,status,openai_response_id,"
+        + "error_message"
+        + "&id=eq."
+        + urllib.parse.quote(
+            job_id,
+            safe=""
+        )
+        + "&user_id=eq."
+        + urllib.parse.quote(
+            user_id,
+            safe=""
+        )
+        + "&limit=1"
     )
 
-    req = Request(
+    service_key = (
+        get_supabase_service_key()
+        .strip()
+    )
+
+    request = urllib.request.Request(
         url,
         method="GET",
         headers={
             "apikey": service_key,
-            "Authorization": f"Bearer {service_key}",
-            "Content-Type": "application/json",
-        },
+            "Authorization": (
+                "Bearer " + service_key
+            ),
+            "Accept": "application/json"
+        }
     )
 
     try:
-        with urlopen(
-            req,
-            timeout=15
+        with urllib.request.urlopen(
+            request,
+            timeout=20
         ) as response:
 
             raw = response.read().decode(
@@ -124,32 +118,80 @@ def get_job(job_id, user_id):
                 errors="replace"
             )
 
-    except HTTPError as exc:
-        body = exc.read().decode(
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(
             "utf-8",
             errors="replace"
         )
 
         raise RuntimeError(
-            f"Supabase status error ({exc.code}): {body[:1000]}"
-        )
+            "Supabase status error: "
+            + detail[:2000]
+        ) from exc
 
-    except URLError as exc:
+    except (
+        urllib.error.URLError,
+        TimeoutError
+    ) as exc:
         raise RuntimeError(
-            f"Supabase connection failed: {exc.reason}"
-        )
+            "Supabase connection error: "
+            + str(exc)
+        ) from exc
 
     try:
-        rows = json.loads(raw)
-    except Exception:
+        rows = json.loads(
+            raw
+        )
+    except json.JSONDecodeError as exc:
         raise RuntimeError(
             "Supabase returned invalid JSON."
-        )
+        ) from exc
 
-    if not rows:
+    if not isinstance(
+        rows,
+        list
+    ) or not rows:
         return None
 
     return rows[0]
+
+
+def decode_result(encoded):
+    encoded = str(
+        encoded or ""
+    ).strip()
+
+    if not encoded:
+        raise RuntimeError(
+            "The saved analysis result is empty."
+        )
+
+    try:
+        raw = base64.urlsafe_b64decode(
+            encoded
+            + "=" * (
+                -len(encoded) % 4
+            )
+        )
+
+        result = json.loads(
+            raw.decode("utf-8")
+        )
+
+    except Exception as exc:
+        raise RuntimeError(
+            "The saved analysis result is invalid."
+        ) from exc
+
+    if not isinstance(
+        result,
+        dict
+    ):
+        raise RuntimeError(
+            "The saved analysis result is invalid."
+        )
+
+    return result
 
 
 class handler(BaseHTTPRequestHandler):
@@ -162,7 +204,7 @@ class handler(BaseHTTPRequestHandler):
         )
         self.send_header(
             "Access-Control-Allow-Headers",
-            "Authorization, Content-Type"
+            "Content-Type, Authorization"
         )
         self.send_header(
             "Access-Control-Allow-Methods",
@@ -172,75 +214,37 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
-            token = extract_bearer_token(self)
+            access_token = (
+                extract_bearer_token(self)
+            )
 
-            if not token:
-                send_json(
-                    self,
-                    401,
-                    {
-                        "error": "Authentication required."
-                    },
+            user = verify_access_token(
+                access_token
+            )
+
+            user_id = str(
+                user.get(
+                    "id",
+                    ""
                 )
-                return
-
-            user = verify_access_token(token)
-
-            if not user:
-                send_json(
-                    self,
-                    401,
-                    {
-                        "error": "Invalid or expired session."
-                    },
-                )
-                return
-
-            user_id = user.get("id")
+            ).strip()
 
             if not user_id:
-                send_json(
-                    self,
-                    401,
-                    {
-                        "error": "User ID was not found."
-                    },
+                raise ValueError(
+                    "Authenticated user ID is missing."
                 )
-                return
 
-            parsed = urlparse(
-                self.path
+            job_id = get_job_id(
+                self
             )
 
-            params = parse_qs(
-                parsed.query
-            )
-
-            job_ids = params.get(
-                "job_id"
-            )
-
-            if not job_ids:
-                send_json(
+            if not job_id:
+                json_response(
                     self,
                     400,
                     {
                         "error": "job_id is required."
-                    },
-                )
-                return
-
-            job_id = str(
-                job_ids[0]
-            ).strip()
-
-            if not job_id:
-                send_json(
-                    self,
-                    400,
-                    {
-                        "error": "job_id is empty."
-                    },
+                    }
                 )
                 return
 
@@ -250,97 +254,94 @@ class handler(BaseHTTPRequestHandler):
             )
 
             if row is None:
-                send_json(
+                json_response(
                     self,
                     404,
                     {
                         "status": "failed",
-                        "error": "Analysis job was not found."
-                    },
+                        "error": "Analysis job not found."
+                    }
                 )
                 return
 
             status = str(
-                row.get("status") or ""
-            ).lower()
+                row.get(
+                    "status",
+                    ""
+                )
+            ).strip().lower()
 
             if status == "completed":
-                encoded_result = row.get(
-                    "openai_response_id"
+                result = decode_result(
+                    row.get(
+                        "openai_response_id"
+                    )
                 )
 
-                try:
-                    result = decode_saved_result(
-                        encoded_result
-                    )
-                except Exception as exc:
-                    send_json(
-                        self,
-                        500,
-                        {
-                            "status": "failed",
-                            "error": (
-                                "Saved analysis could not be decoded: "
-                                + str(exc)
-                            ),
-                        },
-                    )
-                    return
-
-                send_json(
+                json_response(
                     self,
                     200,
                     {
                         "status": "completed",
-                        "result": result,
                         "job_id": row.get("id"),
-                    },
+                        "result": result
+                    }
                 )
                 return
 
             if status == "failed":
-                send_json(
+                json_response(
                     self,
                     200,
                     {
                         "status": "failed",
-                        "error": (
-                            row.get("error_message")
-                            or "Analysis failed."
-                        ),
                         "job_id": row.get("id"),
-                    },
+                        "error": (
+                            row.get(
+                                "error_message"
+                            )
+                            or "The analysis failed."
+                        )
+                    }
                 )
                 return
 
-            send_json(
+            json_response(
                 self,
                 200,
                 {
                     "status": "in_progress",
                     "job_id": row.get("id"),
-                },
+                    "poll_after_seconds": 2
+                }
+            )
+
+        except ValueError as exc:
+            json_response(
+                self,
+                401,
+                {
+                    "error": str(exc)
+                }
             )
 
         except RuntimeError as exc:
-            send_json(
+            json_response(
                 self,
-                500,
+                502,
                 {
-                    "status": "failed",
-                    "error": str(exc),
-                },
+                    "error": str(exc)
+                }
             )
 
         except Exception as exc:
-            send_json(
+            json_response(
                 self,
                 500,
                 {
-                    "status": "failed",
                     "error": (
-                        "Analysis status error: "
+                        "Analysis status backend error: "
                         + str(exc)
-                    ),
-                },
+                    )
+                }
             )
