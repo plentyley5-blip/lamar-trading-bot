@@ -29,19 +29,6 @@ GEMINI_API_KEY = (
     or os.environ.get("GEMINI_API_KEY", "").strip()
 )
 
-# IMPORTANT:
-# Do not use GEMINI_MODEL from Vercel.
-#
-# These are real multimodal Gemini models.
-# The order is intentional:
-#
-# 1. High quality Flash
-# 2. Alternate Flash capacity
-# 3. Previous-generation Flash
-# 4. Stable high-throughput Flash
-# 5. Cheap/high-volume Flash-Lite
-# 6. Additional Flash-Lite fallback
-#
 GEMINI_MODELS = [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
@@ -57,12 +44,8 @@ GEMINI_BASE_URL = (
 
 MAX_REQUEST_BYTES = 15 * 1024 * 1024
 
-# Keep individual requests short so a failed capacity attempt
-# does not consume the entire Vercel execution window.
 GEMINI_TIMEOUT_SECONDS = 10
 
-# Number of retries for transient capacity/service errors
-# on the SAME model.
 MAX_TRANSIENT_RETRIES = 1
 
 
@@ -71,6 +54,7 @@ MAX_TRANSIENT_RETRIES = 1
 # ============================================================
 
 def json_response(handler, status_code, payload):
+
     body = json.dumps(
         payload,
         ensure_ascii=False
@@ -121,6 +105,7 @@ def json_response(handler, status_code, payload):
 # ============================================================
 
 def read_json(handler):
+
     try:
         length = int(
             handler.headers.get(
@@ -128,12 +113,15 @@ def read_json(handler):
                 "0"
             )
         )
+
     except ValueError as exc:
+
         raise ValueError(
             "Invalid request length."
         ) from exc
 
     if length <= 0 or length > MAX_REQUEST_BYTES:
+
         raise ValueError(
             "Invalid or oversized chart request."
         )
@@ -141,15 +129,19 @@ def read_json(handler):
     raw = handler.rfile.read(length)
 
     try:
+
         data = json.loads(
             raw.decode("utf-8")
         )
+
     except json.JSONDecodeError as exc:
+
         raise ValueError(
             "Invalid request JSON."
         ) from exc
 
     if not isinstance(data, dict):
+
         raise ValueError(
             "Invalid request."
         )
@@ -162,6 +154,7 @@ def read_json(handler):
 # ============================================================
 
 def validate_instrument(value):
+
     instrument = str(
         value or ""
     ).strip().upper()
@@ -182,6 +175,7 @@ def validate_instrument(value):
     }
 
     if instrument not in allowed:
+
         raise ValueError(
             "Invalid instrument."
         )
@@ -190,6 +184,7 @@ def validate_instrument(value):
 
 
 def validate_focus(value):
+
     focus = str(
         value or ""
     ).strip().upper()
@@ -199,6 +194,7 @@ def validate_focus(value):
         "DAY TRADE",
         "SWING"
     }:
+
         raise ValueError(
             "Trade focus must be SCALP, DAY TRADE, or SWING."
         )
@@ -207,10 +203,12 @@ def validate_focus(value):
 
 
 def validate_image(value, label):
+
     if (
         not isinstance(value, str)
         or not value.strip()
     ):
+
         raise ValueError(
             label + " is required."
         )
@@ -221,6 +219,7 @@ def validate_image(value, label):
         not value.startswith("data:image/")
         or ";base64," not in value
     ):
+
         raise ValueError(
             label + " is not a valid base64 image."
         )
@@ -237,28 +236,32 @@ def validate_image(value, label):
         "image/png",
         "image/webp"
     }:
+
         raise ValueError(
-            label
-            + " must be JPEG, PNG, or WEBP."
+            label + " must be JPEG, PNG, or WEBP."
         )
 
     if not encoded.strip():
+
         raise ValueError(
             label + " contains no image data."
         )
 
     try:
+
         decoded = base64.b64decode(
             encoded,
             validate=False
         )
+
     except Exception as exc:
+
         raise ValueError(
-            label
-            + " contains invalid base64 data."
+            label + " contains invalid base64 data."
         ) from exc
 
     if not decoded:
+
         raise ValueError(
             label + " is empty."
         )
@@ -277,6 +280,7 @@ def build_prompt(
     instrument,
     trade_focus
 ):
+
     return f"""
 You are LM ANALYZER, the professional chart-analysis engine for
 LAMAR TRADING BOT.
@@ -288,6 +292,15 @@ IMAGE 2 = 15M lower timeframe.
 
 Instrument: {instrument}
 Trade focus: {trade_focus}
+
+IMPORTANT:
+You MUST actually inspect both supplied images before producing
+the analysis.
+
+Do NOT return empty fields simply because the final decision is
+NO TRADE.
+
+A NO TRADE decision still requires a complete market analysis.
 
 Use ONLY visible chart evidence.
 
@@ -356,16 +369,40 @@ IMPORTANT:
    take_profit_2 = "N/A"
    risk_reward = "N/A"
 
-10. Explain the actual visible evidence.
-    Strategy names should be discussed
-    inside the explanation rather than
-    presented as separate result categories.
+10. IMPORTANT:
+    Even when the signal is NO TRADE, you MUST populate:
 
-11. Never guarantee profit.
+    higher_timeframe_context
+    lower_timeframe_confirmation
+    data_analysis
+    explanation
+    news_fundamental_risk
 
-12. Return ONLY valid JSON.
+    These fields must explain what was actually visible
+    on the charts and why a trade was or was not justified.
 
-Return this structure:
+11. For NO TRADE, confidence should reflect the quality
+    and clarity of the market analysis.
+
+    Do NOT automatically use 0%.
+
+    Use 0% only if the charts genuinely cannot be analyzed.
+
+12. If the 4H chart is readable but the 15M setup is not
+    confirmed, describe the 4H structure and explain why
+    the 15M confirmation is insufficient.
+
+13. If the 15M chart is readable but conflicts with the 4H,
+    describe both and explain the conflict.
+
+14. Strategy names should be discussed inside the explanation
+    rather than presented as separate result categories.
+
+15. Never guarantee profit.
+
+16. Return ONLY valid JSON.
+
+Return exactly this structure:
 
 {{
   "signal": "BUY | SELL | NO TRADE",
@@ -397,6 +434,7 @@ Return this structure:
 # ============================================================
 
 OUTPUT_SCHEMA = {
+
     "type": "object",
 
     "properties": {
@@ -535,6 +573,7 @@ OUTPUT_SCHEMA = {
 # ============================================================
 
 def is_transient_error(status_code):
+
     return status_code in {
         408,
         429,
@@ -558,6 +597,7 @@ def send_gemini_request(
 ):
 
     if not GEMINI_API_KEY:
+
         raise RuntimeError(
             "Gemini key is missing from Vercel. "
             "Set GEMINI_OPENAI_KEY."
@@ -575,10 +615,14 @@ def send_gemini_request(
             "parts": [
                 {
                     "text": (
-                        "You are a strict JSON "
-                        "financial chart-analysis "
-                        "service. "
-                        "Follow the supplied schema. "
+                        "You are LM ANALYZER. "
+                        "You are analyzing two actual "
+                        "trading chart images. "
+                        "You MUST inspect the images. "
+                        "You MUST return a complete "
+                        "analysis JSON. "
+                        "A NO TRADE result is still a "
+                        "complete analysis. "
                         "Never invent prices."
                     )
                 }
@@ -586,6 +630,7 @@ def send_gemini_request(
         },
 
         "contents": [
+
             {
                 "role": "user",
 
@@ -620,6 +665,7 @@ def send_gemini_request(
         ],
 
         "generationConfig": {
+
             "responseMimeType":
                 "application/json",
 
@@ -637,8 +683,11 @@ def send_gemini_request(
     ).encode("utf-8")
 
     request = urllib.request.Request(
+
         url,
+
         data=body,
+
         method="POST",
 
         headers={
@@ -683,9 +732,7 @@ def send_gemini_request(
 
         try:
 
-            obj = json.loads(
-                detail
-            )
+            obj = json.loads(detail)
 
             message = str(
                 obj.get(
@@ -729,6 +776,210 @@ def send_gemini_request(
 
 
 # ============================================================
+# JSON PARSER
+# ============================================================
+
+def parse_analysis_json(text):
+
+    if not isinstance(text, str):
+
+        raise RuntimeError(
+            "Gemini analysis content was not text."
+        )
+
+    cleaned = text.strip()
+
+    if not cleaned:
+
+        raise RuntimeError(
+            "Gemini returned empty analysis content."
+        )
+
+    try:
+
+        value = json.loads(cleaned)
+
+        if isinstance(value, dict):
+            return value
+
+    except json.JSONDecodeError:
+        pass
+
+    if cleaned.startswith("```"):
+
+        lines = cleaned.splitlines()
+
+        if (
+            lines
+            and lines[0].strip().startswith("```")
+        ):
+
+            lines = lines[1:]
+
+        if (
+            lines
+            and lines[-1].strip() == "```"
+        ):
+
+            lines = lines[:-1]
+
+        cleaned = "\n".join(
+            lines
+        ).strip()
+
+    if cleaned.lower().startswith("json"):
+
+        cleaned = cleaned[4:].strip()
+
+    try:
+
+        value = json.loads(cleaned)
+
+        if isinstance(value, dict):
+            return value
+
+    except json.JSONDecodeError:
+        pass
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+
+    if start >= 0 and end > start:
+
+        try:
+
+            value = json.loads(
+                cleaned[start:end + 1]
+            )
+
+            if isinstance(value, dict):
+                return value
+
+        except json.JSONDecodeError:
+            pass
+
+    raise RuntimeError(
+        "Gemini returned invalid analysis JSON."
+    )
+
+
+# ============================================================
+# EXTRACT GEMINI ANALYSIS
+# ============================================================
+
+def extract_gemini_analysis(response):
+
+    if not isinstance(response, dict):
+
+        raise RuntimeError(
+            "Gemini returned an invalid response."
+        )
+
+    candidates = response.get(
+        "candidates",
+        []
+    )
+
+    if not isinstance(candidates, list) or not candidates:
+
+        prompt_feedback = response.get(
+            "promptFeedback"
+        )
+
+        if prompt_feedback:
+
+            raise RuntimeError(
+                "Gemini returned no analysis candidates. "
+                + json.dumps(
+                    prompt_feedback,
+                    ensure_ascii=False
+                )
+            )
+
+        raise RuntimeError(
+            "Gemini returned no analysis candidates."
+        )
+
+    candidate = candidates[0]
+
+    if not isinstance(candidate, dict):
+
+        raise RuntimeError(
+            "Gemini returned an invalid candidate."
+        )
+
+    content = candidate.get(
+        "content",
+        {}
+    )
+
+    if not isinstance(content, dict):
+
+        raise RuntimeError(
+            "Gemini returned no analysis content."
+        )
+
+    parts = content.get(
+        "parts",
+        []
+    )
+
+    if not isinstance(parts, list) or not parts:
+
+        finish_reason = candidate.get(
+            "finishReason",
+            "UNKNOWN"
+        )
+
+        raise RuntimeError(
+            "Gemini returned no analysis text. "
+            "Finish reason: "
+            + str(finish_reason)
+        )
+
+    text_parts = []
+
+    for part in parts:
+
+        if not isinstance(part, dict):
+            continue
+
+        part_text = part.get(
+            "text"
+        )
+
+        if (
+            isinstance(part_text, str)
+            and part_text.strip()
+        ):
+
+            text_parts.append(
+                part_text.strip()
+            )
+
+    if not text_parts:
+
+        finish_reason = candidate.get(
+            "finishReason",
+            "UNKNOWN"
+        )
+
+        raise RuntimeError(
+            "Gemini returned no readable analysis. "
+            "Finish reason: "
+            + str(finish_reason)
+        )
+
+    analysis_text = "\n".join(
+        text_parts
+    ).strip()
+
+    return parse_analysis_json(
+        analysis_text
+    )
+
+
+# ============================================================
 # RESILIENT GEMINI ENGINE
 # ============================================================
 
@@ -749,14 +1000,13 @@ def call_gemini(
         GEMINI_MODELS
     ):
 
-        # Two attempts maximum per model.
         for retry_number in range(
             MAX_TRANSIENT_RETRIES + 1
         ):
 
             try:
 
-                result = send_gemini_request(
+                raw_response = send_gemini_request(
                     model=model,
                     instrument=instrument,
                     trade_focus=trade_focus,
@@ -764,14 +1014,50 @@ def call_gemini(
                     lower=lower,
                 )
 
-                # Record which model actually
-                # answered, but do not expose
-                # implementation details to
-                # the Android app.
-                if isinstance(result, dict):
-                    result["_engine_model"] = model
+                # IMPORTANT:
+                # Gemini returns a GenerateContentResponse
+                # wrapper. Extract the actual JSON generated
+                # by the model before normalization.
 
-                return result
+                actual_analysis = extract_gemini_analysis(
+                    raw_response
+                )
+
+                # Validate that this is actually an
+                # analysis object and not an empty response.
+
+                required_analysis_fields = [
+                    "signal",
+                    "confidence",
+                    "instrument",
+                    "trend",
+                    "trade_idea",
+                    "higher_timeframe_context",
+                    "lower_timeframe_confirmation",
+                    "data_analysis",
+                    "explanation",
+                    "news_fundamental_risk",
+                ]
+
+                missing_fields = [
+                    field
+                    for field in required_analysis_fields
+                    if field not in actual_analysis
+                ]
+
+                if missing_fields:
+
+                    raise RuntimeError(
+                        "Gemini returned incomplete analysis. "
+                        "Missing: "
+                        + ", ".join(
+                            missing_fields
+                        )
+                    )
+
+                actual_analysis["_engine_model"] = model
+
+                return actual_analysis
 
             except Exception as exc:
 
@@ -783,9 +1069,18 @@ def call_gemini(
                     None
                 )
 
-                # Non-transient errors should
-                # NOT be hammered or sent
-                # through pointless retries.
+                # Parsing/schema errors are NOT capacity
+                # errors. Do not keep hammering models if
+                # Gemini actually answered but returned bad data.
+                if (
+                    status is None
+                    and not isinstance(
+                        exc,
+                        urllib.error.URLError
+                    )
+                ):
+                    raise
+
                 if (
                     status is not None
                     and not is_transient_error(
@@ -794,17 +1089,8 @@ def call_gemini(
                 ):
                     raise
 
-                # Connection errors are treated
-                # as transient.
                 if retry_number < MAX_TRANSIENT_RETRIES:
 
-                    # Exponential backoff:
-                    #
-                    # first retry ≈ 1s
-                    # plus random jitter.
-                    #
-                    # This follows Google's
-                    # recommended retry strategy.
                     base_delay = 1.0 * (
                         2 ** retry_number
                     )
@@ -814,25 +1100,14 @@ def call_gemini(
                         0.8
                     )
 
-                    delay = (
-                        base_delay
-                        + jitter
-                    )
-
                     time.sleep(
-                        delay
+                        base_delay + jitter
                     )
 
                     continue
 
-                # This model is unavailable.
-                # Move immediately to the next
-                # model instead of waiting forever.
                 break
 
-        # Optional tiny stagger before the next
-        # model to avoid hammering multiple
-        # capacity pools simultaneously.
         if model_index < total_models - 1:
 
             time.sleep(
@@ -842,10 +1117,6 @@ def call_gemini(
                 )
             )
 
-    # Every available model failed.
-    #
-    # Return a clean customer-facing message
-    # instead of exposing internal model names.
     if last_error is not None:
 
         status = getattr(
@@ -879,93 +1150,6 @@ def call_gemini(
 
 
 # ============================================================
-# JSON PARSER
-# ============================================================
-
-def parse_analysis_json(text):
-
-    cleaned = text.strip()
-
-    try:
-
-        value = json.loads(
-            cleaned
-        )
-
-        if isinstance(value, dict):
-            return value
-
-    except json.JSONDecodeError:
-        pass
-
-    if cleaned.startswith(
-        "```"
-    ):
-
-        lines = cleaned.splitlines()
-
-        if (
-            lines
-            and lines[0]
-            .strip()
-            .startswith("```")
-        ):
-            lines = lines[1:]
-
-        if (
-            lines
-            and lines[-1]
-            .strip()
-            == "```"
-        ):
-            lines = lines[:-1]
-
-        cleaned = "\n".join(
-            lines
-        ).strip()
-
-    if cleaned.lower().startswith(
-        "json"
-    ):
-        cleaned = cleaned[4:].strip()
-
-    try:
-
-        value = json.loads(
-            cleaned
-        )
-
-        if isinstance(value, dict):
-            return value
-
-    except json.JSONDecodeError:
-        pass
-
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-
-    if start >= 0 and end > start:
-
-        try:
-
-            value = json.loads(
-                cleaned[
-                    start:end + 1
-                ]
-            )
-
-            if isinstance(value, dict):
-                return value
-
-        except json.JSONDecodeError:
-            pass
-
-    raise RuntimeError(
-        "Gemini returned invalid analysis JSON."
-    )
-
-
-# ============================================================
 # NORMALIZE RESULT
 # ============================================================
 
@@ -973,6 +1157,12 @@ def normalize_result(
     result,
     instrument
 ):
+
+    if not isinstance(result, dict):
+
+        raise RuntimeError(
+            "Gemini analysis is not a valid object."
+        )
 
     signal = str(
         result.get(
@@ -986,6 +1176,7 @@ def normalize_result(
         "SELL",
         "NO TRADE"
     }:
+
         signal = "NO TRADE"
 
     try:
@@ -1022,6 +1213,7 @@ def normalize_result(
         "RANGE",
         "UNCLEAR"
     }:
+
         trend = "UNCLEAR"
 
     def text(name):
@@ -1031,28 +1223,23 @@ def normalize_result(
         if value is None:
             return "N/A"
 
-        if isinstance(
-            value,
-            str
-        ):
+        if isinstance(value, str):
+
+            cleaned = value.strip()
 
             return (
-                value.strip()
-                or "N/A"
+                cleaned
+                if cleaned
+                else "N/A"
             )
 
         return str(value)
 
     def list_value(name):
 
-        value = result.get(
-            name
-        )
+        value = result.get(name)
 
-        if not isinstance(
-            value,
-            list
-        ):
+        if not isinstance(value, list):
             return []
 
         return [
@@ -1115,10 +1302,14 @@ def normalize_result(
             ),
 
         "data_analysis":
-            text("data_analysis"),
+            text(
+                "data_analysis"
+            ),
 
         "explanation":
-            text("explanation"),
+            text(
+                "explanation"
+            ),
 
         "contributing_methods":
             list_value(
@@ -1146,12 +1337,21 @@ def normalize_result(
             ),
     }
 
+    # Only trade price fields are forced to N/A for
+    # a NO TRADE decision.
+    #
+    # The descriptive analysis fields remain intact.
+
     if signal == "NO TRADE":
 
         output["entry"] = "N/A"
+
         output["stop_loss"] = "N/A"
+
         output["take_profit_1"] = "N/A"
+
         output["take_profit_2"] = "N/A"
+
         output["risk_reward"] = "N/A"
 
     return output
@@ -1222,8 +1422,6 @@ def create_completed_job(
         "status":
             "completed",
 
-        # History system already reads
-        # completed results from here.
         "openai_response_id":
             encoded_result,
     }
