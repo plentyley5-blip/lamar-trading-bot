@@ -1,5 +1,9 @@
 import json
+import os
+import time
 import uuid
+import urllib.error
+import urllib.request
 
 from http.server import BaseHTTPRequestHandler
 
@@ -20,10 +24,6 @@ from api.user_security import (
     verify_access_token,
 )
 
-import os
-import urllib.error
-import urllib.request
-
 
 SUPABASE_URL = os.environ.get(
     "SUPABASE_URL",
@@ -36,12 +36,15 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ.get(
 ).strip()
 
 
-def supabase_request(
-    method,
-    path,
-    payload=None,
-    timeout=30,
-    extra_headers=None,
+def supabase_insert_job(
+    user_id,
+    job_nonce,
+    instrument,
+    trade_focus,
+    response_id,
+    higher_image,
+    lower_image,
+    status,
 ):
     if not SUPABASE_URL:
         raise RuntimeError(
@@ -53,62 +56,76 @@ def supabase_request(
             "SUPABASE_SERVICE_ROLE_KEY is missing."
         )
 
-    headers = {
-        "apikey":
-            SUPABASE_SERVICE_ROLE_KEY,
+    payload = {
+        "id":
+            str(uuid.uuid4()),
 
-        "Authorization":
-            "Bearer "
-            + SUPABASE_SERVICE_ROLE_KEY,
+        "job_nonce":
+            job_nonce,
 
-        "Content-Type":
-            "application/json",
+        "user_id":
+            user_id,
 
-        "Accept":
-            "application/json",
+        "instrument":
+            instrument,
+
+        "trade_focus":
+            trade_focus,
+
+        "status":
+            status,
+
+        # This column is NOT NULL.
+        "openai_response_id":
+            response_id,
+
+        "higher_timeframe_image":
+            higher_image,
+
+        "lower_timeframe_image":
+            lower_image,
+
+        "error_message":
+            None,
     }
 
-    if extra_headers:
-        headers.update(
-            extra_headers
-        )
-
-    data = None
-
-    if payload is not None:
-        data = json.dumps(
-            payload,
-            ensure_ascii=False,
-        ).encode("utf-8")
+    body = json.dumps(
+        payload,
+        ensure_ascii=False,
+    ).encode("utf-8")
 
     request = urllib.request.Request(
-        SUPABASE_URL + path,
-        data=data,
-        headers=headers,
-        method=method,
+        SUPABASE_URL
+        + "/rest/v1/analysis_jobs",
+        data=body,
+        headers={
+            "apikey":
+                SUPABASE_SERVICE_ROLE_KEY,
+
+            "Authorization":
+                "Bearer "
+                + SUPABASE_SERVICE_ROLE_KEY,
+
+            "Content-Type":
+                "application/json",
+
+            "Accept":
+                "application/json",
+
+            "Prefer":
+                "return=minimal",
+        },
+        method="POST",
     )
 
     try:
+
         with urllib.request.urlopen(
             request,
-            timeout=timeout,
+            timeout=20,
         ) as response:
 
-            raw = (
-                response.read()
-                .decode(
-                    "utf-8",
-                    errors="replace",
-                )
-            )
-
-            if not raw:
-                return None
-
-            try:
-                return json.loads(raw)
-            except json.JSONDecodeError:
-                return raw
+            response.read()
 
     except urllib.error.HTTPError as exc:
 
@@ -127,7 +144,7 @@ def supabase_request(
         )
 
 
-def _read_json(handler):
+def read_json(handler):
 
     try:
         length = int(
@@ -136,7 +153,9 @@ def _read_json(handler):
                 "0",
             )
         )
+
     except ValueError:
+
         raise ValueError(
             "Invalid request."
         )
@@ -145,6 +164,7 @@ def _read_json(handler):
         length <= 0
         or length > 25 * 1024 * 1024
     ):
+
         raise ValueError(
             "Invalid chart request."
         )
@@ -154,83 +174,29 @@ def _read_json(handler):
     )
 
     try:
-        value = json.loads(
-            raw.decode("utf-8")
+
+        data = json.loads(
+            raw.decode(
+                "utf-8"
+            )
         )
+
     except json.JSONDecodeError as exc:
+
         raise ValueError(
             "Invalid request JSON."
         ) from exc
 
     if not isinstance(
-        value,
-        dict,
+        data,
+        dict
     ):
+
         raise ValueError(
             "Invalid request."
         )
 
-    return value
-
-
-def _save_analysis_job(
-    user_id,
-    instrument,
-    trade_focus,
-    response_id,
-    higher_image,
-    lower_image,
-    status,
-):
-    """
-    Save the OpenAI response ID immediately.
-    openai_response_id is NOT NULL in Supabase.
-    The status endpoint later replaces this value
-    with the encoded completed analysis.
-    """
-
-    payload = {
-        "id":
-            str(uuid.uuid4()),
-
-        "job_nonce":
-            None,
-
-        "user_id":
-            user_id,
-
-        "instrument":
-            instrument,
-
-        "trade_focus":
-            trade_focus,
-
-        "status":
-            status,
-
-        "openai_response_id":
-            response_id,
-
-        "higher_timeframe_image":
-            higher_image,
-
-        "lower_timeframe_image":
-            lower_image,
-
-        "error_message":
-            None,
-    }
-
-    return supabase_request(
-        "POST",
-        "/rest/v1/analysis_jobs",
-        payload,
-        timeout=30,
-        extra_headers={
-            "Prefer":
-                "return=representation"
-        },
-    )
+    return data
 
 
 class handler(
@@ -242,7 +208,7 @@ class handler(
         json_response(
             self,
             204,
-            {},
+            {}
         )
 
 
@@ -253,8 +219,8 @@ class handler(
             200,
             {
                 "status":
-                    "analysis submit online",
-            },
+                    "analysis submit online"
+            }
         )
 
 
@@ -262,12 +228,13 @@ class handler(
 
         reserved = False
         user = None
+        user_id = ""
 
         try:
 
-            # -----------------------------------------
-            # AUTH
-            # -----------------------------------------
+            # =========================================
+            # AUTHENTICATION
+            # =========================================
 
             access_token = (
                 extract_bearer_token(
@@ -279,20 +246,29 @@ class handler(
                 access_token
             )
 
+            user_id = str(
+                user.get(
+                    "id",
+                    ""
+                )
+            ).strip()
+
+            if not user_id:
+
+                raise ValueError(
+                    "Invalid authenticated user."
+                )
+
             owner = is_owner_user(
                 user
             )
 
-            user_id = str(
-                user["id"]
-            ).strip()
 
+            # =========================================
+            # INPUT
+            # =========================================
 
-            # -----------------------------------------
-            # REQUEST
-            # -----------------------------------------
-
-            data = _read_json(
+            data = read_json(
                 self
             )
 
@@ -305,7 +281,7 @@ class handler(
             trade_focus = validate_focus(
                 data.get(
                     "trade_focus",
-                    "DAY TRADE",
+                    "DAY TRADE"
                 )
             )
 
@@ -314,7 +290,7 @@ class handler(
                     data.get(
                         "higher_timeframe_image"
                     ),
-                    "4H chart",
+                    "4H chart"
                 )
             )
 
@@ -323,14 +299,14 @@ class handler(
                     data.get(
                         "lower_timeframe_image"
                     ),
-                    "15M chart",
+                    "15M chart"
                 )
             )
 
 
-            # -----------------------------------------
+            # =========================================
             # DAILY LIMIT
-            # -----------------------------------------
+            # =========================================
 
             if not owner:
 
@@ -354,8 +330,8 @@ class handler(
                                 0,
 
                             "is_owner":
-                                False,
-                        },
+                                False
+                        }
                     )
 
                     return
@@ -364,7 +340,7 @@ class handler(
 
                 remaining = max(
                     0,
-                    4 - int(slot),
+                    4 - int(slot)
                 )
 
             else:
@@ -372,9 +348,9 @@ class handler(
                 remaining = None
 
 
-            # -----------------------------------------
-            # OPENAI
-            # -----------------------------------------
+            # =========================================
+            # START OPENAI BACKGROUND JOB
+            # =========================================
 
             try:
 
@@ -390,7 +366,7 @@ class handler(
                             higher_image,
 
                         lower_image=
-                            lower_image,
+                            lower_image
                     )
                 )
 
@@ -405,19 +381,28 @@ class handler(
                     except Exception:
                         pass
 
+                    reserved = False
+
                 raise
 
 
-            # -----------------------------------------
+            # =========================================
             # OPENAI RESPONSE ID
-            # -----------------------------------------
+            # =========================================
 
             response_id = str(
                 response.get(
                     "id",
-                    "",
+                    ""
                 )
             ).strip()
+
+            status = str(
+                response.get(
+                    "status",
+                    "queued"
+                )
+            ).strip().lower()
 
             if not response_id:
 
@@ -435,39 +420,27 @@ class handler(
                 )
 
 
-            openai_status = str(
-                response.get(
-                    "status",
-                    "queued",
-                )
-            ).strip().lower()
+            # =========================================
+            # OUR DATABASE JOB
+            # =========================================
 
+            job_nonce = uuid.uuid4().hex
 
-            if openai_status in {
-                "completed",
-            }:
-
-                database_status = (
-                    "completed"
-                )
-
-            else:
-
-                database_status = (
-                    "processing"
-                )
-
-
-            # -----------------------------------------
-            # SAVE FOR HISTORY
-            # -----------------------------------------
+            database_status = (
+                "completed"
+                if status == "completed"
+                else "processing"
+            )
 
             try:
 
-                _save_analysis_job(
+                supabase_insert_job(
 
                     user_id=
                         user_id,
+
+                    job_nonce=
+                        job_nonce,
 
                     instrument=
                         instrument,
@@ -485,43 +458,41 @@ class handler(
                         lower_image,
 
                     status=
-                        database_status,
+                        database_status
                 )
 
-            except Exception as db_error:
+            except Exception:
 
-                # Do not destroy a working Analyze
-                # request merely because History storage
-                # failed.
-                #
-                # Log-safe response continues below.
+                # OpenAI job is already valid.
+                # Do not destroy a working analysis because
+                # History storage failed.
                 pass
 
 
-            # -----------------------------------------
-            # SECURE JOB TOKEN
-            # -----------------------------------------
+            # =========================================
+            # SECURE POLLING TOKEN
+            # =========================================
 
             job_id = (
                 create_secure_job_token(
                     response_id,
                     instrument,
                     trade_focus,
-                    user_id,
+                    user_id
                 )
             )
 
 
-            # -----------------------------------------
-            # SUCCESS
-            # -----------------------------------------
+            # =========================================
+            # RETURN JOB TO APP
+            # =========================================
 
             json_response(
                 self,
                 202,
                 {
                     "status":
-                        openai_status,
+                        status,
 
                     "job_id":
                         job_id,
@@ -538,8 +509,8 @@ class handler(
                         else 4,
 
                     "remaining":
-                        remaining,
-                },
+                        remaining
+                }
             )
 
         except ValueError as exc:
@@ -549,8 +520,8 @@ class handler(
                 400,
                 {
                     "error":
-                        str(exc),
-                },
+                        str(exc)
+                }
             )
 
         except RuntimeError as exc:
@@ -560,20 +531,20 @@ class handler(
                 503,
                 {
                     "error":
-                        str(exc),
-                },
+                        str(exc)
+                }
             )
 
         except Exception as exc:
 
             if (
                 reserved
-                and user
+                and user_id
             ):
 
                 try:
                     release_analysis_slot(
-                        str(user["id"])
+                        user_id
                     )
                 except Exception:
                     pass
@@ -583,6 +554,6 @@ class handler(
                 500,
                 {
                     "error":
-                        str(exc),
-                },
+                        str(exc)
+                }
             )
