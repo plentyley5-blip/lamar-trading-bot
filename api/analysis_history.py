@@ -7,16 +7,18 @@ import urllib.request
 
 from http.server import BaseHTTPRequestHandler
 
+from analysis_common import json_response
+
+from api.user_security import (
+    extract_bearer_token,
+    verify_access_token,
+)
+
 
 SUPABASE_URL = os.environ.get(
     "SUPABASE_URL",
     ""
 ).strip().rstrip("/")
-
-SUPABASE_ANON_KEY = os.environ.get(
-    "SUPABASE_ANON_KEY",
-    ""
-).strip()
 
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get(
     "SUPABASE_SERVICE_ROLE_KEY",
@@ -24,147 +26,22 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ.get(
 ).strip()
 
 
-def send_json(
-    handler,
-    status,
-    data,
+def get_current_user(
+    handler
 ):
 
-    body = json.dumps(
-        data,
-        ensure_ascii=False,
-        default=str,
-    ).encode("utf-8")
-
-    handler.send_response(
-        status
+    token = extract_bearer_token(
+        handler
     )
 
-    handler.send_header(
-        "Content-Type",
-        "application/json; charset=utf-8",
+    user = verify_access_token(
+        token
     )
-
-    handler.send_header(
-        "Content-Length",
-        str(len(body)),
-    )
-
-    handler.send_header(
-        "Cache-Control",
-        "no-store",
-    )
-
-    handler.send_header(
-        "Access-Control-Allow-Origin",
-        "*",
-    )
-
-    handler.send_header(
-        "Access-Control-Allow-Headers",
-        "Authorization, Content-Type",
-    )
-
-    handler.send_header(
-        "Access-Control-Allow-Methods",
-        "GET, OPTIONS",
-    )
-
-    handler.end_headers()
-
-    handler.wfile.write(
-        body
-    )
-
-
-def get_user(
-    handler,
-):
-
-    authorization = str(
-        handler.headers.get(
-            "Authorization",
-            "",
-        )
-    ).strip()
-
-    if not authorization.lower().startswith(
-        "bearer "
-    ):
-
-        raise ValueError(
-            "Authorization bearer token is required."
-        )
-
-    token = authorization[
-        7:
-    ].strip()
-
-    if not token:
-
-        raise ValueError(
-            "Authorization bearer token is required."
-        )
-
-    if not SUPABASE_ANON_KEY:
-
-        raise RuntimeError(
-            "SUPABASE_ANON_KEY is missing."
-        )
-
-    request = urllib.request.Request(
-
-        SUPABASE_URL
-        + "/auth/v1/user",
-
-        headers={
-            "apikey":
-                SUPABASE_ANON_KEY,
-
-            "Authorization":
-                "Bearer "
-                + token,
-
-            "Accept":
-                "application/json",
-        },
-
-        method="GET",
-    )
-
-    try:
-
-        with urllib.request.urlopen(
-            request,
-            timeout=15,
-        ) as response:
-
-            user = json.loads(
-                response.read()
-                .decode(
-                    "utf-8"
-                )
-            )
-
-    except urllib.error.HTTPError as exc:
-
-        detail = (
-            exc.read()
-            .decode(
-                "utf-8",
-                errors="replace",
-            )
-        )
-
-        raise ValueError(
-            "Session verification failed: "
-            + detail[:500]
-        )
 
     user_id = str(
         user.get(
             "id",
-            "",
+            ""
         )
     ).strip()
 
@@ -177,9 +54,15 @@ def get_user(
     return user_id
 
 
-def load_rows(
-    user_id,
+def load_history(
+    user_id
 ):
+
+    if not SUPABASE_URL:
+
+        raise RuntimeError(
+            "SUPABASE_URL is missing."
+        )
 
     if not SUPABASE_SERVICE_ROLE_KEY:
 
@@ -187,27 +70,32 @@ def load_rows(
             "SUPABASE_SERVICE_ROLE_KEY is missing."
         )
 
-    encoded_user = (
-        urllib.parse.quote(
-            user_id,
-            safe="",
-        )
+    encoded_user = urllib.parse.quote(
+        user_id,
+        safe=""
     )
 
     path = (
         "/rest/v1/analysis_jobs"
-        "?select=id,instrument,trade_focus,created_at,status,openai_response_id,error_message"
+        "?select="
+        "id,"
+        "user_id,"
+        "instrument,"
+        "trade_focus,"
+        "created_at,"
+        "status,"
+        "openai_response_id,"
+        "error_message"
         "&user_id=eq."
         + encoded_user
         + "&status=eq.completed"
-        "&order=created_at.desc"
-        "&limit=50"
+        + "&order=created_at.desc"
+        + "&limit=50"
     )
 
     request = urllib.request.Request(
 
-        SUPABASE_URL
-        + path,
+        SUPABASE_URL + path,
 
         headers={
             "apikey":
@@ -218,24 +106,24 @@ def load_rows(
                 + SUPABASE_SERVICE_ROLE_KEY,
 
             "Accept":
-                "application/json",
+                "application/json"
         },
 
-        method="GET",
+        method="GET"
     )
 
     try:
 
         with urllib.request.urlopen(
             request,
-            timeout=20,
+            timeout=20
         ) as response:
 
             raw = (
                 response.read()
                 .decode(
                     "utf-8",
-                    errors="replace",
+                    errors="replace"
                 )
             )
 
@@ -249,7 +137,7 @@ def load_rows(
             exc.read()
             .decode(
                 "utf-8",
-                errors="replace",
+                errors="replace"
             )
         )
 
@@ -260,7 +148,7 @@ def load_rows(
 
     if not isinstance(
         rows,
-        list,
+        list
     ):
 
         return []
@@ -269,19 +157,25 @@ def load_rows(
 
 
 def decode_result(
-    value,
+    encoded
 ):
 
     if not isinstance(
-        value,
-        str,
-    ) or not value:
+        encoded,
+        str
+    ):
 
         return None
 
-    if value in {
+    encoded = encoded.strip()
+
+    if not encoded:
+
+        return None
+
+    if encoded in {
         "pending",
-        "failed",
+        "failed"
     }:
 
         return None
@@ -289,9 +183,9 @@ def decode_result(
     try:
 
         padded = (
-            value
+            encoded
             + "="
-            * (-len(value) % 4)
+            * (-len(encoded) % 4)
         )
 
         raw = (
@@ -308,7 +202,7 @@ def decode_result(
 
         if isinstance(
             result,
-            dict,
+            dict
         ):
 
             return result
@@ -332,17 +226,17 @@ class handler(
 
         self.send_header(
             "Access-Control-Allow-Origin",
-            "*",
+            "*"
         )
 
         self.send_header(
             "Access-Control-Allow-Headers",
-            "Authorization, Content-Type",
+            "Authorization, Content-Type"
         )
 
         self.send_header(
             "Access-Control-Allow-Methods",
-            "GET, OPTIONS",
+            "GET, OPTIONS"
         )
 
         self.end_headers()
@@ -352,29 +246,29 @@ class handler(
 
         try:
 
-            # -----------------------------------------
-            # USER
-            # -----------------------------------------
+            # =========================================
+            # AUTHENTICATED USER
+            # =========================================
 
-            user_id = get_user(
+            user_id = get_current_user(
                 self
             )
 
 
-            # -----------------------------------------
+            # =========================================
             # DATABASE
-            # -----------------------------------------
+            # =========================================
 
-            rows = load_rows(
+            rows = load_history(
                 user_id
             )
 
             history = []
 
 
-            # -----------------------------------------
-            # BUILD ANDROID-FRIENDLY HISTORY
-            # -----------------------------------------
+            # =========================================
+            # BUILD ANDROID FORMAT
+            # =========================================
 
             for row in rows:
 
@@ -395,7 +289,7 @@ class handler(
                             str(
                                 row.get(
                                     "id",
-                                    "",
+                                    ""
                                 )
                             ),
 
@@ -403,7 +297,7 @@ class handler(
                             str(
                                 row.get(
                                     "instrument",
-                                    "",
+                                    ""
                                 )
                             ),
 
@@ -411,7 +305,7 @@ class handler(
                             str(
                                 row.get(
                                     "trade_focus",
-                                    "",
+                                    ""
                                 )
                             ),
 
@@ -419,24 +313,21 @@ class handler(
                             str(
                                 row.get(
                                     "created_at",
-                                    "",
+                                    ""
                                 )
                             ),
 
-                        # IMPORTANT:
-                        # MainActivity expects result
-                        # to be an object here.
                         "result":
-                            result,
+                            result
                     }
                 )
 
 
-            # -----------------------------------------
+            # =========================================
             # RESPONSE
-            # -----------------------------------------
+            # =========================================
 
-            send_json(
+            json_response(
                 self,
                 200,
                 {
@@ -447,39 +338,39 @@ class handler(
                         len(history),
 
                     "history":
-                        history,
-                },
+                        history
+                }
             )
 
         except ValueError as exc:
 
-            send_json(
+            json_response(
                 self,
                 401,
                 {
                     "error":
-                        str(exc),
-                },
+                        str(exc)
+                }
             )
 
         except RuntimeError as exc:
 
-            send_json(
+            json_response(
                 self,
                 500,
                 {
                     "error":
-                        str(exc),
-                },
+                        str(exc)
+                }
             )
 
         except Exception as exc:
 
-            send_json(
+            json_response(
                 self,
                 500,
                 {
                     "error":
-                        str(exc),
-                },
+                        str(exc)
+                }
             )
