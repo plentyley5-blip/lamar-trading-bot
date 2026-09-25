@@ -1,7 +1,7 @@
 import base64
 import json
 import os
-import uuid
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -17,31 +17,63 @@ from api.user_security import (
     verify_access_token,
 )
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip()
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
-GEMINI_API_REVISION = "2026-05-20"
+# Use the user's existing Gemini credential.
+# GEMINI_OPENAI_KEY is preferred, with GEMINI_API_KEY as fallback.
+GEMINI_API_KEY = (
+    os.environ.get("GEMINI_OPENAI_KEY", "").strip()
+    or os.environ.get("GEMINI_API_KEY", "").strip()
+)
+
+# Fixed deliberately. No Vercel GEMINI_MODEL variable is used.
+GEMINI_MODEL = "gemini-3.8-flash"
+
+# Standard Gemini multimodal endpoint.
+# This avoids the Gemini Interactions "agent" model path.
+GEMINI_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    + GEMINI_MODEL
+    + ":generateContent"
+)
+
 MAX_REQUEST_BYTES = 15 * 1024 * 1024
+GEMINI_TIMEOUT_SECONDS = 45
 
 
 def json_response(handler, status_code, payload):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
     handler.send_response(status_code)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Access-Control-Allow-Origin", "*")
+
+    handler.send_header(
+        "Content-Type",
+        "application/json; charset=utf-8",
+    )
+
+    handler.send_header(
+        "Access-Control-Allow-Origin",
+        "*",
+    )
+
     handler.send_header(
         "Access-Control-Allow-Headers",
-        "Content-Type, Authorization"
+        "Content-Type, Authorization",
     )
+
     handler.send_header(
         "Access-Control-Allow-Methods",
-        "GET, POST, OPTIONS"
+        "GET, POST, OPTIONS",
     )
+
     handler.send_header(
         "Cache-Control",
-        "no-store, no-cache, must-revalidate"
+        "no-store, no-cache, must-revalidate",
     )
-    handler.send_header("Content-Length", str(len(body)))
+
+    handler.send_header(
+        "Content-Length",
+        str(len(body)),
+    )
+
     handler.end_headers()
 
     try:
@@ -55,7 +87,7 @@ def read_json(handler):
         length = int(
             handler.headers.get(
                 "Content-Length",
-                "0"
+                "0",
             )
         )
     except ValueError as exc:
@@ -135,7 +167,7 @@ def validate_focus(value):
 def validate_image(value, label):
     if not isinstance(
         value,
-        str
+        str,
     ) or not value.strip():
         raise ValueError(
             label + " is required."
@@ -153,7 +185,7 @@ def validate_image(value, label):
 
     header, encoded = value.split(
         ";base64,",
-        1
+        1,
     )
 
     mime_type = header[
@@ -177,7 +209,7 @@ def validate_image(value, label):
     try:
         decoded = base64.b64decode(
             encoded,
-            validate=False
+            validate=False,
         )
     except Exception as exc:
         raise ValueError(
@@ -197,7 +229,7 @@ def validate_image(value, label):
 
 def build_prompt(
     instrument,
-    trade_focus
+    trade_focus,
 ):
     return f"""
 You are LM ANALYZER, the chart-analysis engine for LAMAR TRADING BOT.
@@ -254,9 +286,10 @@ IMPORTANT RULES:
 9. For NO TRADE, entry, stop_loss, take_profit_1, take_profit_2,
    and risk_reward must be N/A.
 10. Explain the evidence and methods inside the explanation.
-11. Do not guarantee profit.
-12. Return only valid JSON.
-13. Do not use markdown code fences.
+11. Do not turn strategy names into separate result categories.
+12. Do not guarantee profit.
+13. Return only valid JSON.
+14. Do not use markdown code fences.
 
 Return exactly this structure:
 
@@ -293,14 +326,14 @@ OUTPUT_SCHEMA = {
             "enum": [
                 "BUY",
                 "SELL",
-                "NO TRADE"
-            ]
+                "NO TRADE",
+            ],
         },
         "confidence": {
-            "type": "number"
+            "type": "number",
         },
         "instrument": {
-            "type": "string"
+            "type": "string",
         },
         "trend": {
             "type": "string",
@@ -308,68 +341,68 @@ OUTPUT_SCHEMA = {
                 "BULLISH",
                 "BEARISH",
                 "RANGE",
-                "UNCLEAR"
-            ]
+                "UNCLEAR",
+            ],
         },
         "trade_idea": {
-            "type": "string"
+            "type": "string",
         },
         "entry": {
-            "type": "string"
+            "type": "string",
         },
         "stop_loss": {
-            "type": "string"
+            "type": "string",
         },
         "take_profit_1": {
-            "type": "string"
+            "type": "string",
         },
         "take_profit_2": {
-            "type": "string"
+            "type": "string",
         },
         "risk_reward": {
-            "type": "string"
+            "type": "string",
         },
         "duration": {
-            "type": "string"
+            "type": "string",
         },
         "higher_timeframe_context": {
-            "type": "string"
+            "type": "string",
         },
         "lower_timeframe_confirmation": {
-            "type": "string"
+            "type": "string",
         },
         "data_analysis": {
-            "type": "string"
+            "type": "string",
         },
         "explanation": {
-            "type": "string"
+            "type": "string",
         },
         "contributing_methods": {
             "type": "array",
             "items": {
-                "type": "string"
-            }
+                "type": "string",
+            },
         },
         "weak_methods": {
             "type": "array",
             "items": {
-                "type": "string"
-            }
+                "type": "string",
+            },
         },
         "conflicting_methods": {
             "type": "array",
             "items": {
-                "type": "string"
-            }
+                "type": "string",
+            },
         },
         "news_fundamental_risk": {
-            "type": "string"
+            "type": "string",
         },
         "warnings": {
             "type": "array",
             "items": {
-                "type": "string"
-            }
+                "type": "string",
+            },
         },
     },
     "required": [
@@ -397,151 +430,556 @@ OUTPUT_SCHEMA = {
 }
 
 
-def create_gemini_interaction(
+def call_gemini(
     instrument,
     trade_focus,
     higher,
-    lower
+    lower,
 ):
     if not GEMINI_API_KEY:
         raise RuntimeError(
-            "GEMINI_API_KEY is missing from Vercel."
+            "Gemini key is missing from Vercel. "
+            "Set GEMINI_OPENAI_KEY."
         )
 
     payload = {
-        "model": GEMINI_MODEL,
+        "system_instruction": {
+            "parts": [
+                {
+                    "text": (
+                        "You are a strict JSON chart-analysis service. "
+                        "Follow the user's schema and never invent prices."
+                    ),
+                },
+            ],
+        },
 
-        "input": [
+        "contents": [
             {
-                "type": "text",
-                "text": build_prompt(
-                    instrument,
-                    trade_focus
-                )
+                "role": "user",
+
+                "parts": [
+                    {
+                        "text": build_prompt(
+                            instrument,
+                            trade_focus,
+                        ),
+                    },
+
+                    {
+                        "inline_data": {
+                            "mime_type": higher[
+                                "mime_type"
+                            ],
+                            "data": higher[
+                                "data"
+                            ],
+                        },
+                    },
+
+                    {
+                        "inline_data": {
+                            "mime_type": lower[
+                                "mime_type"
+                            ],
+                            "data": lower[
+                                "data"
+                            ],
+                        },
+                    },
+                ],
             },
-            {
-                "type": "image",
-                "data": higher["data"],
-                "mime_type": higher["mime_type"]
-            },
-            {
-                "type": "image",
-                "data": lower["data"],
-                "mime_type": lower["mime_type"]
-            }
         ],
 
-        "background": True,
+        "generationConfig": {
+            "responseMimeType": "application/json",
 
-        "response_format": {
-            "type": "text",
-            "mime_type": "application/json",
-            "schema": OUTPUT_SCHEMA
-        }
+            "responseSchema": OUTPUT_SCHEMA,
+
+            "temperature": 0.2,
+        },
     }
+
+    body = json.dumps(
+        payload,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
     request = urllib.request.Request(
         GEMINI_URL,
-        data=json.dumps(
-            payload,
-            separators=(",", ":")
-        ).encode("utf-8"),
+        data=body,
         method="POST",
         headers={
             "Content-Type": "application/json",
             "Accept": "application/json",
             "x-goog-api-key": GEMINI_API_KEY,
-            "Api-Revision": GEMINI_API_REVISION
-        }
+        },
     )
 
-    try:
-        with urllib.request.urlopen(
-            request,
-            timeout=25
-        ) as response:
+    last_message = (
+        "Gemini request failed."
+    )
 
-            raw = response.read().decode(
-                "utf-8",
-                errors="replace"
-            )
+    raw = None
 
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(
-            "utf-8",
-            errors="replace"
-        )
+    for attempt in range(2):
 
         try:
-            obj = json.loads(detail)
+            with urllib.request.urlopen(
+                request,
+                timeout=GEMINI_TIMEOUT_SECONDS,
+            ) as response:
 
-            message = (
-                obj
-                .get("error", {})
-                .get("message")
-                or detail[:2000]
+                raw = response.read().decode(
+                    "utf-8",
+                    errors="replace",
+                )
+
+            break
+
+        except urllib.error.HTTPError as exc:
+
+            detail = exc.read().decode(
+                "utf-8",
+                errors="replace",
             )
 
-        except Exception:
-            message = detail[:2000]
+            try:
+                obj = json.loads(
+                    detail
+                )
 
-        raise RuntimeError(
-            "Gemini error: " + message
-        ) from exc
+                last_message = str(
+                    obj.get(
+                        "error",
+                        {},
+                    ).get(
+                        "message"
+                    )
+                    or detail[:3000]
+                )
 
-    except (
-        urllib.error.URLError,
-        TimeoutError
-    ) as exc:
+            except Exception:
+                last_message = detail[:3000]
+
+            if (
+                exc.code
+                in {
+                    429,
+                    500,
+                    502,
+                    503,
+                    504,
+                }
+                and attempt == 0
+            ):
+                time.sleep(1)
+                continue
+
+            raise RuntimeError(
+                "Gemini error: "
+                + last_message
+            ) from exc
+
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+        ) as exc:
+
+            if attempt == 0:
+                time.sleep(1)
+                continue
+
+            raise RuntimeError(
+                "Gemini connection error: "
+                + str(exc)
+            ) from exc
+
+    if raw is None:
         raise RuntimeError(
-            "Gemini connection error: " + str(exc)
-        ) from exc
+            "Gemini request failed: "
+            + last_message
+        )
 
     try:
-        obj = json.loads(raw)
+        api_obj = json.loads(
+            raw
+        )
 
     except json.JSONDecodeError as exc:
         raise RuntimeError(
             "Gemini returned invalid API JSON."
         ) from exc
 
-    interaction_id = str(
-        obj.get(
-            "id",
-            ""
-        )
+    candidates = api_obj.get(
+        "candidates"
+    )
+
+    pieces = []
+
+    if isinstance(
+        candidates,
+        list,
+    ):
+
+        for candidate in candidates:
+
+            if not isinstance(
+                candidate,
+                dict,
+            ):
+                continue
+
+            content = candidate.get(
+                "content"
+            )
+
+            if not isinstance(
+                content,
+                dict,
+            ):
+                continue
+
+            parts = content.get(
+                "parts"
+            )
+
+            if not isinstance(
+                parts,
+                list,
+            ):
+                continue
+
+            for part in parts:
+
+                if (
+                    isinstance(
+                        part,
+                        dict,
+                    )
+                    and isinstance(
+                        part.get("text"),
+                        str,
+                    )
+                ):
+
+                    pieces.append(
+                        part["text"]
+                    )
+
+    text = "\n".join(
+        pieces
     ).strip()
 
-    if not interaction_id:
+    if not text:
         raise RuntimeError(
-            "Gemini did not return an interaction ID."
+            "Gemini returned no analysis text."
         )
 
-    status = str(
-        obj.get(
-            "status",
-            "in_progress"
-        )
-    ).strip().lower()
+    return parse_analysis_json(
+        text
+    )
 
-    if status in {
-        "failed",
-        "cancelled",
-        "expired"
+
+def parse_analysis_json(text):
+    cleaned = text.strip()
+
+    try:
+        value = json.loads(
+            cleaned
+        )
+
+        if isinstance(
+            value,
+            dict,
+        ):
+            return value
+
+    except json.JSONDecodeError:
+        pass
+
+    if cleaned.startswith(
+        "```"
+    ):
+
+        lines = cleaned.splitlines()
+
+        if (
+            lines
+            and lines[0].strip().startswith("```")
+        ):
+            lines = lines[1:]
+
+        if (
+            lines
+            and lines[-1].strip() == "```"
+        ):
+            lines = lines[:-1]
+
+        cleaned = "\n".join(
+            lines
+        ).strip()
+
+    if cleaned.lower().startswith(
+        "json"
+    ):
+        cleaned = cleaned[4:].strip()
+
+    try:
+        value = json.loads(
+            cleaned
+        )
+
+        if isinstance(
+            value,
+            dict,
+        ):
+            return value
+
+    except json.JSONDecodeError:
+        pass
+
+    start = cleaned.find(
+        "{"
+    )
+
+    end = cleaned.rfind(
+        "}"
+    )
+
+    if (
+        start >= 0
+        and end > start
+    ):
+
+        try:
+            value = json.loads(
+                cleaned[
+                    start:end + 1
+                ]
+            )
+
+            if isinstance(
+                value,
+                dict,
+            ):
+                return value
+
+        except json.JSONDecodeError:
+            pass
+
+    raise RuntimeError(
+        "Gemini returned invalid analysis JSON."
+    )
+
+
+def normalize_result(
+    result,
+    instrument,
+):
+    signal = str(
+        result.get(
+            "signal",
+            "NO TRADE",
+        )
+    ).strip().upper()
+
+    if signal not in {
+        "BUY",
+        "SELL",
+        "NO TRADE",
     }:
-        raise RuntimeError(
-            "Gemini did not start the analysis."
+        signal = "NO TRADE"
+
+    try:
+        confidence = float(
+            result.get(
+                "confidence",
+                0,
+            )
         )
 
-    return interaction_id
+    except Exception:
+        confidence = 0.0
+
+    confidence = max(
+        0.0,
+        min(
+            100.0,
+            confidence,
+        ),
+    )
+
+    trend = str(
+        result.get(
+            "trend",
+            "UNCLEAR",
+        )
+    ).strip().upper()
+
+    if trend not in {
+        "BULLISH",
+        "BEARISH",
+        "RANGE",
+        "UNCLEAR",
+    }:
+        trend = "UNCLEAR"
+
+    def text(name):
+        value = result.get(
+            name
+        )
+
+        if value is None:
+            return "N/A"
+
+        if isinstance(
+            value,
+            str,
+        ):
+            return (
+                value.strip()
+                or "N/A"
+            )
+
+        return str(
+            value
+        )
+
+    def list_value(name):
+        value = result.get(
+            name
+        )
+
+        if not isinstance(
+            value,
+            list,
+        ):
+            return []
+
+        return [
+            str(x).strip()
+            for x in value
+            if str(x).strip()
+        ]
+
+    output = {
+        "signal": signal,
+
+        "confidence": confidence,
+
+        "instrument": instrument,
+
+        "trend": trend,
+
+        "trade_idea": (
+            "BUY " + instrument
+            if signal == "BUY"
+            else
+            "SELL " + instrument
+            if signal == "SELL"
+            else
+            "NO TRADE"
+        ),
+
+        "entry": text(
+            "entry"
+        ),
+
+        "stop_loss": text(
+            "stop_loss"
+        ),
+
+        "take_profit_1": text(
+            "take_profit_1"
+        ),
+
+        "take_profit_2": text(
+            "take_profit_2"
+        ),
+
+        "risk_reward": text(
+            "risk_reward"
+        ),
+
+        "duration": text(
+            "duration"
+        ),
+
+        "higher_timeframe_context": text(
+            "higher_timeframe_context"
+        ),
+
+        "lower_timeframe_confirmation": text(
+            "lower_timeframe_confirmation"
+        ),
+
+        "data_analysis": text(
+            "data_analysis"
+        ),
+
+        "explanation": text(
+            "explanation"
+        ),
+
+        "contributing_methods": list_value(
+            "contributing_methods"
+        ),
+
+        "weak_methods": list_value(
+            "weak_methods"
+        ),
+
+        "conflicting_methods": list_value(
+            "conflicting_methods"
+        ),
+
+        "news_fundamental_risk": text(
+            "news_fundamental_risk"
+        ),
+
+        "warnings": list_value(
+            "warnings"
+        ),
+    }
+
+    if signal == "NO TRADE":
+
+        output["entry"] = "N/A"
+
+        output["stop_loss"] = "N/A"
+
+        output["take_profit_1"] = "N/A"
+
+        output["take_profit_2"] = "N/A"
+
+        output["risk_reward"] = "N/A"
+
+    return output
 
 
-def create_job_row(
+def encode_result(result):
+    raw = json.dumps(
+        result,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    return (
+        base64.urlsafe_b64encode(
+            raw
+        )
+        .decode("ascii")
+        .rstrip("=")
+    )
+
+
+def create_completed_job(
     job_id,
     user_id,
     instrument,
     trade_focus,
-    interaction_id
+    encoded_result,
 ):
     url = (
         get_supabase_url().rstrip("/")
@@ -552,54 +990,73 @@ def create_job_row(
 
     payload = {
         "id": job_id,
+
         "user_id": user_id,
+
         "instrument": instrument,
+
         "trade_focus": trade_focus,
+
         "created_at": datetime.now(
             timezone.utc
         ).isoformat(),
-        "status": "in_progress",
-        "openai_response_id": interaction_id,
+
+        "status": "completed",
+
+        # History already reads completed results
+        # from this field.
+        "openai_response_id": encoded_result,
     }
 
     request = urllib.request.Request(
         url,
         data=json.dumps(
             payload,
-            separators=(",", ":")
+            separators=(",", ":"),
         ).encode("utf-8"),
         method="POST",
         headers={
             "apikey": key,
-            "Authorization": "Bearer " + key,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Prefer": "return=minimal",
-        }
+
+            "Authorization":
+                "Bearer " + key,
+
+            "Content-Type":
+                "application/json",
+
+            "Accept":
+                "application/json",
+
+            "Prefer":
+                "return=minimal",
+        },
     )
 
     try:
         with urllib.request.urlopen(
             request,
-            timeout=20
+            timeout=20,
         ) as response:
+
             response.read()
 
     except urllib.error.HTTPError as exc:
+
         detail = exc.read().decode(
             "utf-8",
-            errors="replace"
+            errors="replace",
         )
 
         raise RuntimeError(
             "Supabase job creation error: "
-            + detail[:2000]
+            + detail[:3000]
         ) from exc
 
     except (
         urllib.error.URLError,
-        TimeoutError
+        TimeoutError,
     ) as exc:
+
         raise RuntimeError(
             "Supabase connection error: "
             + str(exc)
@@ -611,30 +1068,37 @@ class handler(
 ):
 
     def do_OPTIONS(self):
-        self.send_response(204)
+
+        self.send_response(
+            204
+        )
 
         self.send_header(
             "Access-Control-Allow-Origin",
-            "*"
+            "*",
         )
 
         self.send_header(
             "Access-Control-Allow-Headers",
-            "Content-Type, Authorization"
+            "Content-Type, Authorization",
         )
 
         self.send_header(
             "Access-Control-Allow-Methods",
-            "GET, POST, OPTIONS"
+            "GET, POST, OPTIONS",
         )
 
         self.end_headers()
 
+
     def do_POST(self):
+
         reserved = False
+
         user_id = ""
 
         try:
+
             access_token = (
                 extract_bearer_token(
                     self
@@ -648,11 +1112,12 @@ class handler(
             user_id = str(
                 user.get(
                     "id",
-                    ""
+                    "",
                 )
             ).strip()
 
             if not user_id:
+
                 raise ValueError(
                     "Authenticated user ID is missing."
                 )
@@ -677,14 +1142,14 @@ class handler(
                 data.get(
                     "higher_timeframe_image"
                 ),
-                "4H chart"
+                "4H chart",
             )
 
             lower = validate_image(
                 data.get(
                     "lower_timeframe_image"
                 ),
-                "15M chart"
+                "15M chart",
             )
 
             owner = is_owner_user(
@@ -692,49 +1157,85 @@ class handler(
             )
 
             if not owner:
+
                 slot = reserve_analysis_slot(
                     user_id
                 )
 
                 if slot == -1:
+
                     json_response(
                         self,
                         429,
                         {
-                            "error": "Daily analysis limit reached.",
-                            "daily_limit": 4,
-                            "remaining": 0,
-                            "is_owner": False
-                        }
+                            "error":
+                                "Daily analysis limit reached.",
+
+                            "daily_limit":
+                                4,
+
+                            "remaining":
+                                0,
+
+                            "is_owner":
+                                False,
+                        },
                     )
+
                     return
 
                 reserved = True
 
-            interaction_id = (
-                create_gemini_interaction(
+                remaining = max(
+                    0,
+                    4 - int(slot),
+                )
+
+            else:
+
+                slot = None
+
+                remaining = None
+
+
+            try:
+
+                raw_result = call_gemini(
                     instrument,
                     trade_focus,
                     higher,
-                    lower
+                    lower,
                 )
-            )
 
-            job_id = str(
-                uuid.uuid4()
-            )
-
-            try:
-                create_job_row(
-                    job_id,
-                    user_id,
+                result = normalize_result(
+                    raw_result,
                     instrument,
+                )
+
+                job_id = str(
+                    __import__(
+                        "uuid"
+                    ).uuid4()
+                )
+
+                create_completed_job(
+                    job_id,
+
+                    user_id,
+
+                    instrument,
+
                     trade_focus,
-                    interaction_id
+
+                    encode_result(
+                        result
+                    ),
                 )
 
             except Exception:
+
                 if reserved:
+
                     try:
                         release_analysis_slot(
                             user_id
@@ -744,65 +1245,71 @@ class handler(
 
                 raise
 
+
             reserved = False
 
-            remaining = None
-
-            if not owner:
-                remaining = max(
-                    0,
-                    4 - int(slot)
-                )
 
             json_response(
                 self,
                 202,
                 {
-                    "status": "in_progress",
-                    "job_id": job_id,
-                    "poll_after_seconds": 2,
-                    "is_owner": owner,
-                    "daily_limit": (
+                    "status":
+                        "completed",
+
+                    "job_id":
+                        job_id,
+
+                    "poll_after_seconds":
+                        0,
+
+                    "is_owner":
+                        owner,
+
+                    "daily_limit":
                         None
                         if owner
-                        else 4
-                    ),
-                    "remaining": remaining
-                }
+                        else 4,
+
+                    "remaining":
+                        remaining,
+                },
             )
 
+
         except ValueError as exc:
+
             json_response(
                 self,
                 400,
                 {
-                    "error": str(exc)
-                }
+                    "error":
+                        str(exc)
+                },
             )
 
+
         except RuntimeError as exc:
-            if reserved and user_id:
-                try:
-                    release_analysis_slot(
-                        user_id
-                    )
-                except Exception:
-                    pass
 
             json_response(
                 self,
                 502,
                 {
-                    "error": str(exc)
-                }
+                    "error":
+                        str(exc)
+                },
             )
 
+
         except Exception as exc:
+
             if reserved and user_id:
+
                 try:
+
                     release_analysis_slot(
                         user_id
                     )
+
                 except Exception:
                     pass
 
@@ -810,9 +1317,8 @@ class handler(
                 self,
                 500,
                 {
-                    "error": (
+                    "error":
                         "Analysis backend error: "
                         + str(exc)
-                    )
-                }
+                },
             )
