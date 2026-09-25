@@ -1,33 +1,28 @@
 import json
-import os
-import time
 import uuid
-import base64
-import hashlib
-import hmac
-import urllib.error
-import urllib.parse
-import urllib.request
 
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
 from analysis_common import (
     create_background_response,
     json_response,
-    parse_completed_response,
     validate_focus,
     validate_image_data_url,
     validate_instrument,
 )
 
 from api.user_security import (
+    create_secure_job_token,
     extract_bearer_token,
     is_owner_user,
     release_analysis_slot,
     reserve_analysis_slot,
     verify_access_token,
 )
+
+import os
+import urllib.error
+import urllib.request
 
 
 SUPABASE_URL = os.environ.get(
@@ -40,84 +35,6 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ.get(
     ""
 ).strip()
 
-
-JOB_TTL_SECONDS = 24 * 60 * 60
-
-
-# =========================================================
-# JOB TOKEN
-# =========================================================
-
-def get_job_secret():
-    secret = os.environ.get(
-        "JOB_TOKEN_SECRET",
-        ""
-    ).strip()
-
-    if not secret:
-        secret = os.environ.get(
-            "GEMINI_API_KEY",
-            ""
-        ).strip()
-
-    if not secret:
-        raise RuntimeError(
-            "JOB_TOKEN_SECRET or GEMINI_API_KEY is missing."
-        )
-
-    return secret.encode("utf-8")
-
-
-def create_job_token(
-    job_nonce,
-    instrument,
-    trade_focus,
-    user_id,
-):
-    created_at = int(time.time())
-
-    payload = {
-        "job_nonce": job_nonce,
-        "instrument": instrument,
-        "trade_focus": trade_focus,
-        "user_id": user_id,
-        "created_at": created_at,
-    }
-
-    raw = json.dumps(
-        payload,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-
-    encoded_payload = (
-        base64.urlsafe_b64encode(raw)
-        .decode("ascii")
-        .rstrip("=")
-    )
-
-    signature = hmac.new(
-        get_job_secret(),
-        encoded_payload.encode("ascii"),
-        hashlib.sha256,
-    ).digest()
-
-    encoded_signature = (
-        base64.urlsafe_b64encode(signature)
-        .decode("ascii")
-        .rstrip("=")
-    )
-
-    return (
-        encoded_payload
-        + "."
-        + encoded_signature
-    )
-
-
-# =========================================================
-# SUPABASE
-# =========================================================
 
 def supabase_request(
     method,
@@ -177,26 +94,30 @@ def supabase_request(
             timeout=timeout,
         ) as response:
 
-            raw = response.read().decode(
-                "utf-8",
-                errors="replace",
+            raw = (
+                response.read()
+                .decode(
+                    "utf-8",
+                    errors="replace",
+                )
             )
 
             if not raw:
                 return None
 
             try:
-                return json.loads(
-                    raw
-                )
+                return json.loads(raw)
             except json.JSONDecodeError:
                 return raw
 
     except urllib.error.HTTPError as exc:
 
-        detail = exc.read().decode(
-            "utf-8",
-            errors="replace",
+        detail = (
+            exc.read()
+            .decode(
+                "utf-8",
+                errors="replace",
+            )
         )
 
         raise RuntimeError(
@@ -205,150 +126,11 @@ def supabase_request(
             + detail
         )
 
-    except urllib.error.URLError as exc:
 
-        raise RuntimeError(
-            "Supabase connection failed: "
-            + str(exc)
-        )
+def _read_json(handler):
 
-
-# =========================================================
-# CREATE JOB
-# =========================================================
-
-def create_queued_job(
-    user_id,
-    instrument,
-    trade_focus,
-    higher_timeframe_image,
-    lower_timeframe_image,
-):
-    job_id = str(
-        uuid.uuid4()
-    )
-
-    job_nonce = uuid.uuid4().hex
-
-    created_at = (
-        datetime.now(
-            timezone.utc
-        ).isoformat()
-    )
-
-    payload = {
-        "id":
-            job_id,
-
-        "job_nonce":
-            job_nonce,
-
-        "user_id":
-            user_id,
-
-        "instrument":
-            instrument,
-
-        "trade_focus":
-            trade_focus,
-
-        "higher_timeframe_image":
-            higher_timeframe_image,
-
-        "lower_timeframe_image":
-            lower_timeframe_image,
-
-        # The row is immediately being processed.
-        "status":
-            "processing",
-
-        # This column is NOT NULL in Supabase.
-        # It is replaced with the real result below.
-        "openai_response_id":
-            "pending",
-
-        "error_message":
-            None,
-
-        "created_at":
-            created_at,
-    }
-
-    result = supabase_request(
-        "POST",
-        "/rest/v1/analysis_jobs",
-        payload,
-        timeout=30,
-        extra_headers={
-            "Prefer":
-                "return=representation",
-        },
-    )
-
-    if not result:
-        raise RuntimeError(
-            "The analysis job could not be created."
-        )
-
-    return job_nonce
-
-
-# =========================================================
-# UPDATE JOB
-# =========================================================
-
-def update_job(
-    job_nonce,
-    values,
-):
-    encoded_nonce = urllib.parse.quote(
-        job_nonce,
-        safe="",
-    )
-
-    return supabase_request(
-        "PATCH",
-        (
-            "/rest/v1/analysis_jobs"
-            "?job_nonce=eq."
-            + encoded_nonce
-        ),
-        values,
-        timeout=30,
-        extra_headers={
-            "Prefer":
-                "return=minimal",
-        },
-    )
-
-
-# =========================================================
-# ENCODE RESULT
-# =========================================================
-
-def encode_result(result):
-    raw = json.dumps(
-        result,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-
-    return (
-        base64.urlsafe_b64encode(
-            raw
-        )
-        .decode("ascii")
-        .rstrip("=")
-    )
-
-
-# =========================================================
-# REQUEST BODY
-# =========================================================
-
-def read_json(handler):
     try:
-        content_length = int(
+        length = int(
             handler.headers.get(
                 "Content-Length",
                 "0",
@@ -360,15 +142,15 @@ def read_json(handler):
         )
 
     if (
-        content_length <= 0
-        or content_length > 25 * 1024 * 1024
+        length <= 0
+        or length > 25 * 1024 * 1024
     ):
         raise ValueError(
             "Invalid chart request."
         )
 
     raw = handler.rfile.read(
-        content_length
+        length
     )
 
     try:
@@ -391,33 +173,65 @@ def read_json(handler):
     return value
 
 
-# =========================================================
-# AUTHENTICATION
-# =========================================================
+def _save_analysis_job(
+    user_id,
+    instrument,
+    trade_focus,
+    response_id,
+    higher_image,
+    lower_image,
+    status,
+):
+    """
+    Save the OpenAI response ID immediately.
+    openai_response_id is NOT NULL in Supabase.
+    The status endpoint later replaces this value
+    with the encoded completed analysis.
+    """
 
-def authenticate_user(handler):
-    token = extract_bearer_token(
-        handler
+    payload = {
+        "id":
+            str(uuid.uuid4()),
+
+        "job_nonce":
+            None,
+
+        "user_id":
+            user_id,
+
+        "instrument":
+            instrument,
+
+        "trade_focus":
+            trade_focus,
+
+        "status":
+            status,
+
+        "openai_response_id":
+            response_id,
+
+        "higher_timeframe_image":
+            higher_image,
+
+        "lower_timeframe_image":
+            lower_image,
+
+        "error_message":
+            None,
+    }
+
+    return supabase_request(
+        "POST",
+        "/rest/v1/analysis_jobs",
+        payload,
+        timeout=30,
+        extra_headers={
+            "Prefer":
+                "return=representation"
+        },
     )
 
-    user = verify_access_token(
-        token
-    )
-
-    if not isinstance(
-        user,
-        dict,
-    ):
-        raise ValueError(
-            "Invalid authenticated user."
-        )
-
-    return user
-
-
-# =========================================================
-# HTTP HANDLER
-# =========================================================
 
 class handler(
     BaseHTTPRequestHandler
@@ -447,41 +261,38 @@ class handler(
     def do_POST(self):
 
         reserved = False
-        user_id = ""
-        job_nonce = ""
+        user = None
 
         try:
 
-            # -------------------------------------------------
-            # 1. AUTH
-            # -------------------------------------------------
+            # -----------------------------------------
+            # AUTH
+            # -----------------------------------------
 
-            user = authenticate_user(
-                self
+            access_token = (
+                extract_bearer_token(
+                    self
+                )
             )
 
-            user_id = str(
-                user.get(
-                    "id",
-                    "",
-                )
-            ).strip()
-
-            if not user_id:
-                raise ValueError(
-                    "Invalid authenticated user."
-                )
+            user = verify_access_token(
+                access_token
+            )
 
             owner = is_owner_user(
                 user
             )
 
+            user_id = str(
+                user["id"]
+            ).strip()
 
-            # -------------------------------------------------
-            # 2. REQUEST
-            # -------------------------------------------------
 
-            data = read_json(
+            # -----------------------------------------
+            # REQUEST
+            # -----------------------------------------
+
+            data = _read_json(
                 self
             )
 
@@ -517,9 +328,9 @@ class handler(
             )
 
 
-            # -------------------------------------------------
-            # 3. DAILY LIMIT
-            # -------------------------------------------------
+            # -----------------------------------------
+            # DAILY LIMIT
+            # -----------------------------------------
 
             if not owner:
 
@@ -561,38 +372,13 @@ class handler(
                 remaining = None
 
 
-            # -------------------------------------------------
-            # 4. CREATE DATABASE JOB
-            # -------------------------------------------------
-
-            job_nonce = create_queued_job(
-                user_id=
-                    user_id,
-
-                instrument=
-                    instrument,
-
-                trade_focus=
-                    trade_focus,
-
-                higher_timeframe_image=
-                    higher_image,
-
-                lower_timeframe_image=
-                    lower_image,
-            )
-
-
-            # -------------------------------------------------
-            # 5. RUN GEMINI DIRECTLY
-            #
-            # No Supabase webhook is required.
-            # This removes the long queued delay.
-            # -------------------------------------------------
+            # -----------------------------------------
+            # OPENAI
+            # -----------------------------------------
 
             try:
 
-                raw_response = (
+                response = (
                     create_background_response(
                         instrument=
                             instrument,
@@ -608,78 +394,7 @@ class handler(
                     )
                 )
 
-                result = (
-                    parse_completed_response(
-                        raw_response,
-                        instrument=
-                            instrument,
-                        trade_focus=
-                            trade_focus,
-                    )
-                )
-
-                if not isinstance(
-                    result,
-                    dict,
-                ):
-                    raise RuntimeError(
-                        "The analysis returned an invalid result."
-                    )
-
-                encoded_result = encode_result(
-                    result
-                )
-
-
-                # -------------------------------------------------
-                # 6. SAVE COMPLETED RESULT
-                # -------------------------------------------------
-
-                update_job(
-                    job_nonce,
-                    {
-                        "status":
-                            "completed",
-
-                        "openai_response_id":
-                            encoded_result,
-
-                        "error_message":
-                            None,
-                    },
-                )
-
-
-            except Exception as analysis_error:
-
-                error_message = str(
-                    analysis_error
-                ).strip()
-
-                if not error_message:
-                    error_message = (
-                        "Analysis processing failed."
-                    )
-
-                try:
-
-                    update_job(
-                        job_nonce,
-                        {
-                            "status":
-                                "failed",
-
-                            "error_message":
-                                error_message[:2000],
-
-                            # Keep this column NOT NULL.
-                            "openai_response_id":
-                                "failed",
-                        },
-                    )
-
-                except Exception:
-                    pass
+            except Exception:
 
                 if reserved:
 
@@ -690,51 +405,129 @@ class handler(
                     except Exception:
                         pass
 
-                    reserved = False
+                raise
+
+
+            # -----------------------------------------
+            # OPENAI RESPONSE ID
+            # -----------------------------------------
+
+            response_id = str(
+                response.get(
+                    "id",
+                    "",
+                )
+            ).strip()
+
+            if not response_id:
+
+                if reserved:
+
+                    try:
+                        release_analysis_slot(
+                            user_id
+                        )
+                    except Exception:
+                        pass
 
                 raise RuntimeError(
-                    error_message
+                    "The analysis service returned no job ID."
                 )
 
 
-            # -------------------------------------------------
-            # 7. CREATE SECURE JOB TOKEN
-            # -------------------------------------------------
+            openai_status = str(
+                response.get(
+                    "status",
+                    "queued",
+                )
+            ).strip().lower()
 
-            job_token = create_job_token(
-                job_nonce=
-                    job_nonce,
 
-                instrument=
+            if openai_status in {
+                "completed",
+            }:
+
+                database_status = (
+                    "completed"
+                )
+
+            else:
+
+                database_status = (
+                    "processing"
+                )
+
+
+            # -----------------------------------------
+            # SAVE FOR HISTORY
+            # -----------------------------------------
+
+            try:
+
+                _save_analysis_job(
+
+                    user_id=
+                        user_id,
+
+                    instrument=
+                        instrument,
+
+                    trade_focus=
+                        trade_focus,
+
+                    response_id=
+                        response_id,
+
+                    higher_image=
+                        higher_image,
+
+                    lower_image=
+                        lower_image,
+
+                    status=
+                        database_status,
+                )
+
+            except Exception as db_error:
+
+                # Do not destroy a working Analyze
+                # request merely because History storage
+                # failed.
+                #
+                # Log-safe response continues below.
+                pass
+
+
+            # -----------------------------------------
+            # SECURE JOB TOKEN
+            # -----------------------------------------
+
+            job_id = (
+                create_secure_job_token(
+                    response_id,
                     instrument,
-
-                trade_focus=
                     trade_focus,
-
-                user_id=
                     user_id,
+                )
             )
 
 
-            # -------------------------------------------------
-            # 8. RETURN COMPLETED JOB
-            # -------------------------------------------------
+            # -----------------------------------------
+            # SUCCESS
+            # -----------------------------------------
 
             json_response(
                 self,
-                200,
+                202,
                 {
                     "status":
-                        "completed",
+                        openai_status,
 
                     "job_id":
-                        job_token,
-
-                    "job_nonce":
-                        job_nonce,
+                        job_id,
 
                     "poll_after_seconds":
-                        1,
+                        2,
 
                     "is_owner":
                         owner,
@@ -760,29 +553,27 @@ class handler(
                 },
             )
 
-
         except RuntimeError as exc:
 
             json_response(
                 self,
-                500,
+                503,
                 {
                     "error":
                         str(exc),
                 },
             )
 
-
         except Exception as exc:
 
             if (
                 reserved
-                and user_id
+                and user
             ):
 
                 try:
                     release_analysis_slot(
-                        user_id
+                        str(user["id"])
                     )
                 except Exception:
                     pass
