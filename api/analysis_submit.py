@@ -1,5 +1,4 @@
 import json
-import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler
@@ -9,7 +8,7 @@ from analysis_common import (
     MODEL,
     OUTPUT_SCHEMA,
     SYSTEM_PROMPT,
-    api_key,
+    get_openai_key,
     json_response,
     validate_focus,
     validate_image_data_url,
@@ -70,14 +69,6 @@ def _save_queued_job(
     lower_image,
     status,
 ):
-    """
-    Save the OpenAI response ID immediately after the background job
-    is successfully created.
-
-    openai_response_id is NOT allowed to be null because the database
-    column is NOT NULL.
-    """
-
     payload = {
         "user_id": str(user_id),
         "instrument": str(instrument),
@@ -104,18 +95,30 @@ def _save_queued_job(
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(
+            request,
+            timeout=20,
+        ) as response:
             response.read()
 
         return True
 
     except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        print("Supabase history insert failed:", raw)
+        raw = exc.read().decode(
+            "utf-8",
+            errors="replace",
+        )
+        print(
+            "Supabase history insert failed:",
+            raw,
+        )
         return False
 
     except Exception as exc:
-        print("Supabase history insert failed:", str(exc))
+        print(
+            "Supabase history insert failed:",
+            str(exc),
+        )
         return False
 
 
@@ -126,12 +129,7 @@ def _openai_request(
     lower_image,
     output_tokens=1200,
 ):
-    key = api_key()
-
-    if not key:
-        raise RuntimeError(
-            "OPENAI_API_KEY is missing from Vercel Production."
-        )
+    key = get_openai_key()
 
     payload = {
         "model": MODEL,
@@ -178,14 +176,12 @@ def _openai_request(
         "max_output_tokens": output_tokens,
     }
 
-    body = json.dumps(
-        payload,
-        separators=(",", ":"),
-    ).encode("utf-8")
-
     request = urllib.request.Request(
         OPENAI_URL,
-        data=body,
+        data=json.dumps(
+            payload,
+            separators=(",", ":"),
+        ).encode("utf-8"),
         method="POST",
         headers={
             "Authorization": "Bearer " + key,
@@ -215,6 +211,12 @@ def _openai_request(
             errors="replace",
         )
 
+        print(
+            "OpenAI HTTP error:",
+            exc.code,
+            raw,
+        )
+
         if exc.code == 401:
             raise RuntimeError(
                 "The server AI credential was rejected."
@@ -224,12 +226,6 @@ def _openai_request(
             raise RuntimeError(
                 "The AI service is temporarily rate limited."
             ) from exc
-
-        print(
-            "OpenAI HTTP error:",
-            exc.code,
-            raw,
-        )
 
         raise RuntimeError(
             "The AI analysis service could not start."
@@ -254,11 +250,11 @@ def _create_background_analysis(
 ):
     try:
         return _openai_request(
-            instrument=instrument,
-            trade_focus=trade_focus,
-            higher_image=higher_image,
-            lower_image=lower_image,
-            output_tokens=1200,
+            instrument,
+            trade_focus,
+            higher_image,
+            lower_image,
+            1200,
         )
 
     except RuntimeError as exc:
@@ -266,11 +262,11 @@ def _create_background_analysis(
             raise
 
         return _openai_request(
-            instrument=instrument,
-            trade_focus=trade_focus,
-            higher_image=higher_image,
-            lower_image=lower_image,
-            output_tokens=700,
+            instrument,
+            trade_focus,
+            higher_image,
+            lower_image,
+            700,
         )
 
 
@@ -364,12 +360,11 @@ class handler(BaseHTTPRequestHandler):
 
             try:
                 response = _create_background_analysis(
-                    instrument=instrument,
-                    trade_focus=trade_focus,
-                    higher_image=higher_image,
-                    lower_image=lower_image,
+                    instrument,
+                    trade_focus,
+                    higher_image,
+                    lower_image,
                 )
-
             except Exception:
                 if reserved:
                     try:
@@ -380,12 +375,8 @@ class handler(BaseHTTPRequestHandler):
                         pass
                 raise
 
-            # IMPORTANT:
-            # OpenAI Background Responses returns the job ID here.
             response_id = str(
-                response.get("id")
-                or response.get("response_id")
-                or ""
+                response.get("id", "")
             ).strip()
 
             status = str(
@@ -393,7 +384,7 @@ class handler(BaseHTTPRequestHandler):
                     "status",
                     "queued",
                 )
-            ).strip()
+            ).strip() or "queued"
 
             if not response_id:
                 if reserved:
@@ -405,26 +396,27 @@ class handler(BaseHTTPRequestHandler):
                         pass
 
                 print(
-                    "OpenAI response had no ID:",
+                    "OpenAI returned no response ID:",
                     response,
                 )
 
                 raise RuntimeError(
-                    "The AI service returned an invalid job response."
+                    "The AI service returned no job ID."
                 )
 
-            # Save the job immediately.
+            # History save is deliberately non-fatal.
+            # The analysis must still work even if the database
+            # history write has a temporary problem.
             history_saved = _save_queued_job(
-                user_id=user_id,
-                instrument=instrument,
-                trade_focus=trade_focus,
-                response_id=response_id,
-                higher_image=higher_image,
-                lower_image=lower_image,
-                status=status or "queued",
+                user_id,
+                instrument,
+                trade_focus,
+                response_id,
+                higher_image,
+                lower_image,
+                status,
             )
 
-            # Secure Android-facing job token.
             job_id = create_secure_job_token(
                 response_id,
                 instrument,
@@ -437,7 +429,7 @@ class handler(BaseHTTPRequestHandler):
                 202,
                 {
                     "status":
-                        status or "queued",
+                        status,
 
                     "job_id":
                         job_id,
@@ -449,9 +441,7 @@ class handler(BaseHTTPRequestHandler):
                         owner,
 
                     "daily_limit":
-                        None
-                        if owner
-                        else 4,
+                        None if owner else 4,
 
                     "remaining":
                         remaining,
@@ -492,7 +482,7 @@ class handler(BaseHTTPRequestHandler):
 
             print(
                 "analysis_submit error:",
-                str(exc),
+                repr(exc),
             )
 
             json_response(
