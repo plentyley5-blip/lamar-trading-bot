@@ -1,6 +1,7 @@
 
 import base64
 import json
+import math
 import os
 import time
 import urllib.error
@@ -174,172 +175,145 @@ def validate_image(value, label):
 
 
 def build_prompt(instrument, trade_focus):
-    focus_instructions = {
+    common = """
+Analyze only evidence visible in the supplied 4H and 15M screenshots.
+Never invent prices, candles, indicators, or confirmations.
+
+Evaluate:
+- Market structure, trend, support, and resistance
+- Price action and candlestick behavior
+- Liquidity pools and liquidity sweeps
+- Break of Structure (BOS) and Change of Character (CHoCH)
+- Smart Money Concepts, order blocks, and Fair Value Gaps
+- Fibonacci only where meaningful and defensible
+- Premium/discount when the relevant range is identifiable
+- Displacement, inducement, and mitigation where visible
+- Entry trigger, invalidation, target space, and risk-to-reward
+- Agreement or conflict between 4H and 15M
+
+A directional bias is not automatically an entry.
+A missing optional pattern is not sufficient reason to reject a
+setup if other visible evidence supports it.
+
+Do not require every strategy to agree. Weigh the evidence actually
+visible on the charts. Do not claim to have live news data.
+Do not guarantee profit.
+"""
+
+    focus_rules = {
         "SCALP": """
-SCALP MODE — ENTRY IDENTIFICATION IS THE PRIORITY.
+SCALP MODE — SEARCH CAREFULLY FOR VALID 15M ENTRIES.
 
-Use the 4H chart mainly to establish the larger market context,
-important support/resistance, and nearby opposing levels.
+Use the 4H chart for broader context and important levels.
+Prioritize the 15M chart for deciding whether an entry is available.
 
-Examine the 15M chart carefully for an entry that could reasonably
-be taken now. Look for visible evidence such as:
-- A pullback into support, resistance, a supply/demand zone, or an
-  identifiable order block.
-- A liquidity sweep followed by rejection or a structure shift.
-- A break of structure followed by a retest.
-- A Fair Value Gap retracement and a visible reaction.
-- A strong rejection candle at a meaningful level.
-- Continuation after a pullback when the structure remains valid.
+Actively check for:
+1. Liquidity sweep of a recent high or low followed by rejection.
+2. Break of structure followed by a retest.
+3. Pullback to a meaningful level followed by a confirming reaction.
+4. Strong rejection candle at support, resistance, or a relevant zone.
+5. Continuation after a retracement in the short-term trend.
+6. Change of character followed by supporting price action.
+7. Reaction around a visible order block or Fair Value Gap.
 
-A scalp may be valid even when the 4H trend is not perfectly aligned,
-provided the 15M setup is clear, the local structure supports it,
-and the trade has defensible invalidation and target levels.
-Describe any conflict with the 4H context.
+One clear, defensible pattern with supporting context may be enough.
+Do not demand multiple confirmations that are not necessary for the
+specific setup. Do not assume a pattern exists if it is not visible.
 
-Do not require every listed pattern. One or more clear, relevant
-confirmations can be sufficient.
+For a potential BUY or SELL, check:
+- Is a trigger visible on the 15M chart now?
+- Can an entry be placed near a defensible level?
+- Where would the idea be invalidated?
+- Is there room to a target before a major opposing level?
+- Is the move already too extended to enter without chasing?
 
-Distinguish between:
-A. ENTRY AVAILABLE: the charts show a defensible entry area or trigger.
-B. SETUP DEVELOPING: direction is plausible but confirmation or a
-   retest is still needed.
-C. ENTRY MISSED: price has already moved too far from the last
-   defensible entry and entering now would be chasing.
+Do not reject a scalp solely because the 4H direction differs.
+Assess whether the 15M opportunity is sufficiently clear, and explain
+the additional risk from trading against the higher timeframe.
+
+Classify the situation internally as:
+A. ENTRY AVAILABLE: visible trigger and defensible risk levels.
+B. SETUP DEVELOPING: a specific future confirmation is still needed.
+C. ENTRY MISSED: the move is too extended to enter safely.
 D. NO CLEAR SETUP: evidence is insufficient or contradictory.
 
-Return BUY or SELL only for an entry that is actually defensible
-from the supplied charts. If the setup is developing, the entry is
-missed, or the evidence is unclear, return NO TRADE and explain
-what confirmation or pullback is needed.
+Return BUY or SELL only for an entry supported by the screenshots.
+If a trigger has not happened, do not pretend that it has.
+If the entry is missed, do not invent a better price.
+If no defensible stop-loss or target exists, return NO TRADE.
 
-Do not reject a valid scalp merely because the market made a strong
-move. Determine whether the move is still enterable using visible
-structure, distance to invalidation, and available target space.
+In your explanation, identify the possible direction, actual 15M
+evidence, entry readiness, and the confirmation or invalidation level
+when the chart makes that level readable.
 """,
         "DAY TRADE": """
 DAY TRADE MODE.
 
-Use the 4H chart to establish the main directional context and
-important levels. Use the 15M chart to identify a practical entry,
-confirmation, invalidation, and target.
+Use 4H to establish broader structure and important levels.
+Use 15M to identify a practical entry trigger.
 
-Look for structure breaks, retests, liquidity sweeps, pullbacks,
-rejections, order blocks, and Fair Value Gaps when visible.
-Do not require every method to agree. Prefer a clear setup with
-defensible risk and reward.
+Evaluate sweeps, breaks and retests, pullbacks, rejection candles,
+order blocks, Fair Value Gaps, and continuation structures when visible.
+Do not require every pattern. Avoid chasing extended moves.
 
-Distinguish between an entry available now, a setup requiring
-confirmation, an entry that has already been missed, and no clear
-setup. Do not chase an extended move.
+Return BUY or SELL only when the entry, invalidation, and target are
+defensible. Otherwise explain what is missing.
 """,
         "SWING": """
 SWING MODE.
 
-Prioritize the 4H structure, directional context, and major levels.
-Use the 15M chart only to refine entry timing or confirm a reaction.
+Prioritize 4H structure, trend, and major levels. Use 15M to refine
+entry timing or confirm a reaction.
 
-Look for meaningful trend continuation, reversals at major levels,
-structure breaks, retests, liquidity sweeps, and pullbacks when
-visible. Consider nearby opposing levels and whether the target
-has enough room.
-
-Do not force a trade if the charts do not support defensible levels.
-Distinguish between a valid setup, a setup needing confirmation,
-a missed entry, and no clear setup.
+Evaluate meaningful reversals, continuation, pullbacks, sweeps,
+breaks and retests, and nearby opposing levels when visible.
+Do not force a trade or invent prices. Explain what is missing when
+the setup is not ready.
 """,
     }
-
-    selected_instructions = focus_instructions[trade_focus]
 
     return f"""
 You are LM ANALYZER, the chart-analysis engine for LAMAR TRADING BOT.
 
-Analyze the two supplied chart screenshots:
-IMAGE 1 = 4H higher timeframe.
-IMAGE 2 = 15M lower timeframe.
-
 Instrument: {instrument}
 Selected trade focus: {trade_focus}
 
-Use only evidence visible in the supplied charts. Do not invent
-prices, indicators, candles, patterns, news, or confirmations.
+IMAGE 1 is the 4H chart.
+IMAGE 2 is the 15M chart.
 
-{selected_instructions}
+{common}
 
-ANALYSIS CHECKLIST:
-- Market structure and trend
-- Support and resistance
-- Price action and candlestick behavior
-- Liquidity pools and liquidity sweeps
-- Break of Structure (BOS)
-- Change of Character (CHoCH)
-- Smart Money Concepts (SMC)
-- Order blocks and Fair Value Gaps
-- Fibonacci only when meaningful and supportable
-- Premium/discount when the relevant range is identifiable
-- Displacement, inducement, and mitigation where visible
-- Entry trigger and entry readiness
-- Stop-loss invalidation
-- Initial target and final target
-- Risk-to-reward and nearby opposing levels
-- Agreement or conflict between 4H and 15M
-
-ENTRY RULES:
-1. A directional bias is not automatically an entry.
-2. For BUY, identify the evidence supporting buying and a defensible
-   invalidation level below the relevant structure.
-3. For SELL, identify the evidence supporting selling and a defensible
-   invalidation level above the relevant structure.
-4. Prefer an entry at a meaningful level or after a visible trigger.
-5. Do not recommend chasing an extended move when there is insufficient
-   target space or no defensible stop-loss.
-6. Do not insist on waiting for a pullback if the chart already shows
-   a clear, defensible entry trigger and adequate target space.
-7. Do not invent exact prices when labels are unreadable.
-8. If the setup needs a future confirmation, do not pretend that the
-   confirmation has already happened.
-9. Consider the selected trade focus. A scalp opportunity should not
-   be rejected solely because it is not a swing-trade opportunity.
-10. If no defensible entry exists, use NO TRADE and explain exactly why.
+{focus_rules[trade_focus]}
 
 SIGNAL RULES:
 - signal must be BUY, SELL, or NO TRADE.
 - trade_idea must be BUY {instrument}, SELL {instrument}, or NO TRADE.
-- Use NO TRADE when evidence is insufficient, timeframes conflict
-  without a defensible resolution, prices cannot be read, or entry
-  risk is not defensible.
-- A possible directional opportunity with no entry trigger must not
-  be represented as an immediately actionable trade.
-
-CONFIDENCE RULES:
-- Confidence measures the strength of the visible chart analysis.
-  It is not a guaranteed probability of profit.
-- Assess structure, confirmation, timeframe agreement, clarity, and
-  conflicting evidence.
-- Confidence must be a number from 0 to 100.
-- Do not automatically set confidence to zero for NO TRADE.
-- If direction is clear but the entry is too extended, reflect the
-  strength of the directional evidence and explain the entry risk.
-- Use 0 only when the supplied evidence supports virtually no
-  meaningful conclusion. Never invent confidence to make a result
-  look better.
-
-OUTPUT RULES:
+- Use NO TRADE when there is no defensible entry, price labels are
+  unreadable, evidence is insufficient, or unresolved conflict makes
+  the setup too uncertain.
+- A strong directional move can still have a poor entry. Explain
+  the distinction between direction and entry timing.
 - For NO TRADE, entry, stop_loss, take_profit_1, take_profit_2,
-  and risk_reward must be "N/A".
-- For BUY or SELL, provide only defensible levels. If those levels
-  cannot be established, use NO TRADE.
-- Use warnings to explain specific risks, not as a substitute for
-  the actual analysis.
-- Explain what evidence supports the decision and what would
-  invalidate it.
-- Put strategy names in contributing_methods, not in separate
-  UI result categories.
-- Do not claim to have live news data.
-- Do not guarantee profit.
-- Return only valid JSON. Do not include Markdown or code fences.
+  and risk_reward must all be "N/A".
+- For BUY or SELL, give defensible levels only. Do not manufacture
+  exact prices from unreadable labels.
 
-Return exactly this JSON structure:
+CONFIDENCE:
+Confidence measures strength of the visible analysis, not guaranteed
+profit or the probability that a trade will win.
+Use the range 0-100 based on structure, confirmation, clarity, and
+conflicting evidence. Do not automatically use zero for NO TRADE.
+Use zero only when virtually no meaningful conclusion is possible.
+Do not inflate confidence to justify a trade.
+
+OUTPUT:
+- Put methods in contributing_methods, weak_methods, and
+  conflicting_methods where appropriate.
+- warnings must describe actual risks and missing confirmations.
+- Explain the evidence, entry readiness, and invalidation.
+- Return only valid JSON without Markdown.
+
+Return exactly this structure:
 {{
   "signal": "BUY | SELL | NO TRADE",
   "confidence": 0,
@@ -492,10 +466,10 @@ def call_gemini(instrument, trade_focus, higher, lower):
         "system_instruction": {
             "parts": [{
                 "text": (
-                    "You are LM Analyzer, a disciplined chart-analysis "
-                    "service. Follow the supplied JSON schema. Pay "
-                    "attention to the selected trade focus, especially "
-                    "15M entry triggers in SCALP mode. Never invent prices."
+                    "You are a disciplined chart-analysis service. "
+                    "Pay close attention to the selected trade focus. "
+                    "In SCALP mode, actively evaluate 15M entry triggers. "
+                    "Never invent chart evidence or prices."
                 )
             }]
         },
@@ -553,8 +527,7 @@ def call_gemini(instrument, trade_focus, higher, lower):
 
         try:
             with urllib.request.urlopen(
-                request,
-                timeout=GEMINI_TIMEOUT_SECONDS,
+                request, timeout=GEMINI_TIMEOUT_SECONDS
             ) as response:
                 raw = response.read().decode(
                     "utf-8", errors="replace"
@@ -621,8 +594,8 @@ def call_gemini(instrument, trade_focus, higher, lower):
 
             break
 
-        candidates = api_obj.get("candidates")
         pieces = []
+        candidates = api_obj.get("candidates")
 
         if isinstance(candidates, list):
             for candidate in candidates:
@@ -650,14 +623,11 @@ def call_gemini(instrument, trade_focus, higher, lower):
         generated_text = "\n".join(pieces).strip()
 
         if not generated_text:
-            prompt_feedback = api_obj.get(
-                "promptFeedback", {}
-            )
             failures.append(
                 "{} returned no analysis text. Details: {}".format(
                     model,
                     json.dumps(
-                        prompt_feedback,
+                        api_obj.get("promptFeedback", {}),
                         ensure_ascii=False,
                     )[:1000],
                 )
@@ -670,7 +640,6 @@ def call_gemini(instrument, trade_focus, higher, lower):
 
         try:
             return parse_analysis_json(generated_text)
-
         except RuntimeError as exc:
             failures.append(
                 "{} returned unusable analysis JSON: {}".format(
@@ -683,10 +652,9 @@ def call_gemini(instrument, trade_focus, higher, lower):
 
             break
 
-    summary = " | ".join(failures[-4:])
-
     raise RuntimeError(
-        "All configured Gemini models failed. " + summary
+        "All configured Gemini models failed. "
+        + " | ".join(failures[-4:])
     )
 
 
@@ -703,7 +671,7 @@ def normalize_result(result, instrument):
     except (TypeError, ValueError):
         confidence = 0.0
 
-    if confidence != confidence:
+    if not math.isfinite(confidence):
         confidence = 0.0
 
     confidence = max(0.0, min(100.0, confidence))
@@ -802,11 +770,7 @@ def encode_result(result):
 
 
 def create_completed_job(
-    job_id,
-    user_id,
-    instrument,
-    trade_focus,
-    encoded_result,
+    job_id, user_id, instrument, trade_focus, encoded_result
 ):
     url = (
         get_supabase_url().rstrip("/")
@@ -941,7 +905,6 @@ class handler(BaseHTTPRequestHandler):
 
                 reserved = True
                 remaining = max(0, 4 - int(slot))
-
             else:
                 remaining = None
 
@@ -973,7 +936,6 @@ class handler(BaseHTTPRequestHandler):
                         release_analysis_slot(user_id)
                     except Exception:
                         pass
-
                 raise
 
             reserved = False
@@ -1005,7 +967,5 @@ class handler(BaseHTTPRequestHandler):
                     pass
 
             json_response(self, 500, {
-                "error": (
-                    "Analysis backend error: " + str(exc)
-                )
+                "error": "Analysis backend error: " + str(exc)
             })
