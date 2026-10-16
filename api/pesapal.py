@@ -10,7 +10,7 @@ from api.user_security import (
     extract_bearer_token,
     verify_access_token,
 )
-from api.pesapal_common import (
+from pesapal_common import (
     pesapal_api,
     supabase_rest,
     process_pesapal_payment,
@@ -19,8 +19,16 @@ from api.pesapal_common import (
 
 PLANS = {
     "monthly": {"name": "Monthly", "amount": 21.23, "months": 1},
-    "three_months": {"name": "3 Months", "amount": 63.69, "months": 3},
-    "six_months": {"name": "6 Months", "amount": 127.38, "months": 6},
+    "three_months": {
+        "name": "3 Months",
+        "amount": 63.69,
+        "months": 3,
+    },
+    "six_months": {
+        "name": "6 Months",
+        "amount": 127.38,
+        "months": 6,
+    },
 }
 
 PLAN_ALIASES = {
@@ -73,6 +81,12 @@ def send_page(handler, status, title, message):
     handler.wfile.write(page)
 
 
+def get_query_params(handler):
+    return urllib.parse.parse_qs(
+        urllib.parse.urlparse(handler.path).query
+    )
+
+
 def register_ipn():
     ipn_url = os.environ.get("PESAPAL_IPN_URL", "").strip()
 
@@ -94,7 +108,9 @@ def create_order(user, body):
     plan_key = PLAN_ALIASES.get(requested_plan)
 
     if not plan_key:
-        raise ValueError("Invalid plan. Use monthly, three_months, or six_months.")
+        raise ValueError(
+            "Invalid plan. Use monthly, three_months, or six_months."
+        )
 
     ipn_id = os.environ.get("PESAPAL_IPN_ID", "").strip()
     callback_url = os.environ.get("PESAPAL_CALLBACK_URL", "").strip()
@@ -108,7 +124,6 @@ def create_order(user, body):
     plan = PLANS[plan_key]
     merchant_reference = "LM-" + uuid.uuid4().hex
 
-    # Save a pending order with server-controlled price.
     created = supabase_rest(
         "payment_orders",
         method="POST",
@@ -133,6 +148,7 @@ def create_order(user, body):
     full_name = str(
         metadata.get("full_name") or metadata.get("name") or ""
     ).strip()
+
     name_parts = full_name.split(maxsplit=1)
     first_name = name_parts[0] if name_parts else "LM"
     last_name = name_parts[1] if len(name_parts) > 1 else "Analyzer"
@@ -174,8 +190,9 @@ def create_order(user, body):
         raise RuntimeError("Pesapal did not return a checkout URL")
 
     query = urllib.parse.urlencode({
-        "merchant_reference": "eq." + merchant_reference
+        "merchant_reference": "eq." + merchant_reference,
     })
+
     supabase_rest(
         "payment_orders?" + query,
         method="PATCH",
@@ -194,12 +211,6 @@ def create_order(user, body):
     }
 
 
-def get_query_params(handler):
-    return urllib.parse.parse_qs(
-        urllib.parse.urlparse(handler.path).query
-    )
-
-
 def handle_ipn(handler, params):
     tracking_id = params.get("OrderTrackingId", [""])[0]
     merchant_reference = params.get(
@@ -216,7 +227,8 @@ def handle_ipn(handler, params):
         print("Pesapal IPN result:", result.get("status"))
 
         return send_json(
-            handler, 200,
+            handler,
+            200,
             {
                 "orderNotificationType": notification_type,
                 "orderTrackingId": tracking_id,
@@ -227,7 +239,8 @@ def handle_ipn(handler, params):
     except Exception as exc:
         print("Pesapal IPN error:", str(exc))
         return send_json(
-            handler, 500,
+            handler,
+            500,
             {
                 "orderNotificationType": notification_type,
                 "orderTrackingId": tracking_id,
@@ -251,24 +264,33 @@ def handle_callback(handler, params):
 
         if status in ("completed", "already_completed"):
             return send_page(
-                handler, 200, "Payment confirmed",
+                handler,
+                200,
+                "Payment confirmed",
                 "Your payment has been verified. Check your subscription in the app.",
             )
 
         if status == "pending":
             return send_page(
-                handler, 200, "Payment pending",
+                handler,
+                200,
+                "Payment pending",
                 "Pesapal has not confirmed the payment yet. Check the app again shortly.",
             )
 
         return send_page(
-            handler, 200, "Payment not confirmed",
+            handler,
+            200,
+            "Payment not confirmed",
             "The payment has not been confirmed as successful. Contact support if you paid.",
         )
+
     except Exception as exc:
         print("Pesapal callback error:", str(exc))
         return send_page(
-            handler, 500, "Unable to verify payment",
+            handler,
+            500,
+            "Unable to verify payment",
             "We could not verify this transaction right now. Check the app again shortly.",
         )
 
@@ -297,7 +319,9 @@ class handler(BaseHTTPRequestHandler):
             if not expected or not supplied or not hmac.compare_digest(
                 expected, supplied
             ):
-                return send_json(self, 401, {"error": "Unauthorized"})
+                return send_json(
+                    self, 401, {"error": "Unauthorized"}
+                )
 
             try:
                 result = register_ipn()
@@ -306,23 +330,33 @@ class handler(BaseHTTPRequestHandler):
                 if not ipn_id:
                     print("Pesapal registration response:", result)
                     return send_json(
-                        self, 502,
+                        self,
+                        502,
                         {"error": "Pesapal did not return an IPN ID"},
                     )
 
                 return send_json(
-                    self, 200,
+                    self,
+                    200,
                     {
                         "success": True,
                         "ipn_id": ipn_id,
-                        "message": "Save this value as PESAPAL_IPN_ID in Vercel.",
+                        "message": (
+                            "Save this value as PESAPAL_IPN_ID in Vercel."
+                        ),
                     },
                 )
+
             except Exception as exc:
                 print("Pesapal registration error:", str(exc))
                 return send_json(
-                    self, 502,
-                    {"error": "IPN registration failed. Check Vercel runtime logs."},
+                    self,
+                    502,
+                    {
+                        "error": (
+                            "IPN registration failed. Check Vercel runtime logs."
+                        )
+                    },
                 )
 
         if action != "create":
@@ -343,17 +377,26 @@ class handler(BaseHTTPRequestHandler):
                     self, 400, {"error": "Invalid request body"}
                 )
 
-            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            body = json.loads(
+                self.rfile.read(length).decode("utf-8")
+            )
+
             result = create_order(user, body)
             return send_json(self, 200, result)
 
         except ValueError as exc:
             return send_json(self, 400, {"error": str(exc)})
+
         except Exception as exc:
             print("Pesapal create-order error:", str(exc))
             return send_json(
-                self, 500,
-                {"error": "Could not create the payment. Please try again."},
+                self,
+                500,
+                {
+                    "error": (
+                        "Could not create the payment. Please try again."
+                    )
+                },
             )
 
     def do_OPTIONS(self):
