@@ -6,16 +6,22 @@ items chronologically, and disables intermediary/browser caching.
 """
 
 import json
+from html.parser import HTMLParser
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 from threading import Lock
 from zoneinfo import ZoneInfo
 
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+CALENDAR_HTML_URLS = (
+    "https://www.forexfactory.com/calendar?week=next",
+    "https://www.forexfactory.com/calendar?goto=upnext",
+    "https://www.forexfactory.com/calendar",
+)
 LOCAL_TZ = ZoneInfo("Africa/Kampala")
 CACHE_TTL_SECONDS = 300
 CACHE = {
@@ -97,25 +103,24 @@ def _event_datetime(item):
     return None
 
 
-def _normalize_events(data, today):
+def _normalize_events(data, today, end_day=None):
     if not isinstance(data, list):
         raise RuntimeError("Economic calendar returned an unexpected format.")
 
     out = []
     seen = set()
+    end_day = end_day or (today + timedelta(days=7))
     for item in data:
-        if not isinstance(item, dict) or clean(item.get("impact")).lower() != "high":
+        if not isinstance(item, dict) or clean(item.get("impact")).lower() not in ("high", "high impact", "high impact expected"):
             continue
 
         title = clean(item.get("title") or item.get("event"))
         currency = clean(item.get("country") or item.get("currency"))
         event_dt = _event_datetime(item)
 
-        # Unknown/malformed dates cannot be safely treated as current news.
-        # Drop them rather than accidentally showing stale items indefinitely.
         if not title or not currency or event_dt is None:
             continue
-        if event_dt.date() < today:
+        if event_dt.date() < today or event_dt.date() > end_day:
             continue
 
         key = (currency, title, event_dt.isoformat())
@@ -138,7 +143,123 @@ def _normalize_events(data, today):
     out.sort(key=lambda event: event["_sort"])
     for event in out:
         event.pop("_sort", None)
-    return out[:30]
+    return out[:50]
+
+
+class _ForexFactoryHTMLParser(HTMLParser):
+    """Extract event metadata from Forex Factory calendar rows when weekly JSON ends early."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.events = []
+        self._row = None
+        self._cell_class = ""
+        self._cell_text = []
+
+    @staticmethod
+    def _attrs(attrs):
+        return {k: v for k, v in attrs if k}
+
+    def handle_starttag(self, tag, attrs):
+        a = self._attrs(attrs)
+        classes = set((a.get("class") or "").split())
+        if self._row is not None and any("impact-red" in c for c in classes):
+            self._row["impact"] = "High"
+        if tag == "tr" and "calendar__row" in classes:
+            self._row = {
+                "date": a.get("data-event-datetime") or a.get("data-datetime") or "",
+                "title": a.get("data-event-title") or a.get("data-title") or "",
+                "currency": a.get("data-event-currency") or a.get("data-currency") or "",
+                "impact": a.get("data-event-impact") or a.get("data-impact") or "",
+                "actual": a.get("data-event-actual") or "",
+                "forecast": a.get("data-event-forecast") or "",
+                "previous": a.get("data-event-previous") or "",
+            }
+        elif self._row is not None and tag == "td":
+            self._cell_class = a.get("class", "")
+            self._cell_text = []
+
+    def handle_data(self, data):
+        if self._row is not None and self._cell_class:
+            value = data.strip()
+            if value:
+                self._cell_text.append(value)
+
+    def handle_endtag(self, tag):
+        if self._row is None:
+            return
+        if tag == "td" and self._cell_class:
+            value = " ".join(self._cell_text).strip()
+            cls = self._cell_class
+            if value:
+                if "calendar__currency" in cls and not self._row["currency"]:
+                    self._row["currency"] = value
+                elif "calendar__event" in cls and not self._row["title"]:
+                    self._row["title"] = value
+                elif "calendar__impact" in cls and not self._row["impact"]:
+                    self._row["impact"] = "High" if "high" in cls.lower() or "icon--ff-impact-red" in cls.lower() else value
+                elif "calendar__actual" in cls and not self._row["actual"]:
+                    self._row["actual"] = value
+                elif "calendar__forecast" in cls and not self._row["forecast"]:
+                    self._row["forecast"] = value
+                elif "calendar__previous" in cls and not self._row["previous"]:
+                    self._row["previous"] = value
+            self._cell_class = ""
+            self._cell_text = []
+        elif tag == "tr":
+            row = self._row
+            if row and row.get("title") and row.get("currency") and row.get("date"):
+                impact = row.get("impact", "")
+                if "high" in impact.lower() or "red" in impact.lower():
+                    row["impact"] = "High"
+                    row["country"] = row.get("currency", "")
+                    self.events.append(row)
+            self._row = None
+
+
+def _fetch_url(url, accept="application/json"):
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; LM-Analyzer/1.2; +https://lamar-trading-bot.vercel.app)",
+            "Accept": accept,
+            "Cache-Control": "no-cache, no-store, max-age=0",
+            "Pragma": "no-cache",
+        },
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=12) as upstream:
+        return upstream.read().decode("utf-8", "replace")
+
+
+def _fetch_calendar_data(now_ts, now_local):
+    """Merge weekly JSON with HTML calendar fallback for the next seven days."""
+    gathered = []
+    errors = []
+    refresh_bucket = int(now_ts // CACHE_TTL_SECONDS)
+    separator = "&" if "?" in CALENDAR_URL else "?"
+    json_url = CALENDAR_URL + separator + urllib.parse.urlencode({"lm_refresh": refresh_bucket})
+    try:
+        gathered.extend(json.loads(_fetch_url(json_url, "application/json")))
+    except Exception as exc:
+        errors.append(f"weekly JSON: {type(exc).__name__}")
+
+    # Forex Factory does not reliably publish a next-week JSON feed. The HTML
+    # calendar is the fallback for Saturday/Sunday and the upcoming week.
+    for base_url in CALENDAR_HTML_URLS:
+        try:
+            url = base_url + ("&" if "?" in base_url else "?") + urllib.parse.urlencode({"lm_refresh": refresh_bucket})
+            html = _fetch_url(url, "text/html,application/xhtml+xml")
+            parser = _ForexFactoryHTMLParser()
+            parser.feed(html)
+            if parser.events:
+                gathered.extend(parser.events)
+                break
+        except Exception as exc:
+            errors.append(f"calendar HTML: {type(exc).__name__}")
+
+    if not gathered:
+        raise RuntimeError("Economic calendar sources did not return usable events.")
+    return _normalize_events(gathered, now_local.date(), now_local.date() + timedelta(days=7))
 
 
 def fetch(force=False):
@@ -156,39 +277,15 @@ def fetch(force=False):
         ):
             return list(CACHE["events"])
 
-    # Cache-buster changes every five-minute bucket, not for every user request.
-    # This avoids reusing a stale upstream CDN object while keeping fetch traffic low.
-    refresh_bucket = int(now_ts // CACHE_TTL_SECONDS)
-    separator = "&" if "?" in CALENDAR_URL else "?"
-    url = CALENDAR_URL + separator + urllib.parse.urlencode({"lm_refresh": refresh_bucket})
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "LM-Analyzer/1.1",
-            "Accept": "application/json",
-            "Cache-Control": "no-cache, no-store, max-age=0",
-            "Pragma": "no-cache",
-        },
-        method="GET",
-    )
-
     try:
-        with urllib.request.urlopen(request, timeout=15) as upstream:
-            raw = upstream.read().decode("utf-8", "replace")
-        data = json.loads(raw)
-        events = _normalize_events(data, now_local.date())
+        events = _fetch_calendar_data(now_ts, now_local)
     except Exception as exc:
-        # If the provider briefly fails, allow already-fetched same-day data as a
-        # marked stale fallback. Never return data cached from a previous day.
+        # If the provider briefly fails, allow already-fetched same-day cache only.
         with _CACHE_LOCK:
             if CACHE["day"] == today_text and CACHE["events"]:
                 CACHE["stale"] = True
                 CACHE["expires"] = time.time() + 60
                 return list(CACHE["events"])
-        if isinstance(exc, (urllib.error.URLError, TimeoutError)):
-            raise RuntimeError("Economic calendar is temporarily unavailable.") from exc
-        if isinstance(exc, json.JSONDecodeError):
-            raise RuntimeError("Economic calendar returned invalid data.") from exc
         if isinstance(exc, RuntimeError):
             raise
         raise RuntimeError("Economic calendar could not be refreshed.") from exc
@@ -214,7 +311,7 @@ class handler(BaseHTTPRequestHandler):
             events = fetch()
             with _CACHE_LOCK:
                 payload = {
-                    "source": "Forex Factory",
+                    "source": "Forex Factory calendar + weekly JSON",
                     "updated_at": CACHE["updated_at"],
                     "business_date": _now_local().date().isoformat(),
                     "stale": bool(CACHE["stale"]),
