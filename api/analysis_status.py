@@ -273,3 +273,6 @@ class handler(BaseHTTPRequestHandler):
         except Exception:
             # Keep internal database/auth details out of the client response.
             json_response(self, 500, {"error": "Analysis status could not be read."})
+
+    def log_message(self, format, *args):
+        return
