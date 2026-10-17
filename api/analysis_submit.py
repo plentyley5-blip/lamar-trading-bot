@@ -21,7 +21,6 @@ from api.user_security import (
     verify_access_token,
 )
 
-
 GEMINI_API_KEY = (
     os.environ.get("GEMINI_OPENAI_KEY", "").strip()
     or os.environ.get("GEMINI_API_KEY", "").strip()
@@ -41,6 +40,27 @@ GEMINI_URL_TEMPLATE = (
 
 MAX_REQUEST_BYTES = 15 * 1024 * 1024
 GEMINI_TIMEOUT_SECONDS = 45
+
+ALLOWED_INSTRUMENTS = {
+    # Major Forex
+    "EURUSD", "GBPUSD", "USDJPY", "USDCHF",
+    "USDCAD", "AUDUSD", "NZDUSD",
+
+    # Forex Crosses
+    "EURGBP", "EURJPY", "EURCHF", "EURAUD",
+    "EURCAD", "EURNZD",
+    "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD",
+    "GBPNZD",
+    "AUDJPY", "AUDCAD", "AUDCHF", "AUDNZD",
+    "CADJPY", "CADCHF", "CHFJPY",
+    "NZDJPY", "NZDCAD", "NZDCHF",
+
+    # Metals
+    "XAUUSD", "XAGUSD",
+
+    # Crypto
+    "BTCUSD", "ETHUSD",
+}
 
 
 def json_response(handler, status_code, payload):
@@ -106,14 +126,11 @@ def read_json(handler):
 def validate_instrument(value):
     instrument = str(value or "").strip().upper()
 
-    allowed = {
-        "EURUSD", "GBPUSD", "USDJPY", "GBPJPY", "AUDUSD",
-        "USDCAD", "USDCHF", "EURGBP", "XAUUSD", "XAGUSD",
-        "BTCUSD", "ETHUSD",
-    }
-
-    if instrument not in allowed:
-        raise ValueError("Invalid instrument.")
+    if instrument not in ALLOWED_INSTRUMENTS:
+        raise ValueError(
+            "Invalid instrument. Please select an instrument "
+            "available in LM Analyzer."
+        )
 
     return instrument
 
@@ -158,7 +175,7 @@ def validate_image(value, label):
 
     try:
         decoded = base64.b64decode(
-            encoded, validate=False
+            encoded, validate=True
         )
     except Exception as exc:
         raise ValueError(
@@ -202,7 +219,7 @@ Do not guarantee profit.
 
     focus_rules = {
         "SCALP": """
-SCALP MODE — SEARCH CAREFULLY FOR VALID 15M ENTRIES.
+SCALP MODE — CAREFULLY SEARCH FOR VALID 15M ENTRIES.
 
 Use the 4H chart for broader context and important levels.
 Prioritize the 15M chart for deciding whether an entry is available.
@@ -243,7 +260,7 @@ If the entry is missed, do not invent a better price.
 If no defensible stop-loss or target exists, return NO TRADE.
 
 In your explanation, identify the possible direction, actual 15M
-evidence, entry readiness, and the confirmation or invalidation level
+evidence, entry readiness, and confirmation or invalidation level
 when the chart makes that level readable.
 """,
         "DAY TRADE": """
