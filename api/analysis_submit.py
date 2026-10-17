@@ -1,117 +1,244 @@
-"""Apply the LM Analyzer trade-plan additions to api/analysis_submit.py.
-Run from the repository root: python scripts/upgrade_analysis_submit.py
-The script refuses to overwrite if expected source fragments are missing.
+"""LM Analyzer chart-analysis submission endpoint.
+
+Queue-only endpoint: validates the request, authenticates the user, reserves
+one daily analysis slot when applicable, stores a queued job in Supabase, and
+returns a signed job token consumed by the existing analysis_status/worker
+flow. It deliberately does not bypass subscription or daily-limit checks.
 """
-from pathlib import Path
 
-path = Path("api/analysis_submit.py")
-if not path.exists():
-    raise SystemExit("Run this script from the LM Analyzer repository root; api/analysis_submit.py was not found.")
-s = path.read_text(encoding="utf-8")
+import base64
+import hashlib
+import hmac
+import json
+import os
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from http.server import BaseHTTPRequestHandler
 
-replacements = [
-    (
-'''- Explain the evidence, entry readiness, and invalidation.
-- Return only valid JSON without Markdown.
+from analysis_common import (
+    json_response,
+    validate_focus,
+    validate_image_data_url,
+    validate_instrument,
+)
+from api.user_security import (
+    extract_bearer_token,
+    is_owner_user,
+    release_analysis_slot,
+    reserve_analysis_slot,
+    verify_access_token,
+)
 
-Return exactly this structure:''',
-'''- Explain the evidence, entry readiness, and invalidation.
-- setup_status must be ENTRY_AVAILABLE, SETUP_DEVELOPING, ENTRY_MISSED, or NO_CLEAR_SETUP.
-- Use ENTRY_AVAILABLE only with BUY or SELL and a visible trigger plus defensible risk levels.
-- For NO TRADE, use SETUP_DEVELOPING when a specific confirmation is still missing, ENTRY_MISSED when price is too extended, otherwise NO_CLEAR_SETUP.
-- entry_trigger must describe the visible trigger or state what confirmation is still needed; never invent a trigger.
-- invalidation_reason must explain what would invalidate the setup, or why a defensible level cannot be identified.
-- risk_notes must mention practical risks such as opposing levels, chasing, timeframe conflict, unclear labels, or missing confirmation when actually relevant.
-- lesson_topics must contain 1-3 exact titles from: Candlesticks and Price Action; Support and Resistance; Trend, Swing Highs and Swing Lows; BOS and CHoCH; Liquidity Pools and Sweeps; Order Blocks and Fair Value Gaps; Entries, Invalidation and Confirmation; Risk Per Trade and Position Sizing; Risk-to-Reward and Trade Selection; Combining 4H Context with 15M Execution; Fibonacci Retracements; Premium and Discount Zones; News, Fundamentals and Volatility; Backtesting, Expectancy and Strategy Review.
-- Return only valid JSON without Markdown.
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+MAX_REQUEST_BYTES = 25 * 1024 * 1024
 
-Return exactly this structure:'''),
-    (
-'''  "news_fundamental_risk": "",
-  "warnings": []
-}}
-""".strip()''',
-'''  "news_fundamental_risk": "",
-  "warnings": [],
-  "setup_status": "ENTRY_AVAILABLE | SETUP_DEVELOPING | ENTRY_MISSED | NO_CLEAR_SETUP",
-  "entry_trigger": "",
-  "invalidation_reason": "",
-  "risk_notes": "",
-  "lesson_topics": []
-}}
-""".strip()'''),
-    (
-'''        "news_fundamental_risk": {"type": "string"},
-        "warnings": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-    },''',
-'''        "news_fundamental_risk": {"type": "string"},
-        "warnings": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "setup_status": {
-            "type": "string",
-            "enum": ["ENTRY_AVAILABLE", "SETUP_DEVELOPING", "ENTRY_MISSED", "NO_CLEAR_SETUP"],
-        },
-        "entry_trigger": {"type": "string"},
-        "invalidation_reason": {"type": "string"},
-        "risk_notes": {"type": "string"},
-        "lesson_topics": {"type": "array", "items": {"type": "string"}},
-    },'''),
-    (
-'''        "news_fundamental_risk",
-        "warnings",
-    ],
-}''',
-'''        "news_fundamental_risk",
-        "warnings",
-        "setup_status",
-        "entry_trigger",
-        "invalidation_reason",
-        "risk_notes",
-        "lesson_topics",
-    ],
-}'''),
-    (
-'''    output = {
-        "signal": signal,''',
-'''    setup_status = str(result.get("setup_status", "")).strip().upper()
-    valid_setup_statuses = {
-        "ENTRY_AVAILABLE", "SETUP_DEVELOPING", "ENTRY_MISSED", "NO_CLEAR_SETUP"
+
+def get_job_secret():
+    # Keep the same precedence as the existing job-token verification flow.
+    secret = os.environ.get("JOB_TOKEN_SECRET", "").strip()
+    if not secret:
+        secret = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not secret:
+        raise RuntimeError("JOB_TOKEN_SECRET is not configured.")
+    return secret.encode("utf-8")
+
+
+def create_job_token(job_nonce, instrument, trade_focus, user_id):
+    payload = {
+        "job_nonce": job_nonce,
+        "instrument": instrument,
+        "trade_focus": trade_focus,
+        "user_id": user_id,
+        "created_at": int(time.time()),
     }
-    if setup_status not in valid_setup_statuses:
-        setup_status = "ENTRY_AVAILABLE" if signal in {"BUY", "SELL"} else "NO_CLEAR_SETUP"
-    if signal == "NO TRADE" and setup_status == "ENTRY_AVAILABLE":
-        setup_status = "NO_CLEAR_SETUP"
-    if signal in {"BUY", "SELL"}:
-        setup_status = "ENTRY_AVAILABLE"
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    signature = hmac.new(get_job_secret(), encoded.encode("ascii"), hashlib.sha256).digest()
+    encoded_signature = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+    return encoded + "." + encoded_signature
 
-    output = {
-        "signal": signal,'''),
-    (
-'''        "warnings": list_value("warnings"),
+
+def supabase_request(method, path, payload=None, timeout=30, extra_headers=None):
+    if not SUPABASE_URL:
+        raise RuntimeError("SUPABASE_URL is not configured.")
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError("SUPABASE_SERVICE_ROLE_KEY is not configured.")
+
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
     }
+    if extra_headers:
+        headers.update(extra_headers)
 
-    if signal == "NO TRADE":''',
-'''        "warnings": list_value("warnings"),
-        "setup_status": setup_status,
-        "entry_trigger": text("entry_trigger"),
-        "invalidation_reason": text("invalidation_reason"),
-        "risk_notes": text("risk_notes"),
-        "lesson_topics": list_value("lesson_topics")[:3],
+    data = None
+    if payload is not None:
+        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(
+        SUPABASE_URL + path,
+        data=data,
+        headers=headers,
+        method=method,
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError("Supabase request failed ({}): {}".format(exc.code, detail[:2500])) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError("Supabase connection failed: " + str(exc)) from exc
+
+
+def create_queued_job(user_id, instrument, trade_focus, higher_timeframe_image, lower_timeframe_image):
+    job_nonce = uuid.uuid4().hex
+    payload = {
+        "job_nonce": job_nonce,
+        "user_id": user_id,
+        "instrument": instrument,
+        "trade_focus": trade_focus,
+        "higher_timeframe_image": higher_timeframe_image,
+        "lower_timeframe_image": lower_timeframe_image,
+        "status": "queued",
+        "openai_response_id": None,
+        "error_message": None,
     }
+    result = supabase_request(
+        "POST",
+        "/rest/v1/analysis_jobs",
+        payload,
+        timeout=30,
+        extra_headers={"Prefer": "return=representation"},
+    )
+    if not result:
+        raise RuntimeError("The analysis job could not be created.")
+    return job_nonce
 
-    if signal == "NO TRADE":'''),
-]
 
-for old, new in replacements:
-    count = s.count(old)
-    if count != 1:
-        raise SystemExit("Refusing to edit: expected exactly one occurrence of a source block, found {} for: {}".format(count, old[:90].replace("\n", " ")))
-    s = s.replace(old, new, 1)
+def read_json(handler):
+    try:
+        content_length = int(handler.headers.get("Content-Length", "0"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid Content-Length.") from exc
+    if content_length <= 0:
+        raise ValueError("Request body is empty.")
+    if content_length > MAX_REQUEST_BYTES:
+        raise ValueError("Request body is too large.")
+    raw = handler.rfile.read(content_length)
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid JSON request.") from exc
+    if not isinstance(data, dict):
+        raise ValueError("Invalid request body.")
+    return data
 
-path.write_text(s, encoding="utf-8")
-print("Updated api/analysis_submit.py with entry-readiness, invalidation, risk notes, and Learning Hub topic fields.")
+
+def authenticate_user(handler):
+    token = extract_bearer_token(handler)
+    user = verify_access_token(token)
+    if not isinstance(user, dict):
+        raise ValueError("Invalid authentication response.")
+    return user
+
+
+class handler(BaseHTTPRequestHandler):
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+
+    def do_GET(self):
+        json_response(self, 200, {"status": "analysis submit online"})
+
+    def do_POST(self):
+        reserved_slot = False
+        user_id = ""
+        try:
+            user = authenticate_user(self)
+            user_id = str(user.get("id", "")).strip()
+            if not user_id:
+                raise ValueError("Invalid authenticated user.")
+
+            body = read_json(self)
+            instrument = str(body.get("instrument", "")).strip().upper()
+            trade_focus = str(body.get("trade_focus", "")).strip().upper()
+            higher_image = body.get("higher_timeframe_image")
+            lower_image = body.get("lower_timeframe_image")
+
+            # Use the project's existing validators and supported instrument list.
+            validate_instrument(instrument)
+            validate_focus(trade_focus)
+            validate_image_data_url(higher_image, "higher_timeframe_image")
+            validate_image_data_url(lower_image, "lower_timeframe_image")
+
+            owner = is_owner_user(user)
+            if not owner:
+                reserve_analysis_slot(user_id)
+                reserved_slot = True
+
+            job_nonce = create_queued_job(
+                user_id=user_id,
+                instrument=instrument,
+                trade_focus=trade_focus,
+                higher_timeframe_image=higher_image,
+                lower_timeframe_image=lower_image,
+            )
+            job_token = create_job_token(job_nonce, instrument, trade_focus, user_id)
+            reserved_slot = False  # Reservation belongs to the successfully queued job.
+
+            json_response(self, 202, {
+                "status": "queued",
+                "job_id": job_token,
+                "job_nonce": job_nonce,
+                "poll_after_seconds": 2,
+                "is_owner": owner,
+                "daily_limit": None if owner else 4,
+            })
+
+        except ValueError as exc:
+            if reserved_slot and user_id:
+                try:
+                    release_analysis_slot(user_id)
+                except Exception:
+                    pass
+            json_response(self, 400, {"error": str(exc)})
+
+        except RuntimeError as exc:
+            if reserved_slot and user_id:
+                try:
+                    release_analysis_slot(user_id)
+                except Exception:
+                    pass
+            message = str(exc)
+            lowered = message.lower()
+            status = 429 if any(word in lowered for word in ("limit", "daily", "analyses")) else 500
+            json_response(self, status, {"error": message})
+
+        except Exception as exc:
+            if reserved_slot and user_id:
+                try:
+                    release_analysis_slot(user_id)
+                except Exception:
+                    pass
+            json_response(self, 500, {"error": "Analysis submission failed: " + str(exc)})
+
+    def log_message(self, format, *args):
+        # Leave platform logs concise; do not log submitted chart images or tokens.
+        return
