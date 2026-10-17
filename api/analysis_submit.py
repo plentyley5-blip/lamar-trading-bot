@@ -149,7 +149,7 @@ def _production_host():
     return host.split("/", 1)[0].strip()
 
 
-def _mark_failed_if_still_queued(job_nonce, user_id, reason):
+def _mark_failed_if_still_queued(job_nonce, user_id, reason, release_reserved_slot=False):
     """Fail a stuck job only if a worker has not already claimed it."""
     nonce = urllib.parse.quote(job_nonce, safe="")
     uid = urllib.parse.quote(user_id, safe="")
@@ -173,17 +173,18 @@ def _mark_failed_if_still_queued(job_nonce, user_id, reason):
         # the job from queued to failed. If a worker already claimed it, its
         # status no longer matches and its own success/failure path owns the slot.
         if isinstance(updated, list) and updated:
-            try:
-                release_analysis_slot(user_id)
-            except Exception:
-                pass
+            if release_reserved_slot:
+                try:
+                    release_analysis_slot(user_id)
+                except Exception:
+                    pass
             return True
     except Exception:
         pass
     return False
 
 
-def wake_analysis_worker(job_nonce, user_id):
+def wake_analysis_worker(job_nonce, user_id, release_reserved_slot=False):
     """Actively wake the existing worker after queueing the job.
 
     Supabase may also invoke the worker through a database webhook. The
@@ -195,7 +196,7 @@ def wake_analysis_worker(job_nonce, user_id):
     host = _production_host()
     if not host:
         _mark_failed_if_still_queued(
-            job_nonce, user_id, "Could not resolve the analysis worker host."
+            job_nonce, user_id, "Could not resolve the analysis worker host.", release_reserved_slot
         )
         return
 
@@ -224,6 +225,7 @@ def wake_analysis_worker(job_nonce, user_id):
                 job_nonce,
                 user_id,
                 "The analysis worker could not claim this job. Check the Supabase claim_analysis_job function.",
+                release_reserved_slot,
             )
         # Worker failures are saved to the job row by analysis_worker.py; the
         # Android client reads that specific error from analysis_status.
@@ -237,7 +239,7 @@ def wake_analysis_worker(job_nonce, user_id):
             reason = "The deployed /api/analysis_worker endpoint was not found. Redeploy api/analysis_worker.py."
         else:
             reason = "The analysis worker returned HTTP {}: {}".format(exc.code, detail[:500])
-        _mark_failed_if_still_queued(job_nonce, user_id, reason)
+        _mark_failed_if_still_queued(job_nonce, user_id, reason, release_reserved_slot)
 
     except (urllib.error.URLError, TimeoutError) as exc:
         message = str(exc).lower()
@@ -250,6 +252,7 @@ def wake_analysis_worker(job_nonce, user_id):
             job_nonce,
             user_id,
             "The analysis worker could not be reached: " + str(exc)[:500],
+            release_reserved_slot,
         )
 
     except Exception as exc:
@@ -257,6 +260,7 @@ def wake_analysis_worker(job_nonce, user_id):
             job_nonce,
             user_id,
             "The analysis worker could not be started: " + str(exc)[:500],
+            release_reserved_slot,
         )
 
 
@@ -302,6 +306,7 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         reserved_slot = False
         user_id = ""
+        job_nonce = ""
         try:
             user = authenticate_user(self)
             user_id = str(user.get("id", "")).strip()
@@ -347,13 +352,11 @@ class handler(BaseHTTPRequestHandler):
                 lower_timeframe_image=lower_image,
             )
             job_token = create_job_token(job_nonce, instrument, trade_focus, user_id)
-            # The job now owns the daily slot. A worker failure will release it.
-            reserved_slot = False
 
             # Explicitly wake the worker as well as supporting a Supabase
             # Database Webhook. This prevents an indefinitely queued job when
             # the webhook is missing or was misconfigured.
-            wake_analysis_worker(job_nonce, user_id)
+            wake_analysis_worker(job_nonce, user_id, reserved_slot)
 
             json_response(self, 202, {
                 "status": "queued",
@@ -366,7 +369,11 @@ class handler(BaseHTTPRequestHandler):
             })
 
         except ValueError as exc:
-            if reserved_slot and user_id:
+            if job_nonce and user_id:
+                _mark_failed_if_still_queued(
+                    job_nonce, user_id, "Analysis submission failed: " + str(exc), reserved_slot
+                )
+            elif reserved_slot and user_id:
                 try:
                     release_analysis_slot(user_id)
                 except Exception:
@@ -374,7 +381,11 @@ class handler(BaseHTTPRequestHandler):
             json_response(self, 400, {"error": str(exc)})
 
         except RuntimeError as exc:
-            if reserved_slot and user_id:
+            if job_nonce and user_id:
+                _mark_failed_if_still_queued(
+                    job_nonce, user_id, "Analysis submission failed: " + str(exc), reserved_slot
+                )
+            elif reserved_slot and user_id:
                 try:
                     release_analysis_slot(user_id)
                 except Exception:
@@ -385,7 +396,11 @@ class handler(BaseHTTPRequestHandler):
             json_response(self, status, {"error": message})
 
         except Exception as exc:
-            if reserved_slot and user_id:
+            if job_nonce and user_id:
+                _mark_failed_if_still_queued(
+                    job_nonce, user_id, "Analysis submission failed: " + str(exc), reserved_slot
+                )
+            elif reserved_slot and user_id:
                 try:
                     release_analysis_slot(user_id)
                 except Exception:
