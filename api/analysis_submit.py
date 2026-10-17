@@ -16,6 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
 from analysis_common import (
@@ -104,8 +105,14 @@ def supabase_request(method, path, payload=None, timeout=30, extra_headers=None)
 
 
 def create_queued_job(user_id, instrument, trade_focus, higher_timeframe_image, lower_timeframe_image):
+    # These fields are required by the existing Supabase schema and worker.
+    # openai_response_id is NOT NULL; the worker replaces "pending" with
+    # the encoded Gemini analysis after processing the queued job.
+    job_id = str(uuid.uuid4())
     job_nonce = uuid.uuid4().hex
+    created_at = datetime.now(timezone.utc).isoformat()
     payload = {
+        "id": job_id,
         "job_nonce": job_nonce,
         "user_id": user_id,
         "instrument": instrument,
@@ -113,8 +120,9 @@ def create_queued_job(user_id, instrument, trade_focus, higher_timeframe_image, 
         "higher_timeframe_image": higher_timeframe_image,
         "lower_timeframe_image": lower_timeframe_image,
         "status": "queued",
-        "openai_response_id": None,
+        "openai_response_id": "pending",
         "error_message": None,
+        "created_at": created_at,
     }
     result = supabase_request(
         "POST",
@@ -189,9 +197,19 @@ class handler(BaseHTTPRequestHandler):
             validate_image_data_url(lower_image, "lower_timeframe_image")
 
             owner = is_owner_user(user)
+            remaining = None
             if not owner:
-                reserve_analysis_slot(user_id)
+                slot = reserve_analysis_slot(user_id)
+                if slot == -1:
+                    json_response(self, 429, {
+                        "error": "Daily analysis limit reached.",
+                        "daily_limit": 4,
+                        "remaining": 0,
+                        "is_owner": False,
+                    })
+                    return
                 reserved_slot = True
+                remaining = max(0, 4 - int(slot))
 
             job_nonce = create_queued_job(
                 user_id=user_id,
@@ -210,6 +228,7 @@ class handler(BaseHTTPRequestHandler):
                 "poll_after_seconds": 2,
                 "is_owner": owner,
                 "daily_limit": None if owner else 4,
+                "remaining": remaining,
             })
 
         except ValueError as exc:
