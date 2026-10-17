@@ -16,6 +16,7 @@ from pesapal_common import (
     process_pesapal_payment,
 )
 
+
 PLANS = {
     "monthly": {"name": "Monthly", "amount": 21.23, "months": 1},
     "three_months": {"name": "3 Months", "amount": 63.69, "months": 3},
@@ -40,9 +41,7 @@ PLAN_ALIASES = {
 def send_json(handler, status, data):
     body = json.dumps(data).encode("utf-8")
     handler.send_response(status)
-    handler.send_header(
-        "Content-Type", "application/json; charset=utf-8"
-    )
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Cache-Control", "no-store")
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
@@ -80,12 +79,38 @@ def get_query_params(handler):
     )
 
 
+def safe_pesapal_message(result):
+    """Extract a useful error without exposing credentials."""
+    if not isinstance(result, dict):
+        return "Pesapal returned an unexpected response."
+
+    error = result.get("error")
+
+    if isinstance(error, dict):
+        parts = [
+            str(error.get(key, "")).strip()
+            for key in ("code", "type", "message")
+            if error.get(key)
+        ]
+        if parts:
+            return "Pesapal rejected the request: " + " - ".join(parts)[:700]
+
+    if isinstance(error, str) and error.strip():
+        return "Pesapal rejected the request: " + error.strip()[:700]
+
+    message = result.get("message")
+    if message:
+        return "Pesapal response: " + str(message)[:700]
+
+    return "Pesapal did not return a valid checkout URL."
+
+
 def register_ipn():
     ipn_url = os.environ.get("PESAPAL_IPN_URL", "").strip()
 
     if not ipn_url.startswith("https://"):
-        raise ValueError(
-            "Configure HTTPS PESAPAL_IPN_URL in Vercel"
+        raise RuntimeError(
+            "Configure HTTPS PESAPAL_IPN_URL in Vercel."
         )
 
     return pesapal_api(
@@ -110,21 +135,42 @@ def create_order(user, body):
     ipn_id = os.environ.get("PESAPAL_IPN_ID", "").strip()
     callback_url = os.environ.get("PESAPAL_CALLBACK_URL", "").strip()
 
-    if not ipn_id or not callback_url:
-        raise RuntimeError(
-            "Pesapal setup is incomplete. Configure PESAPAL_IPN_ID "
-            "and PESAPAL_CALLBACK_URL in Vercel."
-        )
+    if not ipn_id:
+        raise RuntimeError("PESAPAL_IPN_ID is missing in Vercel.")
 
     if not callback_url.startswith("https://"):
         raise RuntimeError(
-            "PESAPAL_CALLBACK_URL must use HTTPS."
+            "PESAPAL_CALLBACK_URL must be a valid HTTPS URL."
         )
 
     plan = PLANS[plan_key]
     merchant_reference = "LM-" + uuid.uuid4().hex
 
-    # Save a pending order before creating checkout.
+    metadata = user.get("user_metadata") or {}
+    email = str(user.get("email") or "").strip()
+
+    if not email:
+        raise ValueError(
+            "Your account has no email address. Please sign in again."
+        )
+
+    full_name = str(
+        metadata.get("full_name")
+        or metadata.get("name")
+        or ""
+    ).strip()
+
+    name_parts = full_name.split(maxsplit=1)
+    first_name = name_parts[0] if name_parts else "LM"
+    last_name = name_parts[1] if len(name_parts) > 1 else "Analyzer"
+
+    phone = str(
+        metadata.get("phone_number")
+        or user.get("phone")
+        or ""
+    ).strip()
+
+    # Save the order before contacting Pesapal.
     created = supabase_rest(
         "payment_orders",
         method="POST",
@@ -142,113 +188,108 @@ def create_order(user, body):
     )
 
     if not isinstance(created, list) or not created:
-        raise RuntimeError("Could not save the payment order")
+        raise RuntimeError(
+            "Supabase did not confirm that the payment order was saved."
+        )
 
-    metadata = user.get("user_metadata") or {}
-    email = user.get("email") or ""
+    payload = {
+        "id": merchant_reference,
+        "currency": "USD",
+        "amount": plan["amount"],
+        "description": "LM Analyzer - " + plan["name"],
+        "callback_url": callback_url,
+        "notification_id": ipn_id,
+        "billing_address": {
+            "email_address": email,
+            "phone_number": phone,
+            "country_code": "UG",
+            "first_name": first_name[:50],
+            "middle_name": "",
+            "last_name": last_name[:50],
+            "line_1": "",
+            "line_2": "",
+            "city": "",
+            "state": "",
+            "postal_code": "",
+            "zip_code": "",
+        },
+    }
 
-    full_name = str(
-        metadata.get("full_name")
-        or metadata.get("name")
-        or ""
-    ).strip()
-
-    name_parts = full_name.split(maxsplit=1)
-    first_name = name_parts[0] if name_parts else "LM"
-    last_name = name_parts[1] if len(name_parts) > 1 else "Analyzer"
-    phone = str(
-        metadata.get("phone_number")
-        or user.get("phone")
-        or ""
-    ).strip()
-
+    # Submit the order to Pesapal.
     result = pesapal_api(
         "/api/Transactions/SubmitOrderRequest",
         method="POST",
-        payload={
-            "id": merchant_reference,
-            "currency": "USD",
-            "amount": plan["amount"],
-            "description": "LM Analyzer - " + plan["name"],
-            "callback_url": callback_url,
-            "notification_id": ipn_id,
-            "billing_address": {
-                "email_address": email,
-                "phone_number": phone,
-                "country_code": "UG",
-                "first_name": first_name[:50],
-                "middle_name": "",
-                "last_name": last_name[:50],
-                "line_1": "",
-                "line_2": "",
-                "city": "",
-                "state": "",
-                "postal_code": "",
-                "zip_code": "",
-            },
-        },
+        payload=payload,
     )
 
     if not isinstance(result, dict):
         print(
-            "Pesapal SubmitOrderRequest returned type:",
+            "Pesapal checkout failure: unexpected response type:",
             type(result).__name__,
         )
         raise RuntimeError(
-            "Pesapal returned an unexpected response type"
+            "Pesapal returned an unexpected response format."
         )
 
-    # Support common casing variants without bypassing validation.
     tracking_id = (
         result.get("order_tracking_id")
         or result.get("orderTrackingId")
     )
+
     redirect_url = (
         result.get("redirect_url")
         or result.get("redirectUrl")
     )
 
-    if not tracking_id or not redirect_url:
-        # Log response structure without logging tokens or credentials.
+    # A response containing an error is not a successful order.
+    if (
+        result.get("error")
+        and not redirect_url
+    ) or not tracking_id or not redirect_url:
+        diagnostic_message = safe_pesapal_message(result)
+
+        # Do not print credentials, authorization headers, or tokens.
         print(
-            "Pesapal SubmitOrderRequest response keys:",
-            sorted(str(key) for key in result.keys()),
+            "Pesapal checkout failure:",
+            json.dumps({
+                "merchant_reference": merchant_reference,
+                "response_keys": sorted(
+                    str(key) for key in result.keys()
+                ),
+                "error": (
+                    result.get("error")
+                    if isinstance(result.get("error"), (str, int, float, type(None)))
+                    else {
+                        key: result["error"].get(key)
+                        for key in ("type", "code", "message")
+                        if key in result["error"]
+                    }
+                    if isinstance(result.get("error"), dict)
+                    else "unrecognized error format"
+                ),
+                "message": result.get("message"),
+                "status": result.get("status"),
+            }, default=str)[:2000],
         )
 
-        diagnostic = {
-            key: result.get(key)
-            for key in (
-                "error",
-                "message",
-                "status",
-                "error_type",
-                "status_code",
-                "order_tracking_id",
-                "orderTrackingId",
-                "redirect_url",
-                "redirectUrl",
-                "merchant_reference",
-            )
-            if key in result
-        }
+        raise RuntimeError(diagnostic_message)
 
-        print(
-            "Pesapal SubmitOrderRequest diagnostic:",
-            json.dumps(diagnostic, default=str)[:2000],
-        )
-
+    if not isinstance(redirect_url, str):
         raise RuntimeError(
-            "Pesapal did not return a checkout URL; "
-            "inspect response diagnostic in Vercel logs"
+            "Pesapal returned an invalid checkout URL."
         )
 
-    if not isinstance(redirect_url, str) or not redirect_url.startswith(
-        "https://"
+    parsed_redirect = urllib.parse.urlparse(redirect_url)
+
+    if (
+        parsed_redirect.scheme != "https"
+        or not parsed_redirect.netloc
     ):
         raise RuntimeError(
-            "Pesapal returned an invalid checkout URL"
+            "Pesapal returned an invalid HTTPS checkout URL."
         )
 
+    # Save the tracking ID before returning the checkout URL.
     query = urllib.parse.urlencode({
         "merchant_reference": "eq." + merchant_reference
     })
@@ -287,6 +328,7 @@ def handle_ipn(handler, params):
             tracking_id,
             merchant_reference,
         )
+
         print("Pesapal IPN result:", result.get("status"))
 
         return send_json(
@@ -299,6 +341,7 @@ def handle_ipn(handler, params):
                 "status": 200,
             },
         )
+
     except Exception as exc:
         print("Pesapal IPN error:", str(exc))
 
@@ -325,6 +368,7 @@ def handle_callback(handler, params):
             tracking_id,
             merchant_reference,
         )
+
         status = result.get("status")
 
         if status in ("completed", "already_completed"):
@@ -352,6 +396,7 @@ def handle_callback(handler, params):
 
     except Exception as exc:
         print("Pesapal callback error:", str(exc))
+
         return send_page(
             handler,
             500,
@@ -361,6 +406,7 @@ def handle_callback(handler, params):
 
 
 class handler(BaseHTTPRequestHandler):
+
     def do_GET(self):
         params = get_query_params(self)
         action = params.get("action", ["callback"])[0].lower()
@@ -371,15 +417,23 @@ class handler(BaseHTTPRequestHandler):
         if action == "callback":
             return handle_callback(self, params)
 
-        return send_json(self, 400, {"error": "Unknown action"})
+        return send_json(
+            self,
+            400,
+            {"error": "Unknown action"},
+        )
 
     def do_POST(self):
         params = get_query_params(self)
         action = params.get("action", ["create"])[0].lower()
 
         if action == "register":
-            expected = os.environ.get("PESAPAL_SETUP_SECRET", "")
-            supplied = self.headers.get("X-Setup-Secret", "")
+            expected = os.environ.get(
+                "PESAPAL_SETUP_SECRET", ""
+            )
+            supplied = self.headers.get(
+                "X-Setup-Secret", ""
+            )
 
             if (
                 not expected
@@ -387,24 +441,31 @@ class handler(BaseHTTPRequestHandler):
                 or not hmac.compare_digest(expected, supplied)
             ):
                 return send_json(
-                    self, 401, {"error": "Unauthorized"}
+                    self,
+                    401,
+                    {"error": "Unauthorized"},
                 )
 
             try:
                 result = register_ipn()
-                ipn_id = result.get("ipn_id") or result.get("ipnId")
+
+                ipn_id = (
+                    result.get("ipn_id")
+                    or result.get("ipnId")
+                ) if isinstance(result, dict) else None
 
                 if not ipn_id:
                     print(
-                        "Pesapal registration response keys:",
-                        sorted(result.keys())
-                        if isinstance(result, dict)
-                        else type(result).__name__,
+                        "Pesapal IPN registration failed:",
+                        safe_pesapal_message(result),
                     )
+
                     return send_json(
                         self,
                         502,
-                        {"error": "Pesapal did not return an IPN ID"},
+                        {
+                            "error": safe_pesapal_message(result),
+                        },
                     )
 
                 return send_json(
@@ -421,20 +482,23 @@ class handler(BaseHTTPRequestHandler):
 
             except Exception as exc:
                 print("Pesapal registration error:", str(exc))
+
                 return send_json(
                     self,
                     502,
                     {
                         "error": (
                             "IPN registration failed. "
-                            "Check Vercel runtime logs."
-                        )
+                            "Check the server logs."
+                        ),
                     },
                 )
 
         if action != "create":
             return send_json(
-                self, 400, {"error": "Unknown action"}
+                self,
+                400,
+                {"error": "Unknown action"},
             )
 
         try:
@@ -448,7 +512,9 @@ class handler(BaseHTTPRequestHandler):
                     {"error": "Please sign in again"},
                 )
 
-            length = int(self.headers.get("Content-Length", "0"))
+            length = int(
+                self.headers.get("Content-Length", "0")
+            )
 
             if length < 1 or length > 20000:
                 return send_json(
@@ -469,23 +535,37 @@ class handler(BaseHTTPRequestHandler):
                 )
 
             result = create_order(user, body)
-            return send_json(self, 200, result)
+
+            return send_json(
+                self,
+                200,
+                result,
+            )
 
         except ValueError as exc:
             return send_json(
-                self, 400, {"error": str(exc)}
+                self,
+                400,
+                {"error": str(exc)},
             )
 
         except Exception as exc:
-            print("Pesapal create-order error:", str(exc))
+            # Keep the detailed reason in server logs.
+            print(
+                "Pesapal create-order error:",
+                type(exc).__name__,
+                str(exc)[:1000],
+            )
+
+            # Return the useful error to the client for diagnosis.
+            # Never return request headers, tokens, or credentials.
             return send_json(
                 self,
-                500,
+                502,
                 {
-                    "error": (
-                        "Could not create the payment. "
-                        "Please try again."
-                    )
+                    "success": False,
+                    "error": str(exc)[:700],
+                    "message": "Payment checkout could not be created.",
                 },
             )
 
