@@ -36,6 +36,8 @@ from api.user_security import (
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 MAX_REQUEST_BYTES = 25 * 1024 * 1024
+WORKER_WAKE_TIMEOUT_SECONDS = 35
+DEFAULT_PRODUCTION_HOST = "lamar-trading-bot.vercel.app"
 
 
 def get_job_secret():
@@ -136,6 +138,128 @@ def create_queued_job(user_id, instrument, trade_focus, higher_timeframe_image, 
     return job_nonce
 
 
+def _production_host():
+    """Resolve this deployment's host without accepting a full URL path."""
+    host = (
+        os.environ.get("VERCEL_URL", "").strip()
+        or os.environ.get("VERCEL_PROJECT_PRODUCTION_URL", "").strip()
+        or DEFAULT_PRODUCTION_HOST
+    )
+    host = host.removeprefix("https://").removeprefix("http://")
+    return host.split("/", 1)[0].strip()
+
+
+def _mark_failed_if_still_queued(job_nonce, user_id, reason):
+    """Fail a stuck job only if a worker has not already claimed it."""
+    nonce = urllib.parse.quote(job_nonce, safe="")
+    uid = urllib.parse.quote(user_id, safe="")
+    query = (
+        "/rest/v1/analysis_jobs?job_nonce=eq." + nonce
+        + "&user_id=eq." + uid
+        + "&status=eq.queued"
+    )
+    try:
+        updated = supabase_request(
+            "PATCH",
+            query,
+            {
+                "status": "failed",
+                "error_message": (reason or "Analysis worker could not be started.")[:2000],
+            },
+            timeout=15,
+            extra_headers={"Prefer": "return=representation"},
+        )
+        # Release the reservation only when this function actually changed
+        # the job from queued to failed. If a worker already claimed it, its
+        # status no longer matches and its own success/failure path owns the slot.
+        if isinstance(updated, list) and updated:
+            try:
+                release_analysis_slot(user_id)
+            except Exception:
+                pass
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def wake_analysis_worker(job_nonce, user_id):
+    """Actively wake the existing worker after queueing the job.
+
+    Supabase may also invoke the worker through a database webhook. The
+    worker's claim_analysis_job RPC ensures concurrent wake-ups cannot process
+    the same queued row twice. The short client timeout keeps submission from
+    waiting for Gemini; the worker continues its own request and the app polls
+    analysis_status for the final result.
+    """
+    host = _production_host()
+    if not host:
+        _mark_failed_if_still_queued(
+            job_nonce, user_id, "Could not resolve the analysis worker host."
+        )
+        return
+
+    url = "https://" + host + "/api/analysis_worker"
+    payload = json.dumps({"record": {"job_nonce": job_nonce}}).encode("utf-8")
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    worker_secret = os.environ.get("ANALYSIS_WORKER_SECRET", "").strip()
+    if worker_secret:
+        headers["x-analysis-worker-secret"] = worker_secret
+
+    request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(
+            request, timeout=WORKER_WAKE_TIMEOUT_SECONDS
+        ) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+        try:
+            outcome = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            outcome = {}
+
+        # On "ignored", another worker may already have claimed it. Only mark
+        # it failed if the database row is still queued after this response.
+        if isinstance(outcome, dict) and str(outcome.get("status", "")).lower() == "ignored":
+            _mark_failed_if_still_queued(
+                job_nonce,
+                user_id,
+                "The analysis worker could not claim this job. Check the Supabase claim_analysis_job function.",
+            )
+        # Worker failures are saved to the job row by analysis_worker.py; the
+        # Android client reads that specific error from analysis_status.
+        return
+
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        if exc.code in {401, 403}:
+            reason = "The analysis worker rejected its internal secret. Check ANALYSIS_WORKER_SECRET in Vercel."
+        elif exc.code == 404:
+            reason = "The deployed /api/analysis_worker endpoint was not found. Redeploy api/analysis_worker.py."
+        else:
+            reason = "The analysis worker returned HTTP {}: {}".format(exc.code, detail[:500])
+        _mark_failed_if_still_queued(job_nonce, user_id, reason)
+
+    except (urllib.error.URLError, TimeoutError) as exc:
+        message = str(exc).lower()
+        if "timed out" in message or "timeout" in message:
+            # The internal worker request was sent but exceeded our wait limit.
+            # Its separate Vercel invocation may still complete; let the app
+            # poll status rather than cancelling work that may be in progress.
+            return
+        _mark_failed_if_still_queued(
+            job_nonce,
+            user_id,
+            "The analysis worker could not be reached: " + str(exc)[:500],
+        )
+
+    except Exception as exc:
+        _mark_failed_if_still_queued(
+            job_nonce,
+            user_id,
+            "The analysis worker could not be started: " + str(exc)[:500],
+        )
+
+
 def read_json(handler):
     try:
         content_length = int(handler.headers.get("Content-Length", "0"))
@@ -196,6 +320,10 @@ class handler(BaseHTTPRequestHandler):
             validate_image_data_url(higher_image, "higher_timeframe_image")
             validate_image_data_url(lower_image, "lower_timeframe_image")
 
+            # Confirm job-token signing is configured before reserving a slot
+            # or inserting a row, so a missing secret cannot strand a queued job.
+            get_job_secret()
+
             owner = is_owner_user(user)
             remaining = None
             if not owner:
@@ -219,7 +347,13 @@ class handler(BaseHTTPRequestHandler):
                 lower_timeframe_image=lower_image,
             )
             job_token = create_job_token(job_nonce, instrument, trade_focus, user_id)
-            reserved_slot = False  # Reservation belongs to the successfully queued job.
+            # The job now owns the daily slot. A worker failure will release it.
+            reserved_slot = False
+
+            # Explicitly wake the worker as well as supporting a Supabase
+            # Database Webhook. This prevents an indefinitely queued job when
+            # the webhook is missing or was misconfigured.
+            wake_analysis_worker(job_nonce, user_id)
 
             json_response(self, 202, {
                 "status": "queued",
