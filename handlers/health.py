@@ -10,8 +10,8 @@ class handler(BaseHTTPRequestHandler):
             "status": "ok",
             "service": "LM ANALYZER",
             "version": "3.0",
-            "analysis_engine": "OpenAI Responses Background",
-            "model": "gpt-5.6-luna"
+            "analysis_engine": "Gemini Background Analysis",
+            "model": "Gemini (configured backend model)"
         }).encode("utf-8")
 
         self.send_response(200)
