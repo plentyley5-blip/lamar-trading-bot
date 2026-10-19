@@ -139,12 +139,20 @@ def create_queued_job(user_id, instrument, trade_focus, higher_timeframe_image, 
 
 
 def _production_host():
-    """Resolve this deployment's host without accepting a full URL path."""
-    host = (
-        os.environ.get("VERCEL_URL", "").strip()
-        or os.environ.get("VERCEL_PROJECT_PRODUCTION_URL", "").strip()
-        or DEFAULT_PRODUCTION_HOST
-    )
+    """Use the stable production domain for production worker calls."""
+    target_env = os.environ.get("VERCEL_ENV", "").strip().lower()
+    if target_env == "production":
+        host = (
+            os.environ.get("VERCEL_PROJECT_PRODUCTION_URL", "").strip()
+            or os.environ.get("VERCEL_URL", "").strip()
+            or DEFAULT_PRODUCTION_HOST
+        )
+    else:
+        host = (
+            os.environ.get("VERCEL_URL", "").strip()
+            or os.environ.get("VERCEL_PROJECT_PRODUCTION_URL", "").strip()
+            or DEFAULT_PRODUCTION_HOST
+        )
     host = host.removeprefix("https://").removeprefix("http://")
     return host.split("/", 1)[0].strip()
 
@@ -234,7 +242,9 @@ def wake_analysis_worker(job_nonce, user_id, release_reserved_slot=False):
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         if exc.code in {401, 403}:
-            reason = "The analysis worker rejected its internal secret. Check ANALYSIS_WORKER_SECRET in Vercel."
+            reason = "Worker endpoint returned HTTP {}: {}".format(
+                exc.code, detail[:350] or "empty response"
+            )
         elif exc.code == 404:
             reason = "The deployed /api/analysis_worker endpoint was not found. Redeploy api/analysis_worker.py."
         else:
