@@ -1,0 +1,33 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    {
+      "source": "/api/analysis_history",
+      "destination": "/api/router?route=analysis_history"
+    },
+    {
+      "source": "/api/analyze",
+      "destination": "/api/router?route=analyze"
+    },
+    {
+      "source": "/api/auth",
+      "destination": "/api/router?route=auth"
+    },
+    {
+      "source": "/api/delete_account",
+      "destination": "/api/router?route=delete_account"
+    },
+    {
+      "source": "/api/health",
+      "destination": "/api/router?route=health"
+    },
+    {
+      "source": "/api/news",
+      "destination": "/api/router?route=news"
+    },
+    {
+      "source": "/api/subscription_status",
+      "destination": "/api/router?route=subscription_status"
+    }
+  ]
+}
