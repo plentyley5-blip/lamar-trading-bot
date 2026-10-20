@@ -3,6 +3,8 @@ import os
 import urllib.error
 import urllib.request
 import urllib.parse
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from http.server import BaseHTTPRequestHandler
 
 from api.user_security import (
@@ -120,9 +122,83 @@ def _ensure_profile(user):
     return payload
 
 
+_KAMPALA = ZoneInfo("Africa/Kampala")
+_QUOTA_JOB_STATUSES = "in.%28queued%2Cprocessing%2Ccompleted%29"
+
+
+def _quota_rows(path):
+    url = get_supabase_url() + path
+    rows = _request(url, headers=_service_headers())
+    if not isinstance(rows, list):
+        raise RuntimeError("Analysis quota could not be loaded.")
+    return rows
+
+
+def _profile_quota(user):
+    """Return quota data using existing subscriptions and analysis_jobs only."""
+    user_id = urllib.parse.quote(str(user.get("id", "")), safe="")
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc.astimezone(_KAMPALA)
+    subscriptions = _quota_rows(
+        "/rest/v1/subscriptions?user_id=eq." + user_id
+        + "&select=plan,duration_months,status,starts_at,expires_at&limit=1"
+    )
+
+    if subscriptions:
+        sub = subscriptions[0] or {}
+        try:
+            starts = datetime.fromisoformat(str(sub.get("starts_at", "")).replace("Z", "+00:00"))
+            expires = datetime.fromisoformat(str(sub.get("expires_at", "")).replace("Z", "+00:00"))
+            if starts.tzinfo is None:
+                starts = starts.replace(tzinfo=timezone.utc)
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return {"quota_type": "blocked", "used": 0, "daily_limit": 0, "lifetime_limit": None, "remaining": 0, "analysis_allowed": False, "subscription_active": False}
+
+        active = str(sub.get("status", "")).strip().lower() == "active" and starts <= now_utc and expires > now_utc
+        if not active:
+            return {"quota_type": "blocked", "used": 0, "daily_limit": 0, "lifetime_limit": None, "remaining": 0, "analysis_allowed": False, "subscription_active": False}
+
+        try:
+            months = int(sub.get("duration_months") or 0)
+        except (TypeError, ValueError):
+            months = 0
+        limit = {1: 10, 3: 30, 6: 50}.get(months)
+        if not limit:
+            return {"quota_type": "blocked", "used": 0, "daily_limit": 0, "lifetime_limit": None, "remaining": 0, "analysis_allowed": False, "subscription_active": False}
+
+        start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_local = start_local + timedelta(days=1)
+        start_utc = start_local.astimezone(timezone.utc).isoformat()
+        end_utc = end_local.astimezone(timezone.utc).isoformat()
+        jobs = _quota_rows(
+            "/rest/v1/analysis_jobs?user_id=eq." + user_id
+            + "&status=" + _QUOTA_JOB_STATUSES
+            + "&created_at=gte." + urllib.parse.quote(start_utc, safe="")
+            + "&created_at=lt." + urllib.parse.quote(end_utc, safe="")
+            + "&select=id&limit=1000"
+        )
+        used = len(jobs)
+        return {"quota_type": "paid_daily", "used": used, "daily_limit": limit, "lifetime_limit": None, "remaining": max(0, limit-used), "analysis_allowed": used < limit, "subscription_active": True, "subscription_plan": str(sub.get("plan") or ""), "subscription_expires_at": sub.get("expires_at")}
+
+    jobs = _quota_rows(
+        "/rest/v1/analysis_jobs?user_id=eq." + user_id
+        + "&status=" + _QUOTA_JOB_STATUSES
+        + "&select=id&limit=5"
+    )
+    used = len(jobs)
+    return {"quota_type": "free_lifetime", "used": used, "daily_limit": None, "lifetime_limit": 4, "remaining": max(0, 4-used), "analysis_allowed": used < 4, "subscription_active": False}
+
+
 def _profile_payload(user, profile):
     owner = is_owner_user(user)
     count = int(profile.get("daily_analysis_count", 0) or 0)
+    if owner:
+        quota = {"quota_type": "owner_unlimited", "used": None, "daily_limit": None, "lifetime_limit": None, "remaining": None, "analysis_allowed": True, "subscription_active": True}
+    else:
+        quota = _profile_quota(user)
+        count = int(quota.get("used", 0) or 0)
     return {
         "user": {
             "id": str(user.get("id", "")),
@@ -132,8 +208,15 @@ def _profile_payload(user, profile):
         "profile": profile,
         "is_owner": owner,
         "daily_analysis_count": count,
-        "daily_limit": None if owner else 4,
-        "remaining": None if owner else max(0, 4 - count),
+        "daily_limit": quota.get("daily_limit"),
+        "lifetime_limit": quota.get("lifetime_limit"),
+        "quota_type": quota.get("quota_type"),
+        "used": quota.get("used"),
+        "remaining": quota.get("remaining"),
+        "analysis_allowed": quota.get("analysis_allowed"),
+        "subscription_active": quota.get("subscription_active"),
+        "subscription_plan": quota.get("subscription_plan", ""),
+        "subscription_expires_at": quota.get("subscription_expires_at", ""),
     }
 
 
