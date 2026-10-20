@@ -16,7 +16,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from http.server import BaseHTTPRequestHandler
 
 from analysis_common import (
@@ -28,8 +29,6 @@ from analysis_common import (
 from api.user_security import (
     extract_bearer_token,
     is_owner_user,
-    release_analysis_slot,
-    reserve_analysis_slot,
     verify_access_token,
 )
 
@@ -104,6 +103,95 @@ def supabase_request(method, path, payload=None, timeout=30, extra_headers=None)
         raise RuntimeError("Supabase request failed ({}): {}".format(exc.code, detail[:2500])) from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise RuntimeError("Supabase connection failed: " + str(exc)) from exc
+
+
+
+ACTIVE_QUOTA_STATUSES = "in.%28queued%2Cprocessing%2Ccompleted%29"
+KAMPALA = ZoneInfo("Africa/Kampala")
+
+def _get_rows(path, timeout=15):
+    result = supabase_request("GET", path, timeout=timeout)
+    if not isinstance(result, list):
+        raise RuntimeError("Supabase returned an invalid quota response.")
+    return result
+
+def _get_quota(user_id):
+    """Read subscription and existing job history; requires no schema changes.
+
+    Existing analysis_jobs history is used as the usage ledger. Because no DB
+    reservation/RPC changes are allowed, concurrent submissions can race; see
+    the deployment note accompanying this file.
+    """
+    uid = urllib.parse.quote(str(user_id), safe="")
+    subs = _get_rows(
+        "/rest/v1/subscriptions?user_id=eq." + uid
+        + "&select=plan,duration_months,status,starts_at,expires_at&limit=1"
+    )
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc.astimezone(KAMPALA)
+
+    if subs:
+        sub = subs[0] or {}
+        status = str(sub.get("status", "")).strip().lower()
+        try:
+            starts = datetime.fromisoformat(str(sub.get("starts_at", "")).replace("Z", "+00:00"))
+            expires = datetime.fromisoformat(str(sub.get("expires_at", "")).replace("Z", "+00:00"))
+            if starts.tzinfo is None: starts = starts.replace(tzinfo=timezone.utc)
+            if expires.tzinfo is None: expires = expires.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return {"allowed": False, "reason": "subscription_invalid", "quota_type": "blocked", "limit": 0, "used": 0, "remaining": 0}
+
+        if status != "active" or starts > now_utc or expires <= now_utc:
+            return {"allowed": False, "reason": "subscription_expired", "quota_type": "blocked", "limit": 0, "used": 0, "remaining": 0}
+
+        try:
+            months = int(sub.get("duration_months") or 0)
+        except (TypeError, ValueError):
+            months = 0
+        limits = {1: 10, 3: 30, 6: 50}
+        limit = limits.get(months)
+        if not limit:
+            return {"allowed": False, "reason": "unsupported_plan", "quota_type": "blocked", "limit": 0, "used": 0, "remaining": 0}
+
+        day_start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end_local = day_start_local + timedelta(days=1)
+        start_utc = day_start_local.astimezone(timezone.utc).isoformat()
+        end_utc = day_end_local.astimezone(timezone.utc).isoformat()
+        jobs = _get_rows(
+            "/rest/v1/analysis_jobs?user_id=eq." + uid
+            + "&status=" + ACTIVE_QUOTA_STATUSES
+            + "&created_at=gte." + urllib.parse.quote(start_utc, safe="")
+            + "&created_at=lt." + urllib.parse.quote(end_utc, safe="")
+            + "&select=id&limit=1000"
+        )
+        used = len(jobs)
+        return {"allowed": used < limit, "reason": "ok" if used < limit else "daily_limit", "quota_type": "paid_daily", "limit": limit, "used": used, "remaining": max(0, limit-used), "plan": str(sub.get("plan") or "")}
+
+    # No subscription row means a never-subscribed free account. Existing jobs
+    # are the only available lifetime ledger without adding a database column.
+    jobs = _get_rows(
+        "/rest/v1/analysis_jobs?user_id=eq." + uid
+        + "&status=" + ACTIVE_QUOTA_STATUSES
+        + "&select=id&limit=5"
+    )
+    used = len(jobs)
+    limit = 4
+    return {"allowed": used < limit, "reason": "ok" if used < limit else "free_lifetime_limit", "quota_type": "free_lifetime", "limit": limit, "used": used, "remaining": max(0, limit-used)}
+
+
+def _sync_legacy_profile_count(user_id, used):
+    """Best-effort profile counter for existing clients; quota checks use history."""
+    uid = urllib.parse.quote(str(user_id), safe="")
+    today = datetime.now(KAMPALA).date().isoformat()
+    try:
+        supabase_request(
+            "PATCH", "/rest/v1/profiles?id=eq." + uid,
+            {"daily_analysis_count": int(used), "last_analysis_date": today},
+            timeout=10, extra_headers={"Prefer": "return=minimal"},
+        )
+    except Exception:
+        # Do not fail an otherwise valid queued analysis due to a legacy UI counter.
+        pass
 
 
 def create_queued_job(user_id, instrument, trade_focus, higher_timeframe_image, lower_timeframe_image):
@@ -181,11 +269,8 @@ def _mark_failed_if_still_queued(job_nonce, user_id, reason, release_reserved_sl
         # the job from queued to failed. If a worker already claimed it, its
         # status no longer matches and its own success/failure path owns the slot.
         if isinstance(updated, list) and updated:
-            if release_reserved_slot:
-                try:
-                    release_analysis_slot(user_id)
-                except Exception:
-                    pass
+            # This quota implementation does not reserve the legacy RPC slot.
+            # The analysis history is the usage ledger, so no slot release is needed here.
             return True
     except Exception:
         pass
@@ -340,19 +425,33 @@ class handler(BaseHTTPRequestHandler):
             get_job_secret()
 
             owner = is_owner_user(user)
+            quota = None
             remaining = None
             if not owner:
-                slot = reserve_analysis_slot(user_id)
-                if slot == -1:
-                    json_response(self, 429, {
-                        "error": "Daily analysis limit reached.",
-                        "daily_limit": 4,
-                        "remaining": 0,
-                        "is_owner": False,
+                quota = _get_quota(user_id)
+                if not quota.get("allowed"):
+                    reason = quota.get("reason")
+                    if reason == "subscription_expired":
+                        message = "Your LM Analyzer subscription has expired or is inactive. Renew to continue analysing charts."
+                        status_code = 403
+                    elif reason == "unsupported_plan":
+                        message = "This subscription plan does not include analysis access. Please contact LM Analyzer support."
+                        status_code = 403
+                    elif reason == "free_lifetime_limit":
+                        message = "Your 4 free lifetime analyses have been used. Subscribe to continue."
+                        status_code = 429
+                    else:
+                        message = "Your daily analysis limit has been reached. Try again after midnight Uganda time."
+                        status_code = 429
+                    json_response(self, status_code, {
+                        "error": message, "reason": reason,
+                        "quota_type": quota.get("quota_type"),
+                        "daily_limit": quota.get("limit") if quota.get("quota_type") == "paid_daily" else None,
+                        "lifetime_limit": 4 if quota.get("quota_type") == "free_lifetime" else None,
+                        "used": quota.get("used", 0), "remaining": 0, "is_owner": False,
                     })
                     return
-                reserved_slot = True
-                remaining = max(0, 4 - int(slot))
+                remaining = quota.get("remaining")
 
             job_nonce = create_queued_job(
                 user_id=user_id,
@@ -366,7 +465,11 @@ class handler(BaseHTTPRequestHandler):
             # Explicitly wake the worker as well as supporting a Supabase
             # Database Webhook. This prevents an indefinitely queued job when
             # the webhook is missing or was misconfigured.
-            wake_analysis_worker(job_nonce, user_id, reserved_slot)
+            # No legacy daily-slot reservation is used: quota is computed from
+            # existing job history and the subscription row.
+            wake_analysis_worker(job_nonce, user_id, False)
+            if not owner and quota is not None:
+                _sync_legacy_profile_count(user_id, int(quota.get("used", 0)) + 1)
 
             json_response(self, 202, {
                 "status": "queued",
@@ -374,32 +477,25 @@ class handler(BaseHTTPRequestHandler):
                 "job_nonce": job_nonce,
                 "poll_after_seconds": 2,
                 "is_owner": owner,
-                "daily_limit": None if owner else 4,
-                "remaining": remaining,
+                "daily_limit": None if owner or not quota or quota.get("quota_type") != "paid_daily" else quota.get("limit"),
+                "lifetime_limit": None if owner or not quota or quota.get("quota_type") != "free_lifetime" else 4,
+                "quota_type": "owner_unlimited" if owner else (quota or {}).get("quota_type"),
+                "used": None if owner else int((quota or {}).get("used", 0)) + 1,
+                "remaining": None if owner else max(0, int((quota or {}).get("remaining", 0)) - 1),
             })
 
         except ValueError as exc:
             if job_nonce and user_id:
                 _mark_failed_if_still_queued(
-                    job_nonce, user_id, "Analysis submission failed: " + str(exc), reserved_slot
+                    job_nonce, user_id, "Analysis submission failed: " + str(exc), False
                 )
-            elif reserved_slot and user_id:
-                try:
-                    release_analysis_slot(user_id)
-                except Exception:
-                    pass
             json_response(self, 400, {"error": str(exc)})
 
         except RuntimeError as exc:
             if job_nonce and user_id:
                 _mark_failed_if_still_queued(
-                    job_nonce, user_id, "Analysis submission failed: " + str(exc), reserved_slot
+                    job_nonce, user_id, "Analysis submission failed: " + str(exc), False
                 )
-            elif reserved_slot and user_id:
-                try:
-                    release_analysis_slot(user_id)
-                except Exception:
-                    pass
             message = str(exc)
             lowered = message.lower()
             status = 429 if any(word in lowered for word in ("limit", "daily", "analyses")) else 500
@@ -408,13 +504,8 @@ class handler(BaseHTTPRequestHandler):
         except Exception as exc:
             if job_nonce and user_id:
                 _mark_failed_if_still_queued(
-                    job_nonce, user_id, "Analysis submission failed: " + str(exc), reserved_slot
+                    job_nonce, user_id, "Analysis submission failed: " + str(exc), False
                 )
-            elif reserved_slot and user_id:
-                try:
-                    release_analysis_slot(user_id)
-                except Exception:
-                    pass
             json_response(self, 500, {"error": "Analysis submission failed: " + str(exc)})
 
     def log_message(self, format, *args):
