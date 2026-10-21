@@ -32,6 +32,54 @@
     {
       "source": "/api/analysis_submit",
       "destination": "/api/router?route=analysis_submit"
+    },
+    {
+      "source": "/api/analysis_status",
+      "destination": "/api/router?route=analysis_status"
+    },
+    {
+      "source": "/api/analysis_worker",
+      "destination": "/api/router?route=analysis_worker"
+    },
+    {
+      "source": "/api/community",
+      "destination": "/api/router?route=community"
+    },
+    {
+      "source": "/api/market_quotes",
+      "destination": "/api/router?route=market_quotes"
+    },
+    {
+      "source": "/api/payment",
+      "destination": "/api/router?route=payment"
+    },
+    {
+      "source": "/api/pesapal",
+      "destination": "/api/router?route=pesapal"
+    },
+    {
+      "source": "/api/register_device",
+      "destination": "/api/router?route=register_device"
+    },
+    {
+      "source": "/api/send_notification",
+      "destination": "/api/router?route=send_notification"
+    },
+    {
+      "source": "/api/subscription_access",
+      "destination": "/api/router?route=subscription_access"
+    },
+    {
+      "source": "/api/support_chat",
+      "destination": "/api/router?route=support_chat"
+    },
+    {
+      "source": "/api/trader_stats",
+      "destination": "/api/router?route=trader_stats"
+    },
+    {
+      "source": "/api/trader_tools",
+      "destination": "/api/router?route=trader_tools"
     }
   ]
 }
