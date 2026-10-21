@@ -82,7 +82,12 @@ def json_response(handler, status, payload):
         handler.wfile.write(body)
 
 
-def supabase_request(method, path, payload=None, timeout=SUPABASE_TIMEOUT_SECONDS):
+def supabase_request(
+    method,
+    path,
+    payload=None,
+    timeout=SUPABASE_TIMEOUT_SECONDS,
+):
     if not SUPABASE_URL:
         raise RuntimeError("SUPABASE_URL is not configured.")
 
@@ -172,8 +177,7 @@ def patch_job(job_nonce, values, only_if_processing=False):
         + encoded_nonce
     )
 
-    # Only update a job that is still processing. This helps prevent
-    # a late worker response from overwriting a completed or failed job.
+    # Prevent late workers from overwriting a completed or failed job.
     if only_if_processing:
         path += "&status=eq.processing"
 
@@ -260,7 +264,10 @@ class handler(BaseHTTPRequestHandler):
                     "",
                 ).strip()
 
-                if not supplied_secret or supplied_secret != WORKER_SECRET:
+                if (
+                    not supplied_secret
+                    or supplied_secret != WORKER_SECRET
+                ):
                     json_response(
                         self,
                         401,
@@ -303,7 +310,10 @@ class handler(BaseHTTPRequestHandler):
             )
 
             if not job:
-                log_event("IGNORED_ALREADY_CLAIMED", job_nonce)
+                log_event(
+                    "IGNORED_ALREADY_CLAIMED",
+                    job_nonce,
+                )
 
                 json_response(
                     self,
@@ -387,6 +397,7 @@ class handler(BaseHTTPRequestHandler):
             result = parse_completed_response(
                 raw_response,
                 instrument=instrument,
+                trade_focus=trade_focus,
             )
 
             if not isinstance(result, dict):
