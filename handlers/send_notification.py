@@ -1,9 +1,9 @@
 
 import json
+import logging
 import os
 import urllib.error
 import urllib.parse
-import urllib.request
 from http.server import BaseHTTPRequestHandler
 
 import firebase_admin
@@ -18,18 +18,23 @@ from api.user_security import (
 )
 
 MAX_BODY_BYTES = 4096
+logger = logging.getLogger(__name__)
 
 
 def respond(handler, status, payload):
     body = json.dumps(payload).encode("utf-8")
     handler.send_response(status)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header(
+        "Content-Type", "application/json; charset=utf-8"
+    )
     handler.send_header("Cache-Control", "no-store")
     handler.send_header("Access-Control-Allow-Origin", "*")
     handler.send_header(
         "Access-Control-Allow-Headers", "Content-Type, Authorization"
     )
-    handler.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+    handler.send_header(
+        "Access-Control-Allow-Methods", "POST, OPTIONS"
+    )
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
@@ -39,11 +44,17 @@ def firebase_app():
     if firebase_admin._apps:
         return firebase_admin.get_app()
 
-    raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
+    raw = os.environ.get(
+        "FIREBASE_SERVICE_ACCOUNT_JSON", ""
+    ).strip()
+
     if not raw:
-        raise RuntimeError("Firebase service account is not configured.")
+        raise RuntimeError(
+            "Firebase service account is not configured."
+        )
 
     service_account = json.loads(raw)
+
     return firebase_admin.initialize_app(
         credentials.Certificate(service_account)
     )
@@ -80,13 +91,16 @@ def registered_tokens(user_id):
 
 
 class handler(BaseHTTPRequestHandler):
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header(
             "Access-Control-Allow-Headers", "Content-Type, Authorization"
         )
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header(
+            "Access-Control-Allow-Methods", "POST, OPTIONS"
+        )
         self.end_headers()
 
     def do_POST(self):
@@ -99,32 +113,55 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             if not is_owner_user(user):
-                respond(self, 403, {"error": "Owner access required."})
+                respond(
+                    self, 403,
+                    {"error": "Owner access required."}
+                )
                 return
 
             length = int(self.headers.get("Content-Length", "0"))
+
             if length <= 0 or length > MAX_BODY_BYTES:
-                respond(self, 400, {"error": "Invalid request body."})
+                respond(
+                    self, 400,
+                    {"error": "Invalid request body."}
+                )
                 return
 
-            data = json.loads(self.rfile.read(length).decode("utf-8"))
+            data = json.loads(
+                self.rfile.read(length).decode("utf-8")
+            )
+
             if not isinstance(data, dict):
-                respond(self, 400, {"error": "Invalid request body."})
+                respond(
+                    self, 400,
+                    {"error": "Invalid request body."}
+                )
                 return
 
-            title = str(data.get("title") or "LM Analyzer").strip()[:100]
+            title = str(
+                data.get("title") or "LM Analyzer"
+            ).strip()[:100]
+
             body = str(
-                data.get("body") or "Your push notification test succeeded."
+                data.get("body")
+                or "Your push notification test succeeded."
             ).strip()[:500]
 
             if not title or not body:
-                respond(self, 400, {"error": "Title and message are required."})
+                respond(
+                    self, 400,
+                    {"error": "Title and message are required."}
+                )
                 return
 
             tokens = registered_tokens(str(user["id"]))
+
             if not tokens:
                 respond(self, 404, {
-                    "error": "No active device tokens found for this account."
+                    "error": (
+                        "No active device tokens found for this account."
+                    )
                 })
                 return
 
@@ -145,10 +182,24 @@ class handler(BaseHTTPRequestHandler):
                             priority="high"
                         ),
                     )
-                    messaging.send(message)
+
+                    message_id = messaging.send(message)
                     sent += 1
-                except Exception:
+
+                    # Log the Firebase message ID, never the device token.
+                    logger.info(
+                        "LM Analyzer FCM accepted a message: %s",
+                        message_id,
+                    )
+
+                except Exception as exc:
                     failed += 1
+
+                    # Log diagnostic details without logging the token.
+                    logger.exception(
+                        "LM Analyzer FCM send failed (%s).",
+                        type(exc).__name__,
+                    )
 
             respond(self, 200 if sent else 502, {
                 "ok": sent > 0,
@@ -156,20 +207,33 @@ class handler(BaseHTTPRequestHandler):
                 "failed": failed,
                 "message": (
                     "Firebase accepted the notification message."
-                    if sent else
-                    "Firebase could not accept the notification."
+                    if sent
+                    else "Firebase could not accept the notification."
                 ),
             })
 
         except ValueError as exc:
             respond(self, 401, {"error": str(exc)})
-        except urllib.error.HTTPError:
+
+        except urllib.error.HTTPError as exc:
+            logger.error(
+                "LM Analyzer notification token lookup failed "
+                "with HTTP status %s.",
+                exc.code,
+            )
             respond(self, 502, {
                 "error": "Could not access registered device tokens."
             })
-        except Exception:
+
+        except Exception as exc:
+            logger.exception(
+                "LM Analyzer notification endpoint failed (%s).",
+                type(exc).__name__,
+            )
             respond(self, 500, {
-                "error": "Notification sending failed. Check server logs."
+                "error": (
+                    "Notification sending failed. Check server logs."
+                )
             })
 
     def do_GET(self):
