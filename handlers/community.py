@@ -110,6 +110,7 @@ def _has_active_subscription(user_id):
     return isinstance(rows, list) and bool(rows)
 
 
+
 def _verified_rows(user_ids):
     if not user_ids:
         return {}
@@ -120,7 +121,6 @@ def _verified_rows(user_ids):
 
 def _award_verified(user_id, reason):
     _supabase("POST", "/rest/v1/community_verified_users", {"user_id": user_id, "reason": reason}, prefer="resolution=ignore-duplicates,return=minimal")
-
 
 def _attach_author_profiles(posts, viewer_id=""):
     """Attach public names and real follow statistics to community posts."""
@@ -159,14 +159,10 @@ def _attach_author_profiles(posts, viewer_id=""):
         follower_counts[target] = follower_counts.get(target, 0) + 1
         source = str(relation.get("follower_id", ""))
         following_counts[source] = following_counts.get(source, 0) + 1
-    # Verification is server-awarded and permanent. Owner is seeded on their authenticated request;
-    # a currently paid member qualifies at 500 real, unique follow rows.
+    # Verified badge is server-derived: owner, or active subscriber with 500+ real followers.
     verified = _verified_rows(ids)
     for author_id in ids:
-        if author_id in verified:
-            continue
-        count = follower_counts.get(author_id, 0)
-        if count >= 500 and _has_active_subscription(author_id):
+        if author_id not in verified and follower_counts.get(author_id, 0) >= 500 and _has_active_subscription(author_id):
             _award_verified(author_id, "500_followers")
     verified = _verified_rows(ids)
     following_now = {
@@ -188,6 +184,61 @@ def _attach_author_profiles(posts, viewer_id=""):
         badge = verified.get(author_id, {})
         item["is_verified"] = bool(badge)
         item["verification_reason"] = str(badge.get("reason", ""))
+        result.append(item)
+    return result
+
+
+def _attach_post_engagement(posts, viewer_id):
+    """Attach persistent unique-view, like and comment counts to each post."""
+    if not isinstance(posts, list) or not posts:
+        return posts if isinstance(posts, list) else []
+    ids = list(dict.fromkeys(str(row.get("id", "")).strip() for row in posts if isinstance(row, dict) and row.get("id")))
+    if not ids:
+        return posts
+    in_values = ",".join(ids)
+    def rows_for(table, columns):
+        query = urllib.parse.urlencode({"post_id": "in.({})".format(in_values), "select": columns})
+        result = _supabase("GET", "/rest/v1/{}?{}".format(table, query))
+        return result if isinstance(result, list) else []
+    likes = rows_for("community_post_likes", "post_id,user_id")
+    comments = rows_for("community_comments", "post_id,id,user_id,body,created_at")
+    views = rows_for("community_post_views", "post_id,user_id")
+    like_counts, comment_counts, view_counts = {}, {}, {}
+    liked_by_viewer = set()
+    for row in likes:
+        pid = str(row.get("post_id", ""))
+        like_counts[pid] = like_counts.get(pid, 0) + 1
+        if str(row.get("user_id", "")) == str(viewer_id):
+            liked_by_viewer.add(pid)
+    for row in comments:
+        pid = str(row.get("post_id", ""))
+        comment_counts[pid] = comment_counts.get(pid, 0) + 1
+    for row in views:
+        pid = str(row.get("post_id", ""))
+        view_counts[pid] = view_counts.get(pid, 0) + 1
+    out = []
+    for row in posts:
+        item = dict(row)
+        pid = str(item.get("id", ""))
+        item["like_count"] = like_counts.get(pid, 0)
+        item["comment_count"] = comment_counts.get(pid, 0)
+        item["view_count"] = view_counts.get(pid, 0)
+        item["is_liked"] = pid in liked_by_viewer
+        out.append(item)
+    return out
+
+
+def _attach_comment_authors(comments):
+    ids = list(dict.fromkeys(str(row.get("user_id", "")) for row in comments if isinstance(row, dict) and row.get("user_id")))
+    if not ids:
+        return comments
+    query = urllib.parse.urlencode({"id": "in.({})".format(",".join(ids)), "select": "id,full_name"})
+    profiles = _supabase("GET", "/rest/v1/profiles?" + query)
+    names = {str(r.get("id")): str(r.get("full_name") or "").strip() for r in profiles if isinstance(r, dict)} if isinstance(profiles, list) else {}
+    result = []
+    for row in comments:
+        item = dict(row)
+        item["author_name"] = names.get(str(item.get("user_id", ""))) or "LM Analyzer member"
         result.append(item)
     return result
 
@@ -233,9 +284,16 @@ class handler(BaseHTTPRequestHandler):
                 followers = sum(1 for r in relations if str(r.get("following_id")) == target_id)
                 following = sum(1 for r in relations if str(r.get("follower_id")) == target_id)
                 is_following = any(str(r.get("follower_id")) == str(user["id"]) and str(r.get("following_id")) == target_id for r in relations)
-                badges = _verified_rows([target_id])
-                badge = badges.get(target_id, {})
-                _send(self, 200, {"profile": {"id": target_id, "full_name": str(profile.get("full_name") or "LM Analyzer member"), "followers": followers, "following": following, "posts_count": len(authored_posts), "is_following": is_following, "is_self": target_id == str(user["id"]), "is_verified": bool(badge), "verification_reason": str(badge.get("reason", ""))}, "posts": authored_posts})
+                _send(self, 200, {"profile": {"id": target_id, "full_name": str(profile.get("full_name") or "LM Analyzer member"), "followers": followers, "following": following, "posts_count": len(authored_posts), "is_following": is_following, "is_self": target_id == str(user["id"])}, "posts": authored_posts})
+                return
+            if action == "comments":
+                post_id = (query_args.get("post_id") or [""])[0].strip()
+                if not post_id or len(post_id) > 64:
+                    raise ValueError("A valid post_id is required.")
+                comment_query = urllib.parse.urlencode({"post_id": "eq." + post_id, "select": "id,post_id,user_id,body,created_at", "order": "created_at.asc", "limit": "200"})
+                comment_rows = _supabase("GET", "/rest/v1/community_comments?" + comment_query)
+                comment_rows = comment_rows if isinstance(comment_rows, list) else []
+                _send(self, 200, {"comments": _attach_comment_authors(comment_rows)})
                 return
             params = urllib.parse.urlencode({
                 "status": "eq.published",
@@ -245,10 +303,16 @@ class handler(BaseHTTPRequestHandler):
             })
             rows = _supabase("GET", "/rest/v1/community_posts?" + params)
             rows = rows if isinstance(rows, list) else []
+            # A viewer is counted once per post; the database unique key prevents refreshes inflating views.
+            if rows:
+                view_rows = [{"post_id": str(row["id"]), "user_id": str(user["id"])} for row in rows if row.get("id")]
+                if view_rows:
+                    _supabase("POST", "/rest/v1/community_post_views?on_conflict=post_id%2Cuser_id", view_rows, prefer="resolution=ignore-duplicates,return=minimal")
             owner = is_owner_user(user)
             if owner:
                 _award_verified(str(user["id"]), "owner")
             rows = _attach_author_profiles(rows, str(user["id"]))
+            rows = _attach_post_engagement(rows, str(user["id"]))
             can_post = owner or _has_active_subscription(str(user["id"]))
             _send(self, 200, {"posts": rows, "user_id": str(user["id"]), "can_post": can_post})
         except ValueError as exc:
@@ -264,6 +328,36 @@ class handler(BaseHTTPRequestHandler):
             user_id = str(user["id"])
             body = _read_body(self)
             action = str(body.get("action", "publish")).strip().lower()
+            if action in ("like", "unlike", "comment"):
+                post_id = str(body.get("post_id", "")).strip()
+                if not post_id or len(post_id) > 64:
+                    raise ValueError("A valid post_id is required.")
+                # Ensure interactions can only target a published post.
+                post_query = urllib.parse.urlencode({"id": "eq." + post_id, "status": "eq.published", "select": "id", "limit": "1"})
+                post_rows = _supabase("GET", "/rest/v1/community_posts?" + post_query)
+                if not isinstance(post_rows, list) or not post_rows:
+                    _send(self, 404, {"error": "Post not found."})
+                    return
+                if action == "like":
+                    _supabase("POST", "/rest/v1/community_post_likes?on_conflict=post_id%2Cuser_id", {"post_id": post_id, "user_id": user_id}, prefer="resolution=ignore-duplicates,return=minimal")
+                    _send(self, 200, {"success": True, "liked": True, "post_id": post_id})
+                elif action == "unlike":
+                    like_query = urllib.parse.urlencode({"post_id": "eq." + post_id, "user_id": "eq." + user_id})
+                    _supabase("DELETE", "/rest/v1/community_post_likes?" + like_query, prefer="return=minimal")
+                    _send(self, 200, {"success": True, "liked": False, "post_id": post_id})
+                else:
+                    comment_text = str(body.get("body", "")).strip()
+                    if not comment_text:
+                        raise ValueError("Write a comment before sending.")
+                    if len(comment_text) > 2000:
+                        raise ValueError("Comments must be 2,000 characters or fewer.")
+                    result = _supabase("POST", "/rest/v1/community_comments", {"post_id": post_id, "user_id": user_id, "body": comment_text}, prefer="return=representation")
+                    comment = result[0] if isinstance(result, list) and result else None
+                    if not comment:
+                        _send(self, 500, {"error": "Comment could not be saved."})
+                        return
+                    _send(self, 201, {"success": True, "comment": _attach_comment_authors([comment])[0]})
+                return
             if action in ("follow", "unfollow"):
                 target_id = str(body.get("target_user_id", "")).strip()
                 if not target_id or len(target_id) > 64:
