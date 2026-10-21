@@ -14,10 +14,11 @@ GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 GEMINI_GENERATE_URL = (
     "https://generativelanguage.googleapis.com/v1beta/"
-    "models/gemini-3.5-flash-lite:generateContent"
+    f"models/{GEMINI_MODEL}:generateContent"
 )
 
 MAX_IMAGE_DATA_URL_CHARS = 8 * 1024 * 1024
+GEMINI_REQUEST_TIMEOUT_SECONDS = 45
 
 
 # ============================================================
@@ -303,50 +304,27 @@ OUTPUT_SCHEMA = {
 
 
 # ============================================================
-# ALLOWED VALUES
+# ALLOWED VALUES — ALL 32 INSTRUMENTS
 # ============================================================
 
-# Matches the 32 instruments in the LM Analyzer Android selector.
 ALLOWED_INSTRUMENTS = {
     # Major Forex
-    "EURUSD",
-    "GBPUSD",
-    "USDJPY",
-    "USDCHF",
-    "USDCAD",
-    "AUDUSD",
-    "NZDUSD",
+    "EURUSD", "GBPUSD", "USDJPY", "USDCHF",
+    "USDCAD", "AUDUSD", "NZDUSD",
 
     # Forex Crosses
-    "EURGBP",
-    "EURJPY",
-    "EURCHF",
-    "EURAUD",
-    "EURCAD",
-    "EURNZD",
-    "GBPJPY",
-    "GBPCHF",
-    "GBPAUD",
-    "GBPCAD",
-    "GBPNZD",
-    "AUDJPY",
-    "AUDCAD",
-    "AUDCHF",
-    "AUDNZD",
-    "CADJPY",
-    "CADCHF",
-    "CHFJPY",
-    "NZDJPY",
-    "NZDCAD",
+    "EURGBP", "EURJPY", "EURCHF", "EURAUD",
+    "EURCAD", "EURNZD", "GBPJPY", "GBPCHF",
+    "GBPAUD", "GBPCAD", "GBPNZD", "AUDJPY",
+    "AUDCAD", "AUDCHF", "AUDNZD", "CADJPY",
+    "CADCHF", "CHFJPY", "NZDJPY", "NZDCAD",
     "NZDCHF",
 
     # Metals
-    "XAUUSD",
-    "XAGUSD",
+    "XAUUSD", "XAGUSD",
 
     # Crypto
-    "BTCUSD",
-    "ETHUSD",
+    "BTCUSD", "ETHUSD",
 }
 
 ALLOWED_FOCUSES = {
@@ -404,11 +382,16 @@ def json_response(handler, status, payload, extra_headers=None):
 # ============================================================
 
 def api_key():
-    key = os.getenv("GEMINI_API_KEY", "").strip()
+    # Preserve compatibility with either existing Vercel variable.
+    key = (
+        os.getenv("GEMINI_API_KEY", "").strip()
+        or os.getenv("GEMINI_OPENAI_KEY", "").strip()
+    )
 
     if not key:
         raise RuntimeError(
-            "GEMINI_API_KEY is missing from Vercel."
+            "Gemini API key is missing. Configure GEMINI_API_KEY "
+            "or GEMINI_OPENAI_KEY in Vercel."
         )
 
     return key
@@ -560,6 +543,9 @@ def create_background_response(
         else:
             mime_type = "image/jpeg"
 
+        # Avoid transmitting whitespace in the base64 payload.
+        encoded = "".join(encoded.split())
+
         return {
             "inline_data": {
                 "mime_type": mime_type,
@@ -598,7 +584,8 @@ def create_background_response(
             "responseMimeType": "application/json",
             "responseJsonSchema": OUTPUT_SCHEMA,
             "thinkingConfig": {
-                "thinkingLevel": "low",
+                # Prioritize lower latency.
+                "thinkingLevel": "minimal",
             },
             "maxOutputTokens": 2400,
         },
@@ -621,7 +608,11 @@ def create_background_response(
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        # Prevent a single Gemini request from waiting two minutes.
+        with urllib.request.urlopen(
+            request,
+            timeout=GEMINI_REQUEST_TIMEOUT_SECONDS,
+        ) as response:
             raw = response.read().decode("utf-8")
             data = json.loads(raw)
 
@@ -668,23 +659,43 @@ def create_background_response(
 
         if 500 <= exc.code <= 599:
             raise RuntimeError(
-                "Gemini is temporarily unavailable."
+                "Gemini is temporarily unavailable: "
+                + (message or f"HTTP {exc.code}")
             ) from exc
 
         raise RuntimeError(
             "Gemini request failed: "
-            + (message or "unknown error")
+            + (message or f"HTTP {exc.code}")
         ) from exc
 
     except (urllib.error.URLError, TimeoutError) as exc:
+        reason = getattr(exc, "reason", None)
+
+        if isinstance(exc, TimeoutError) or isinstance(
+            reason, (TimeoutError, socket_timeout_type())
+        ):
+            raise RuntimeError(
+                "Gemini timed out after "
+                f"{GEMINI_REQUEST_TIMEOUT_SECONDS} seconds. "
+                "Please try again."
+            ) from exc
+
         raise RuntimeError(
-            "Gemini could not be reached."
+            "Gemini could not be reached. Check the connection "
+            "and try again."
         ) from exc
 
     except json.JSONDecodeError as exc:
         raise RuntimeError(
             "Gemini returned invalid JSON."
         ) from exc
+
+
+def socket_timeout_type():
+    # Return the standard socket timeout class without changing
+    # the module's existing public interface.
+    import socket
+    return socket.timeout
 
 
 # ============================================================
@@ -700,6 +711,20 @@ def extract_output_text(response_data):
     candidates = response_data.get("candidates", [])
 
     if not isinstance(candidates, list) or not candidates:
+        prompt_feedback = response_data.get("promptFeedback", {})
+        block_reason = ""
+
+        if isinstance(prompt_feedback, dict):
+            block_reason = str(
+                prompt_feedback.get("blockReason", "")
+            ).strip()
+
+        if block_reason:
+            raise RuntimeError(
+                "Gemini could not analyze these charts. "
+                f"Reason: {block_reason}."
+            )
+
         raise RuntimeError(
             "Gemini returned no analysis candidate."
         )
