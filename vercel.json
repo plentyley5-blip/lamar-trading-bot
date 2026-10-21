@@ -28,6 +28,10 @@
     {
       "source": "/api/subscription_status",
       "destination": "/api/router?route=subscription_status"
+    },
+    {
+      "source": "/api/analysis_submit",
+      "destination": "/api/router?route=analysis_submit"
     }
   ]
 }
