@@ -29,25 +29,39 @@ GEMINI_REQUEST_TIMEOUT_SECONDS = 45
 SYSTEM_PROMPT = """
 You are the professional chart-analysis engine for LM Analyzer.
 
-You receive exactly two trading screenshots:
-
+You receive two trading screenshots:
 IMAGE 1 = 4H chart
 IMAGE 2 = 15M chart
 
 The selected instrument and trade focus are supplied separately.
 
-Return exactly one directional decision:
+Return one directional decision:
 BUY, SELL, or NO TRADE.
 
-Separately determine whether the entry is ready, pending, or invalid.
+Determine entry readiness independently:
+READY, WAITING, INVALID, or NO_SETUP.
+
+Supported instrument categories include:
+- Forex majors, crosses, and exotic pairs
+- Precious metals
+- Energy commodities
+- Stock-market indices
+- VIX and related market volatility indices
+- Synthetic volatility indices
+- Boom, Crash, Step, and Jump synthetic indices
+- Cryptocurrencies
+
+Do not assume every instrument is a forex pair.
+Use the instrument's actual chart structure and displayed price scale.
+Do not invent broker specifications, news, prices, or market data.
 
 ==================================================
 CORE DECISION RULE
 ==================================================
 
-Do NOT automatically choose NO TRADE.
-Do NOT require every trading method to agree.
-Do NOT require the 4H and 15M charts to show identical structures.
+Do not automatically choose NO TRADE.
+Do not require every trading method to agree.
+Do not require the 4H and 15M charts to show identical structures.
 
 Use the strongest overall visible evidence.
 
@@ -55,12 +69,10 @@ A BUY is allowed when the overall evidence is sufficiently bullish.
 A SELL is allowed when the overall evidence is sufficiently bearish.
 
 When direction is reasonably clear but price has not reached a
-suitable entry, return BUY or SELL with order_type WAIT and
-setup_status WAITING.
+suitable entry, preserve the directional signal and use WAITING.
 
-Use NO TRADE only when the evidence is genuinely too unclear,
-too weak, materially conflicting, or chart quality prevents
-a responsible directional assessment.
+Use NO TRADE only when evidence is genuinely too unclear, too weak,
+materially conflicting, or chart quality prevents responsible analysis.
 
 Never invent a direction merely to avoid NO TRADE.
 
@@ -71,8 +83,8 @@ TIMEFRAME LOGIC
 SCALP:
 - 15M is the primary execution timeframe.
 - 4H provides broader context.
-- A valid scalp setup can exist from sufficiently clear 15M evidence
-  even if the 4H chart is neutral.
+- A valid scalp setup can exist from clear 15M evidence even if
+  the 4H chart is neutral.
 - The 4H chart should not clearly invalidate the setup.
 
 DAY TRADE:
@@ -87,181 +99,182 @@ SWING:
 ANALYSIS METHODS
 ==================================================
 
-Use whichever methods are supported by visible chart evidence:
-
-- support and resistance
-- pure price action
-- market structure
-- swing highs and swing lows
-- break of structure
-- change of character
-- liquidity
-- equal highs and equal lows
-- liquidity sweeps and stop hunts
-- displacement
-- inducement
-- mitigation and invalidation
+Use methods supported by visible evidence:
+- Support and resistance
+- Pure price action and candlesticks
+- Market structure and swing highs/lows
+- Break of structure and change of character
+- Liquidity, equal highs/lows, and liquidity sweeps
+- Displacement and inducement
+- Mitigation and invalidation
 - Fibonacci retracement and extension
-- premium and discount
-- smart money concepts
-- order blocks
-- fair value gaps
-- higher-timeframe bias
-- lower-timeframe confirmation
+- Premium and discount
+- Smart money concepts
+- Order blocks and fair value gaps
+- Higher-timeframe bias and lower-timeframe confirmation
 
-Do NOT require every method.
+Do not require every method.
+Identify contributing, weak, and conflicting evidence.
 
-Identify contributing evidence, weak evidence, and conflicting evidence.
+==================================================
+INSTRUMENT-SPECIFIC RULES
+==================================================
+
+FOREX:
+Use visible price structure and account for the possibility of
+spread, news, and volatility. Do not invent pip values or broker
+contract specifications.
+
+METALS AND ENERGY:
+Use the displayed chart prices and visible structure. Do not assume
+all symbols use the same decimal precision or contract size.
+
+STOCK INDICES AND VIX:
+Analyze the actual index chart. Do not treat an index as a currency
+pair or invent an underlying tradable instrument.
+
+CRYPTO:
+Use the displayed price scale and chart structure. Do not assume
+that every exchange or broker supports the selected pair.
+
+SYNTHETIC VOLATILITY INDICES:
+Use the supplied chart evidence and visible price structure.
+Do not invent economic news or claim synthetic indices react to
+economic announcements in the same way as forex.
+
+BOOM, CRASH, STEP, AND JUMP:
+Analyze visible price movement and structure without assuming
+that a spike must occur at a particular time.
+Never promise that a spike is imminent or guaranteed.
+
+A descriptive instrument name may differ from the broker's actual
+symbol. Analyze the screenshots supplied; do not claim that the
+instrument is available on a particular broker without verification.
 
 ==================================================
 DIRECTION AND ENTRY READINESS
 ==================================================
 
-Determine these independently:
-
+Determine independently:
 1. Directional bias: BUY, SELL, or NO TRADE.
 2. Entry readiness: READY, WAITING, INVALID, or NO_SETUP.
 3. Order type: MARKET, BUY_LIMIT, SELL_LIMIT, WAIT, or NONE.
 
-A clear direction does not automatically mean a market entry is
-appropriate.
+A clear direction does not automatically justify immediate entry.
 
-When direction is justified but entry timing is not ready, preserve
-the directional signal and use:
+When direction is justified but entry timing is not ready:
 - order_type = WAIT
 - setup_status = WAITING
 
-Explain the entry zone to watch and the condition required before
-entry.
+Explain the entry zone and the condition required before entry.
 
 ==================================================
 BUY LIMIT
 ==================================================
 
 Consider BUY_LIMIT when:
-- the directional evidence is bullish;
-- price is above a logically justified retracement entry;
-- a visible support, demand zone, bullish order block, or bullish
-  fair value gap supports the proposed entry;
-- the stop loss can be placed beyond logical invalidation;
-- reasonable profit objectives are identifiable.
+- Directional evidence is bullish.
+- A defensible entry is below the observed market price.
+- Visible support, demand, a bullish order block, or a bullish
+  fair value gap supports the entry.
+- The stop loss can be placed beyond logical invalidation.
+- Reasonable profit objectives are identifiable.
 
-A BUY_LIMIT price must be below the current market price.
-
-Do not propose a BUY_LIMIT if the proposed price is above the
-current market price.
+Never propose a BUY_LIMIT above the observed market price.
 
 ==================================================
 SELL LIMIT
 ==================================================
 
 Consider SELL_LIMIT when:
-- the directional evidence is bearish;
-- price is below a logically justified retracement entry;
-- a visible resistance, supply zone, bearish order block, or bearish
-  fair value gap supports the proposed entry;
-- the stop loss can be placed beyond logical invalidation;
-- reasonable profit objectives are identifiable.
+- Directional evidence is bearish.
+- A defensible entry is above the observed market price.
+- Visible resistance, supply, a bearish order block, or a bearish
+  fair value gap supports the entry.
+- The stop loss can be placed beyond logical invalidation.
+- Reasonable profit objectives are identifiable.
 
-A SELL_LIMIT price must be above the current market price.
-
-Do not propose a SELL_LIMIT if the proposed price is below the
-current market price.
+Never propose a SELL_LIMIT below the observed market price.
 
 ==================================================
 MARKET ENTRY
 ==================================================
 
-Use MARKET only when the setup supports an immediate entry at the
-observed market price and the trade focus is appropriate.
+Use MARKET only when an immediate entry is justified by the chart
+and appropriate for the selected trade focus.
 
-Do not invent an exact current market price if the chart does not
-show it clearly.
+Do not invent an exact market price when the chart does not show it
+clearly.
 
-If an immediate entry is not justified but direction is clear,
-prefer a justified limit setup or WAITING status.
+Do not claim that an order has been placed or executed.
 
 ==================================================
-ENTRY AND PRICE PRECISION
+PRICE PRECISION
 ==================================================
 
 Provide:
-- entry: the proposed order price or market-entry level;
-- entry_zone: the justified price area to watch;
-- entry_trigger: the condition required for entry.
+- entry: proposed order price or market-entry level;
+- entry_zone: justified price area to watch;
+- entry_trigger: condition required before entry.
 
 Use readable price digits from the screenshots wherever possible.
+Do not fabricate precision.
 
-Do not fabricate precision. If exact price digits are unreadable,
-explain the limitation and use a zone only when that zone can be
-reasonably inferred from visible chart structure.
+If exact price digits are unreadable, explain the limitation.
+Use a price zone only when it can reasonably be inferred from
+visible chart structure.
 
-For WAITING setups, entry may describe the planned entry area.
-If no reliable numerical price can be established, say that clearly.
-
-==================================================
-STOP LOSS
-==================================================
-
-Place the stop loss beyond the logical invalidation area.
-
-Do not choose a stop loss arbitrarily or place it where ordinary
-price movement is likely to invalidate the setup without reason.
+For WAITING setups, entry may describe a planned area.
+If no reliable numerical price can be established, say so clearly.
 
 ==================================================
-TAKE PROFITS
+STOP LOSS AND TAKE PROFITS
 ==================================================
+
+Place stop loss beyond logical invalidation.
 
 TP1 should be the nearer logical objective.
-
-TP2 should be a further logical objective when supported by visible
+TP2 should be a further objective when supported by visible
 structure, liquidity, or another clear price objective.
 
 Do not invent targets that contradict visible structure.
 
-==================================================
-RISK / REWARD
-==================================================
-
 Keep risk/reward consistent with the proposed entry, stop loss,
-and targets.
-
-If the price values are not reliable enough to calculate risk/reward,
-state that it cannot be calculated reliably.
+and targets. If reliable calculation is impossible, state that.
 
 ==================================================
 SETUP STATUS
 ==================================================
 
 READY:
-A sufficiently supported entry is available now or a justified
-pending limit order can be proposed.
+An immediate entry is justified, or a defensible limit order can
+be proposed.
 
 WAITING:
 Direction is reasonably clear, but price or confirmation conditions
 are not yet suitable for entry.
 
 INVALID:
-The previously considered setup has been invalidated by visible
-price evidence.
+The considered setup has been invalidated by visible evidence.
 
 NO_SETUP:
 There is no sufficiently justified directional setup.
 
-A WAITING setup must not be represented as an executed trade.
+A WAITING setup is not an executed trade.
 
 ==================================================
 NO TRADE
 ==================================================
 
-Use signal = NO TRADE, order_type = NONE, and setup_status = NO_SETUP
-when:
-- directional evidence is genuinely unclear;
-- bullish and bearish evidence are materially balanced;
-- the setup is too weak;
-- chart quality prevents reliable analysis;
-- important information is missing;
-- risk makes a responsible setup impossible.
+Use:
+signal = NO TRADE
+order_type = NONE
+setup_status = NO_SETUP
+
+when direction is genuinely unclear, evidence is materially balanced,
+the setup is too weak, chart quality prevents reliable analysis,
+important information is missing, or risk makes a responsible setup
+impossible.
 
 For NO TRADE, entry, stop loss, take profits, risk/reward, entry zone,
 and entry trigger must be empty strings.
@@ -269,32 +282,22 @@ and entry trigger must be empty strings.
 Do not use NO TRADE merely because one method is weak.
 
 ==================================================
-NEWS
+NEWS AND CONFIDENCE
 ==================================================
 
-Do not invent current news.
+Do not invent current news. Only discuss news or fundamentals that
+are visible or reliably supplied. If current news cannot be verified,
+say so.
 
-Only discuss news or fundamentals that are visible or reliably supplied.
-If current news cannot be verified, say so.
-
-==================================================
-CONFIDENCE
-==================================================
-
-Confidence describes confidence in the quality of chart analysis.
-
-It is NOT a guaranteed win rate, guaranteed probability of profit,
-or guarantee of success.
+Confidence measures confidence in the chart analysis, not a
+guaranteed win rate or probability of profit.
 
 ==================================================
 OUTPUT
 ==================================================
 
 Return ONLY valid JSON matching the supplied schema.
-
-No Markdown.
-No code fences.
-No commentary outside JSON.
+No Markdown, code fences, or commentary outside JSON.
 """.strip()
 
 
@@ -397,27 +400,81 @@ OUTPUT_SCHEMA = {
 
 
 # ============================================================
-# ALLOWED VALUES — ALL SUPPORTED INSTRUMENTS
+# ALLOWED INSTRUMENTS
 # ============================================================
 
 ALLOWED_INSTRUMENTS = {
-    # Major Forex
+    # Major forex
     "EURUSD", "GBPUSD", "USDJPY", "USDCHF",
     "USDCAD", "AUDUSD", "NZDUSD",
 
-    # Forex Crosses
+    # Forex crosses
     "EURGBP", "EURJPY", "EURCHF", "EURAUD",
-    "EURCAD", "EURNZD", "GBPJPY", "GBPCHF",
-    "GBPAUD", "GBPCAD", "GBPNZD", "AUDJPY",
-    "AUDCAD", "AUDCHF", "AUDNZD", "CADJPY",
-    "CADCHF", "CHFJPY", "NZDJPY", "NZDCAD",
-    "NZDCHF",
+    "EURCAD", "EURNZD", "GBPEUR", "GBPJPY",
+    "GBPCHF", "GBPAUD", "GBPCAD", "GBPNZD",
+    "AUDJPY", "AUDCAD", "AUDCHF", "AUDNZD",
+    "CADJPY", "CADCHF", "CHFJPY",
+    "NZDJPY", "NZDCAD", "NZDCHF",
+
+    # Exotic forex
+    "USDSEK", "USDNOK", "USDDKK", "USDPLN",
+    "USDCZK", "USDHUF", "USDTRY", "USDMXN",
+    "USDZAR", "USDSGD", "USDHKD", "USDCNH",
+    "USDTHB", "EURSEK", "EURNOK", "EURDKK",
+    "EURPLN", "EURHUF", "EURTRY", "EURZAR",
+    "EURSGD", "EURHKD", "GBPSEK", "GBPNOK",
+    "GBPDKK", "GBPPLN", "GBPHUF", "GBPTRY",
+    "GBPZAR", "GBPSGD", "AUDSGD", "NZDSGD",
+    "NZDHKD", "SGDJPY", "CADSGD", "CADHKD",
+    "CHFSGD", "EURCNH", "GBPCNH", "AUDCNH",
 
     # Metals
-    "XAUUSD", "XAGUSD",
+    "XAUUSD", "XAGUSD", "XAUEUR", "XAUGBP",
+    "XAGEUR", "XPTUSD", "XPDUSD",
+
+    # Energy
+    "USOIL", "UKOIL", "XTIUSD", "XBRUSD",
+    "NATGAS", "NGAS",
+
+    # Stock indices
+    "US30", "US500", "US100", "USTEC", "NAS100",
+    "US2000", "UK100", "GER40", "DE40", "FRA40",
+    "EU50", "ESP35", "AUS200", "JP225", "HK50",
+    "CHINA50", "SG20", "NED25", "SWI20", "VIX",
+
+    # Synthetic volatility indices
+    "VOLATILITY_10_INDEX",
+    "VOLATILITY_25_INDEX",
+    "VOLATILITY_50_INDEX",
+    "VOLATILITY_75_INDEX",
+    "VOLATILITY_100_INDEX",
+    "VOLATILITY_10_1S_INDEX",
+    "VOLATILITY_25_1S_INDEX",
+    "VOLATILITY_50_1S_INDEX",
+    "VOLATILITY_75_1S_INDEX",
+    "VOLATILITY_100_1S_INDEX",
+
+    # Boom and Crash
+    "BOOM_300_INDEX", "BOOM_500_INDEX",
+    "BOOM_600_INDEX", "BOOM_900_INDEX",
+    "BOOM_1000_INDEX",
+    "CRASH_300_INDEX", "CRASH_500_INDEX",
+    "CRASH_600_INDEX", "CRASH_900_INDEX",
+    "CRASH_1000_INDEX",
+
+    # Step and Jump
+    "STEP_INDEX",
+    "JUMP_10_INDEX", "JUMP_25_INDEX",
+    "JUMP_50_INDEX", "JUMP_75_INDEX",
+    "JUMP_100_INDEX",
 
     # Crypto
-    "BTCUSD", "ETHUSD",
+    "BTCUSD", "ETHUSD", "LTCUSD", "BCHUSD",
+    "XRPUSD", "ADAUSD", "SOLUSD", "DOGEUSD",
+    "DOTUSD", "LINKUSD", "AVAXUSD", "BNBUSD",
+    "TRXUSD", "XLMUSD", "ETCUSD", "ATOMUSD",
+    "NEARUSD", "UNIUSD", "APTUSD", "FILUSD",
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT",
 }
 
 ALLOWED_FOCUSES = {
@@ -600,11 +657,7 @@ def create_background_response(
     higher_image,
     lower_image,
 ):
-    """
-    Compatibility function name.
-
-    Uses the standard Gemini generateContent API.
-    """
+    """Compatibility function using Gemini generateContent."""
 
     key = api_key()
 
@@ -650,21 +703,17 @@ def create_background_response(
         f"Trade focus: {trade_focus}\n\n"
         "IMAGE 1 = 4H chart.\n"
         "IMAGE 2 = 15M chart.\n\n"
-        "For SCALP, make the 15M chart the primary execution "
-        "timeframe and use the 4H chart as context.\n"
+        "Use the chart's actual instrument category and price scale.\n"
+        "For SCALP, use 15M for execution and 4H as context.\n"
         "For DAY TRADE, combine 4H context with 15M confirmation.\n"
-        "For SWING, make the 4H chart the primary structural timeframe.\n\n"
+        "For SWING, use 4H as the primary structural timeframe.\n"
         "Return the strongest justified directional decision.\n"
-        "Do not confuse a clear direction with an immediately "
-        "available entry.\n"
-        "When direction is clear but price must retrace, consider "
-        "BUY_LIMIT or SELL_LIMIT only if a defensible price level "
-        "is visible and the order is on the correct side of market.\n"
-        "If the direction is clear but entry is not ready, use "
+        "When direction is clear and a defensible entry is visible, "
+        "consider a limit order only on the correct side of market.\n"
+        "If direction is clear but entry is not ready, use "
         "order_type WAIT and setup_status WAITING.\n"
-        "Use NO TRADE only when a responsible direction cannot "
-        "be established.\n"
-        "Do not invent exact prices or claim an order was executed."
+        "Use NO TRADE when a responsible direction cannot be established.\n"
+        "Do not invent prices or claim an order was executed."
     )
 
     payload = {
@@ -766,11 +815,19 @@ def create_background_response(
             + (message or f"HTTP {exc.code}")
         ) from exc
 
-    except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        socket.timeout,
+    ) as exc:
         reason = getattr(exc, "reason", None)
 
-        if isinstance(exc, (TimeoutError, socket.timeout)) or isinstance(
-            reason, (TimeoutError, socket.timeout)
+        if isinstance(
+            exc,
+            (TimeoutError, socket.timeout),
+        ) or isinstance(
+            reason,
+            (TimeoutError, socket.timeout),
         ):
             raise RuntimeError(
                 "Gemini timed out after "
@@ -795,9 +852,7 @@ def create_background_response(
 
 def extract_output_text(response_data):
     if not isinstance(response_data, dict):
-        raise RuntimeError(
-            "Gemini returned an invalid response."
-        )
+        raise RuntimeError("Gemini returned an invalid response.")
 
     candidates = response_data.get("candidates", [])
 
@@ -816,9 +871,7 @@ def extract_output_text(response_data):
                 f"Reason: {block_reason}."
             )
 
-        raise RuntimeError(
-            "Gemini returned no analysis candidate."
-        )
+        raise RuntimeError("Gemini returned no analysis candidate.")
 
     candidate = candidates[0]
 
@@ -834,16 +887,12 @@ def extract_output_text(response_data):
     content = candidate.get("content", {})
 
     if not isinstance(content, dict):
-        raise RuntimeError(
-            "Gemini returned no analysis content."
-        )
+        raise RuntimeError("Gemini returned no analysis content.")
 
     parts = content.get("parts", [])
 
     if not isinstance(parts, list):
-        raise RuntimeError(
-            "Gemini returned no analysis parts."
-        )
+        raise RuntimeError("Gemini returned no analysis parts.")
 
     pieces = []
 
@@ -863,9 +912,7 @@ def extract_output_text(response_data):
                 f"Finish reason: {finish_reason}"
             )
 
-        raise RuntimeError(
-            "Gemini returned no analysis text."
-        )
+        raise RuntimeError("Gemini returned no analysis text.")
 
     return "\n".join(pieces).strip()
 
@@ -1017,7 +1064,6 @@ def parse_completed_response(
         "warnings": _clean_string_list(result.get("warnings")),
     }
 
-    # Enforce basic signal/order consistency.
     if signal == "NO TRADE":
         result["order_type"] = "NONE"
         result["setup_status"] = "NO_SETUP"
@@ -1030,7 +1076,6 @@ def parse_completed_response(
         result["entry_trigger"] = ""
 
     else:
-        # A limit order must agree with the directional signal.
         if (
             result["order_type"] == "BUY_LIMIT"
             and signal != "BUY"
