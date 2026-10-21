@@ -1,4 +1,5 @@
+
 # LM ANALYZER
 #
-# No third-party Python packages are required.
-# The backend uses Python's standard library.
+# Backend dependencies
+firebase-admin
