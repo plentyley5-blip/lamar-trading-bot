@@ -1,15 +1,26 @@
-"""Shared router for seven LM Analyzer endpoints on Vercel Hobby."""
+
+"""Shared router for LM Analyzer endpoints on Vercel Hobby."""
 import json
+import sys
 from http.server import BaseHTTPRequestHandler
+from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-# Explicit imports allow Vercel's Python bundler to discover these modules.
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "api"))
 
-from handlers import analysis_history, analyze, auth, delete_account, health, news, subscription_status
+from handlers import (
+    analysis_history,
+    analyze,
+    auth,
+    delete_account,
+    health,
+    news,
+    subscription_status,
+)
 
+# Route modules through this single Vercel function.
 HANDLERS = {
     "analysis_history": analysis_history,
     "analyze": analyze,
@@ -20,34 +31,73 @@ HANDLERS = {
     "subscription_status": subscription_status,
 }
 
+# New API modules are loaded from api/ without moving their files.
+OPTIONAL_MODULES = (
+    "analysis_status",
+    "analysis_submit",
+    "analysis_worker",
+    "community",
+    "market_quotes",
+    "payment",
+    "pesapal",
+    "register_device",
+    "send_notification",
+    "subscription_access",
+    "support_chat",
+    "trader_stats",
+    "trader_tools",
+)
+
+for module_name in OPTIONAL_MODULES:
+    try:
+        module = __import__(module_name)
+        HANDLERS[module_name] = module
+    except ImportError:
+        # Do not silently break existing routes if an optional module
+        # cannot be imported. Its route will return a clear 404.
+        pass
+
 
 def resolve_route_and_path(request_path):
     parsed = urlsplit(request_path)
     pairs = parse_qsl(parsed.query, keep_blank_values=True)
     route = ""
     preserved = []
+
     for key, value in pairs:
         if key == "route" and not route:
             route = value
         else:
             preserved.append((key, value))
+
     if not route and parsed.path.startswith("/api/router/"):
         route = parsed.path.rsplit("/", 1)[-1]
+
     original_path = "/api/" + route if route else "/api/router"
     if preserved:
         original_path += "?" + urlencode(preserved, doseq=True)
+
     return route, original_path
 
 
 class handler(BaseHTTPRequestHandler):
     def _json_response(self, status, payload):
-        body = b"" if status == 204 else json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        body = (
+            b""
+            if status == 204
+            else json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        )
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+        self.send_header(
+            "Access-Control-Allow-Headers", "Content-Type, Authorization"
+        )
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        )
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if self.command != "HEAD" and body:
@@ -56,13 +106,16 @@ class handler(BaseHTTPRequestHandler):
     def _dispatch(self):
         route, original_path = resolve_route_and_path(self.path)
         module = HANDLERS.get(route)
+
         if module is None:
             self._json_response(404, {"error": "API route not found."})
             return
+
         endpoint_handler = getattr(module, "handler", None)
         if endpoint_handler is None:
             self._json_response(500, {"error": "API handler is unavailable."})
             return
+
         method = getattr(endpoint_handler, "do_" + self.command, None)
         if not callable(method):
             if self.command == "OPTIONS":
@@ -70,16 +123,30 @@ class handler(BaseHTTPRequestHandler):
             else:
                 self._json_response(405, {"error": "Method not allowed."})
             return
+
         self.path = original_path
         method(self)
 
-    def do_GET(self): self._dispatch()
-    def do_POST(self): self._dispatch()
-    def do_PUT(self): self._dispatch()
-    def do_PATCH(self): self._dispatch()
-    def do_DELETE(self): self._dispatch()
-    def do_OPTIONS(self): self._dispatch()
-    def do_HEAD(self): self._dispatch()
+    def do_GET(self):
+        self._dispatch()
+
+    def do_POST(self):
+        self._dispatch()
+
+    def do_PUT(self):
+        self._dispatch()
+
+    def do_PATCH(self):
+        self._dispatch()
+
+    def do_DELETE(self):
+        self._dispatch()
+
+    def do_OPTIONS(self):
+        self._dispatch()
+
+    def do_HEAD(self):
+        self._dispatch()
 
     def log_message(self, *_args):
         return
