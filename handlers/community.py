@@ -326,10 +326,9 @@ class handler(BaseHTTPRequestHandler):
                     raise ValueError("A valid user_id is required.")
                 profile_query = urllib.parse.urlencode({"id": "eq." + target_id, "select": "id,full_name", "limit": "1"})
                 profile_rows = _supabase("GET", "/rest/v1/profiles?" + profile_query)
-                profile = profile_rows[0] if isinstance(profile_rows, list) and profile_rows else None
-                if not profile:
-                    _send(self, 404, {"error": "Member profile not found."})
-                    return
+                # Counts belong to the authenticated user/follow relationships. A missing
+                # optional public profile row must not prevent the counts from loading.
+                profile = profile_rows[0] if isinstance(profile_rows, list) and profile_rows else {}
                 posts_query = urllib.parse.urlencode({"user_id": "eq." + target_id, "status": "eq.published", "select": "id,user_id,body,created_at", "order": "created_at.desc", "limit": str(FEED_LIMIT)})
                 authored_posts = _supabase("GET", "/rest/v1/community_posts?" + posts_query)
                 authored_posts = authored_posts if isinstance(authored_posts, list) else []
