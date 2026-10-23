@@ -324,30 +324,46 @@ class handler(BaseHTTPRequestHandler):
                 target_id = ((query_args.get("user_id") or [""])[0].strip() or str(user["id"]))
                 if not target_id or len(target_id) > 64:
                     raise ValueError("A valid user_id is required.")
-                profile_query = urllib.parse.urlencode({"id": "eq." + target_id, "select": "id,full_name", "limit": "1"})
-                profile_rows = _supabase("GET", "/rest/v1/profiles?" + profile_query)
-                # Counts belong to the authenticated user/follow relationships. A missing
-                # optional public profile row must not prevent the counts from loading.
-                profile = profile_rows[0] if isinstance(profile_rows, list) and profile_rows else {}
-                posts_query = urllib.parse.urlencode({"user_id": "eq." + target_id, "status": "eq.published", "select": "id,user_id,body,created_at", "order": "created_at.desc", "limit": str(FEED_LIMIT)})
-                authored_posts = _supabase("GET", "/rest/v1/community_posts?" + posts_query)
-                authored_posts = authored_posts if isinstance(authored_posts, list) else []
+
+                # The follow table is the source of truth for these two counts.
+                # Query it first; optional profile/post/badge lookups must not block counts.
                 rel_query = urllib.parse.urlencode({
                     "or": "(follower_id.eq.{target_id},following_id.eq.{target_id})",
                     "select": "follower_id,following_id",
                 })
                 relations = _supabase("GET", "/rest/v1/community_follows?" + rel_query)
-                relations = relations if isinstance(relations, list) else []
+                if not isinstance(relations, list):
+                    raise RuntimeError("Community follow query returned an unexpected response.")
                 followers = sum(1 for r in relations if str(r.get("following_id")) == target_id)
                 following = sum(1 for r in relations if str(r.get("follower_id")) == target_id)
                 is_following = any(str(r.get("follower_id")) == str(user["id"]) and str(r.get("following_id")) == target_id for r in relations)
-                if target_id == str(user["id"]) and is_owner_user(user):
-                    _award_verified(target_id, "owner")
-                verified = _verified_rows([target_id])
-                if target_id not in verified and followers >= 500 and _has_active_subscription(target_id):
-                    _award_verified(target_id, "500_followers")
+
+                profile = {}
+                authored_posts = []
+                badge = {}
+                try:
+                    profile_query = urllib.parse.urlencode({"id": "eq." + target_id, "select": "id,full_name", "limit": "1"})
+                    profile_rows = _supabase("GET", "/rest/v1/profiles?" + profile_query)
+                    profile = profile_rows[0] if isinstance(profile_rows, list) and profile_rows else {}
+                except Exception as exc:
+                    print("community optional profile lookup failed; type={}; error={!r}".format(type(exc).__name__, str(exc)))
+                try:
+                    posts_query = urllib.parse.urlencode({"user_id": "eq." + target_id, "status": "eq.published", "select": "id,user_id,body,created_at", "order": "created_at.desc", "limit": str(FEED_LIMIT)})
+                    authored_posts = _supabase("GET", "/rest/v1/community_posts?" + posts_query)
+                    authored_posts = authored_posts if isinstance(authored_posts, list) else []
+                except Exception as exc:
+                    print("community optional posts lookup failed; type={}; error={!r}".format(type(exc).__name__, str(exc)))
+                try:
+                    if target_id == str(user["id"]) and is_owner_user(user):
+                        _award_verified(target_id, "owner")
                     verified = _verified_rows([target_id])
-                badge = verified.get(target_id, {})
+                    if target_id not in verified and followers >= 500 and _has_active_subscription(target_id):
+                        _award_verified(target_id, "500_followers")
+                        verified = _verified_rows([target_id])
+                    badge = verified.get(target_id, {})
+                except Exception as exc:
+                    print("community optional badge lookup failed; type={}; error={!r}".format(type(exc).__name__, str(exc)))
+
                 _send(self, 200, {"profile": {"id": target_id, "full_name": str(profile.get("full_name") or "LM Analyzer member"), "followers": followers, "following": following, "posts_count": len(authored_posts), "is_following": is_following, "is_self": target_id == str(user["id"]), "is_verified": bool(badge), "verification_reason": str(badge.get("reason", ""))}, "posts": authored_posts})
                 return
             if action == "members":
@@ -405,10 +421,23 @@ class handler(BaseHTTPRequestHandler):
             _send(self, 200, {"posts": rows, "user_id": str(user["id"]), "can_post": can_post})
         except ValueError as exc:
             _send(self, 401, {"error": str(exc)})
-        except RuntimeError:
-            _send(self, 503, {"error": "Community is temporarily unavailable."})
-        except Exception:
-            _send(self, 500, {"error": "Could not load community posts."})
+        except RuntimeError as exc:
+            # Log only the sanitized database/API status; never log request headers or tokens.
+            print("community GET failed; action={!r}; error={!r}".format(action if "action" in locals() else "", str(exc)))
+            if "action" in locals() and action in ("profile", "members"):
+                safe_detail = str(exc)
+                if "HTTP " in safe_detail and len(safe_detail) < 120 and "\n" not in safe_detail:
+                    message = "Community follow data is temporarily unavailable (" + safe_detail + ")."
+                else:
+                    message = "Community follow data is temporarily unavailable. Please retry shortly."
+            else:
+                message = "Community is temporarily unavailable."
+            _send(self, 503, {"error": message})
+        except Exception as exc:
+            # Avoid logging tokens, request bodies, or private post content.
+            print("community GET unexpected failure; action={!r}; type={}; error={!r}".format(action if "action" in locals() else "", type(exc).__name__, str(exc)))
+            message = "Community profile could not be loaded. Check the Vercel function log for the sanitized error." if "action" in locals() and action in ("profile", "members") else "Could not load community posts."
+            _send(self, 500, {"error": message})
 
     def do_POST(self):
         try:
