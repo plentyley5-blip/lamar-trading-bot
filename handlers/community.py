@@ -80,8 +80,23 @@ def _supabase(method, path, payload=None, prefer=None):
                 return None
             return json.loads(raw)
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        # Keep backend/service-role details out of public responses and logs.
+        # Log only the upstream database error fields. Never log request headers,
+        # API keys, bearer tokens, or user-generated post content.
+        raw_detail = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed_detail = json.loads(raw_detail)
+        except (TypeError, ValueError):
+            parsed_detail = {}
+        if isinstance(parsed_detail, dict):
+            db_code = str(parsed_detail.get("code", ""))[:40]
+            db_message = str(parsed_detail.get("message", ""))[:300]
+            db_details = str(parsed_detail.get("details", ""))[:300]
+            db_hint = str(parsed_detail.get("hint", ""))[:200]
+        else:
+            db_code = db_message = db_details = db_hint = ""
+        print("community database HTTP error; status={}; code={!r}; message={!r}; details={!r}; hint={!r}".format(
+            exc.code, db_code, db_message, db_details, db_hint
+        ))
         raise RuntimeError("Community database request failed (HTTP {}).".format(exc.code)) from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise RuntimeError("Community database is temporarily unavailable.") from exc
@@ -327,16 +342,29 @@ class handler(BaseHTTPRequestHandler):
 
                 # The follow table is the source of truth for these two counts.
                 # Query it first; optional profile/post/badge lookups must not block counts.
-                rel_query = urllib.parse.urlencode({
-                    "or": "(follower_id.eq.{target_id},following_id.eq.{target_id})",
+                # Use two simple filters rather than a PostgREST `or` expression.
+                # This avoids filter-parser edge cases and counts each direction directly.
+                follower_query = urllib.parse.urlencode({
+                    "following_id": "eq." + target_id,
                     "select": "follower_id,following_id",
+                    "limit": "1000",
                 })
-                relations = _supabase("GET", "/rest/v1/community_follows?" + rel_query)
-                if not isinstance(relations, list):
+                following_query = urllib.parse.urlencode({
+                    "follower_id": "eq." + target_id,
+                    "select": "follower_id,following_id",
+                    "limit": "1000",
+                })
+                follower_rows = _supabase("GET", "/rest/v1/community_follows?" + follower_query)
+                following_rows = _supabase("GET", "/rest/v1/community_follows?" + following_query)
+                if not isinstance(follower_rows, list) or not isinstance(following_rows, list):
                     raise RuntimeError("Community follow query returned an unexpected response.")
-                followers = sum(1 for r in relations if str(r.get("following_id")) == target_id)
-                following = sum(1 for r in relations if str(r.get("follower_id")) == target_id)
-                is_following = any(str(r.get("follower_id")) == str(user["id"]) and str(r.get("following_id")) == target_id for r in relations)
+                followers = len(follower_rows)
+                following = len(following_rows)
+                is_following = any(
+                    str(row.get("follower_id")) == str(user["id"])
+                    and str(row.get("following_id")) == target_id
+                    for row in follower_rows
+                )
 
                 profile = {}
                 authored_posts = []
