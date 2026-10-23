@@ -43,7 +43,7 @@ class handler(BaseHTTPRequestHandler):
             if sent > 0:
                 _send(self, 200, {"success": True, "sent": sent, "failed": failed, "message": "Firebase accepted the push request."})
             elif failed > 0:
-                _send(self, 502, {"success": False, "sent": 0, "failed": failed, "error": "Firebase rejected all registered device tokens. Reopen the app while signed in to refresh registration, then check the Firebase service account and device token status."})
+                _send(self, 502, {"success": False, "sent": 0, "failed": failed, "failure_types": result.get("failure_types", {}), "error": "Firebase rejected all registered device tokens. The failure_types field identifies the rejection class without exposing device tokens or credentials."})
             else:
                 _send(self, 200, {"success": False, "sent": 0, "failed": 0, "message": "No active registered device token was found for this account. Open LM Analyzer on the phone while signed in, allow notifications, wait a few seconds, then retry."})
         except Exception as exc:
