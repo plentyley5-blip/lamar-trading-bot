@@ -93,6 +93,36 @@ def _supabase(method, path, payload=None, prefer=None):
         raise RuntimeError("Community database is temporarily unavailable.") from exc
 
 
+def _follow_rows_for_ids(ids):
+    """Fetch follow edges with simple PostgREST filters, avoiding fragile OR expressions."""
+    clean_ids = list(dict.fromkeys(str(value).strip() for value in ids if str(value).strip()))
+    if not clean_ids:
+        return []
+    in_values = ",".join(clean_ids)
+    found = {}
+    for column in ("follower_id", "following_id"):
+        params = urllib.parse.urlencode({column: "in.({})".format(in_values), "select": "follower_id,following_id", "limit": "5000"})
+        rows = _supabase("GET", "/rest/v1/community_follows?" + params)
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict):
+                    found[(str(row.get("follower_id", "")), str(row.get("following_id", "")))] = row
+    return list(found.values())
+
+
+def _follow_rows_for_user(user_id):
+    """Fetch incoming and outgoing follows separately; avoid PostgREST OR filters."""
+    found = {}
+    for column in ("follower_id", "following_id"):
+        params = urllib.parse.urlencode({column: "eq." + str(user_id), "select": "follower_id,following_id", "limit": "5000"})
+        rows = _supabase("GET", "/rest/v1/community_follows?" + params)
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict):
+                    found[(str(row.get("follower_id", "")), str(row.get("following_id", "")))] = row
+    return list(found.values())
+
+
 def _authenticate(handler):
     token = extract_bearer_token(handler)
     user = verify_access_token(token)
@@ -145,12 +175,7 @@ def _attach_member_profiles(member_ids, viewer_id=""):
         for row in profile_rows if isinstance(row, dict)
     }
 
-    relation_query = urllib.parse.urlencode({
-        "or": "(follower_id.in.({ids}),following_id.in.({ids}))".format(ids=in_values),
-        "select": "follower_id,following_id",
-    })
-    relation_rows = _supabase("GET", "/rest/v1/community_follows?" + relation_query)
-    relation_rows = relation_rows if isinstance(relation_rows, list) else []
+    relation_rows = _follow_rows_for_ids(ids)
     follower_counts, following_counts = {}, {}
     for relation in relation_rows:
         follower = str(relation.get("follower_id", ""))
@@ -210,12 +235,7 @@ def _attach_author_profiles(posts, viewer_id=""):
         for row in profiles if isinstance(row, dict)
     } if isinstance(profiles, list) else {}
     # Read real follow rows once for the authors shown in this feed.
-    follow_query = urllib.parse.urlencode({
-        "or": "(follower_id.in.({ids}),following_id.in.({ids}))".format(ids=in_values),
-        "select": "follower_id,following_id",
-    })
-    follow_rows = _supabase("GET", "/rest/v1/community_follows?" + follow_query)
-    follow_rows = follow_rows if isinstance(follow_rows, list) else []
+    follow_rows = _follow_rows_for_ids(ids)
     follower_counts = {}
     following_counts = {}
     for relation in follow_rows:
@@ -333,13 +353,7 @@ class handler(BaseHTTPRequestHandler):
 
                 # The follow table is the source of truth for these two counts.
                 # Query it first; optional profile/post/badge lookups must not block counts.
-                rel_query = urllib.parse.urlencode({
-                    "or": "(follower_id.eq.{target_id},following_id.eq.{target_id})",
-                    "select": "follower_id,following_id",
-                })
-                relations = _supabase("GET", "/rest/v1/community_follows?" + rel_query)
-                if not isinstance(relations, list):
-                    raise RuntimeError("Community follow query returned an unexpected response.")
+                relations = _follow_rows_for_user(target_id)
                 followers = sum(1 for r in relations if str(r.get("following_id")) == target_id)
                 following = sum(1 for r in relations if str(r.get("follower_id")) == target_id)
                 is_following = any(str(r.get("follower_id")) == str(user["id"]) and str(r.get("following_id")) == target_id for r in relations)
@@ -382,8 +396,7 @@ class handler(BaseHTTPRequestHandler):
                 column = "following_id" if direction == "followers" else "follower_id"
                 params = urllib.parse.urlencode({
                     column: "eq." + target_id,
-                    "select": "follower_id,following_id,created_at",
-                    "order": "created_at.desc",
+                    "select": "follower_id,following_id",
                     "limit": "1000",
                 })
                 relations = _supabase("GET", "/rest/v1/community_follows?" + params)
