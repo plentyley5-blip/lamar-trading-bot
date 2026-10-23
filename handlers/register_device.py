@@ -1,5 +1,6 @@
 
 import json
+import logging
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -10,6 +11,11 @@ from api.user_security import (
     get_supabase_url,
     verify_access_token,
 )
+
+logger = logging.getLogger(__name__)
+
+MAX_BODY_BYTES = 16384
+MAX_TOKEN_LENGTH = 4096
 
 
 def respond(handler, status, payload):
@@ -26,11 +32,18 @@ def respond(handler, status, payload):
     )
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
-    handler.wfile.write(body)
+
+    try:
+        handler.wfile.write(body)
+    except (BrokenPipeError, ConnectionResetError):
+        logger.warning("Client disconnected before receiving the response.")
 
 
 def authenticated_user_id(handler):
-    authorization = handler.headers.get("Authorization", "")
+    authorization = str(
+        handler.headers.get("Authorization", "")
+    ).strip()
+
     parts = authorization.split(None, 1)
 
     if len(parts) != 2 or parts[0].lower() != "bearer":
@@ -46,12 +59,19 @@ def authenticated_user_id(handler):
 
 
 def read_body(handler):
-    length = int(handler.headers.get("Content-Length", "0"))
+    try:
+        length = int(handler.headers.get("Content-Length", "0"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid request length.") from exc
 
-    if length <= 0 or length > 16384:
+    if length <= 0 or length > MAX_BODY_BYTES:
         raise ValueError("Invalid request body.")
 
-    data = json.loads(handler.rfile.read(length).decode("utf-8"))
+    try:
+        raw = handler.rfile.read(length).decode("utf-8")
+        data = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid JSON body.") from exc
 
     if not isinstance(data, dict):
         raise ValueError("Invalid JSON body.")
@@ -59,17 +79,23 @@ def read_body(handler):
     return data
 
 
-def save_device(user_id, token):
-    base_url = get_supabase_url().rstrip("/")
-    service_key = get_supabase_service_key()
+def save_device(user_id, token, platform):
+    base_url = get_supabase_url().strip().rstrip("/")
+    service_key = get_supabase_service_key().strip()
 
-    query = urllib.parse.urlencode({"on_conflict": "device_token"})
+    if not base_url or not service_key:
+        raise RuntimeError("Supabase configuration is incomplete.")
+
+    query = urllib.parse.urlencode({
+        "on_conflict": "device_token"
+    })
+
     url = base_url + "/rest/v1/device_tokens?" + query
 
     payload = json.dumps({
         "user_id": user_id,
         "device_token": token,
-        "platform": "android",
+        "platform": platform,
         "active": True,
     }).encode("utf-8")
 
@@ -86,60 +112,113 @@ def save_device(user_id, token):
         },
     )
 
-    with urllib.request.urlopen(request, timeout=15) as response:
-        return response.status
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            response.read()
+            return response.status
+
+    except urllib.error.HTTPError as exc:
+        # Record the database error, but never log the submitted token
+        # or the Supabase service-role key.
+        detail = exc.read().decode("utf-8", errors="replace")
+
+        logger.error(
+            "Device registration Supabase HTTP error: status=%s detail=%s",
+            exc.code,
+            detail[:1000],
+        )
+
+        raise
+
+    except (urllib.error.URLError, TimeoutError) as exc:
+        logger.error(
+            "Device registration could not reach Supabase: %s",
+            type(exc).__name__,
+        )
+        raise
 
 
 class handler(BaseHTTPRequestHandler):
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header(
             "Access-Control-Allow-Headers", "Content-Type, Authorization"
         )
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header(
+            "Access-Control-Allow-Methods", "POST, OPTIONS"
+        )
         self.end_headers()
 
     def do_POST(self):
         try:
             user_id = authenticated_user_id(self)
             data = read_body(self)
+
             token = str(
                 data.get("device_token") or data.get("token") or ""
             ).strip()
 
-            if not token or len(token) > 4096:
-                respond(self, 400, {"error": "Invalid device token."})
+            if not token or len(token) > MAX_TOKEN_LENGTH:
+                respond(self, 400, {
+                    "error": "Invalid device token."
+                })
                 return
 
-            save_device(user_id, token)
+            platform = str(data.get("platform") or "android").strip().lower()
+
+            if platform not in {"android", "ios", "web"}:
+                respond(self, 400, {
+                    "error": "Unsupported device platform."
+                })
+                return
+
+            status = save_device(user_id, token, platform)
+
+            logger.info(
+                "Device token registered successfully for an authenticated user."
+            )
+
             respond(self, 200, {
                 "ok": True,
                 "message": "Device registered.",
+                "database_status": status,
             })
 
         except ValueError as exc:
-            respond(self, 401, {"error": str(exc)})
-
-        except urllib.error.HTTPError as exc:
-            try:
-                exc.read()
-            except Exception:
-                pass
-            respond(self, 502, {
-                "error": "Device storage rejected the registration."
+            respond(self, 401, {
+                "error": str(exc)
             })
 
-        except Exception:
+        except urllib.error.HTTPError as exc:
+            respond(self, 502, {
+                "error": "Device storage rejected the registration.",
+                "status": exc.code,
+            })
+
+        except Exception as exc:
+            logger.exception(
+                "Device registration failed (%s).",
+                type(exc).__name__,
+            )
+
             respond(self, 500, {
-                "error": "Device registration failed."
+                "error": "Device registration failed.",
+                "reason": type(exc).__name__,
             })
 
     def do_GET(self):
-        respond(self, 405, {"error": "Method not allowed."})
+        respond(self, 405, {
+            "error": "Method not allowed."
+        })
 
     def do_PUT(self):
-        respond(self, 405, {"error": "Method not allowed."})
+        respond(self, 405, {
+            "error": "Method not allowed."
+        })
 
     def do_DELETE(self):
-        respond(self, 405, {"error": "Method not allowed."})
+        respond(self, 405, {
+            "error": "Method not allowed."
+        })
