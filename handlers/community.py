@@ -122,6 +122,64 @@ def _verified_rows(user_ids):
 def _award_verified(user_id, reason):
     _supabase("POST", "/rest/v1/community_verified_users", {"user_id": user_id, "reason": reason}, prefer="resolution=ignore-duplicates,return=minimal")
 
+def _attach_member_profiles(member_ids, viewer_id=""):
+    """Return real public profile data and server-derived follow/badge state."""
+    ids = list(dict.fromkeys(str(value).strip() for value in member_ids if value and str(value).strip()))
+    if not ids:
+        return []
+    in_values = ",".join(ids)
+    profile_query = urllib.parse.urlencode({
+        "id": "in.({})".format(in_values),
+        "select": "id,full_name",
+    })
+    profile_rows = _supabase("GET", "/rest/v1/profiles?" + profile_query)
+    profile_rows = profile_rows if isinstance(profile_rows, list) else []
+    profiles = {
+        str(row.get("id")): str(row.get("full_name") or "LM Analyzer member").strip()
+        for row in profile_rows if isinstance(row, dict)
+    }
+
+    relation_query = urllib.parse.urlencode({
+        "or": "(follower_id.in.({ids}),following_id.in.({ids}))".format(ids=in_values),
+        "select": "follower_id,following_id",
+    })
+    relation_rows = _supabase("GET", "/rest/v1/community_follows?" + relation_query)
+    relation_rows = relation_rows if isinstance(relation_rows, list) else []
+    follower_counts, following_counts = {}, {}
+    for relation in relation_rows:
+        follower = str(relation.get("follower_id", ""))
+        following = str(relation.get("following_id", ""))
+        if following:
+            follower_counts[following] = follower_counts.get(following, 0) + 1
+        if follower:
+            following_counts[follower] = following_counts.get(follower, 0) + 1
+
+    verified = _verified_rows(ids)
+    for member_id in ids:
+        if member_id not in verified and follower_counts.get(member_id, 0) >= 500 and _has_active_subscription(member_id):
+            _award_verified(member_id, "500_followers")
+    verified = _verified_rows(ids)
+    viewer_follows = {
+        str(relation.get("following_id", "")) for relation in relation_rows
+        if str(relation.get("follower_id", "")) == str(viewer_id)
+    }
+    result = []
+    for member_id in ids:
+        if member_id not in profiles:
+            continue
+        result.append({
+            "user_id": member_id,
+            "full_name": profiles.get(member_id) or "LM Analyzer member",
+            "is_verified": member_id in verified,
+            "verification_reason": str(verified.get(member_id, {}).get("reason", "")),
+            "follower_count": follower_counts.get(member_id, 0),
+            "following_count": following_counts.get(member_id, 0),
+            "is_following": member_id in viewer_follows and member_id != str(viewer_id),
+            "is_self": member_id == str(viewer_id),
+        })
+    return result
+
+
 def _attach_author_profiles(posts, viewer_id=""):
     """Attach public names and real follow statistics to community posts."""
     if not isinstance(posts, list) or not posts:
@@ -263,7 +321,7 @@ class handler(BaseHTTPRequestHandler):
             query_args = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             action = (query_args.get("action") or [""])[0].strip().lower()
             if action == "profile":
-                target_id = (query_args.get("user_id") or [""])[0].strip()
+                target_id = ((query_args.get("user_id") or [""])[0].strip() or str(user["id"]))
                 if not target_id or len(target_id) > 64:
                     raise ValueError("A valid user_id is required.")
                 profile_query = urllib.parse.urlencode({"id": "eq." + target_id, "select": "id,full_name", "limit": "1"})
@@ -284,7 +342,38 @@ class handler(BaseHTTPRequestHandler):
                 followers = sum(1 for r in relations if str(r.get("following_id")) == target_id)
                 following = sum(1 for r in relations if str(r.get("follower_id")) == target_id)
                 is_following = any(str(r.get("follower_id")) == str(user["id"]) and str(r.get("following_id")) == target_id for r in relations)
-                _send(self, 200, {"profile": {"id": target_id, "full_name": str(profile.get("full_name") or "LM Analyzer member"), "followers": followers, "following": following, "posts_count": len(authored_posts), "is_following": is_following, "is_self": target_id == str(user["id"])}, "posts": authored_posts})
+                if target_id == str(user["id"]) and is_owner_user(user):
+                    _award_verified(target_id, "owner")
+                verified = _verified_rows([target_id])
+                if target_id not in verified and followers >= 500 and _has_active_subscription(target_id):
+                    _award_verified(target_id, "500_followers")
+                    verified = _verified_rows([target_id])
+                badge = verified.get(target_id, {})
+                _send(self, 200, {"profile": {"id": target_id, "full_name": str(profile.get("full_name") or "LM Analyzer member"), "followers": followers, "following": following, "posts_count": len(authored_posts), "is_following": is_following, "is_self": target_id == str(user["id"]), "is_verified": bool(badge), "verification_reason": str(badge.get("reason", ""))}, "posts": authored_posts})
+                return
+            if action == "members":
+                direction = (query_args.get("direction") or [""])[0].strip().lower()
+                if direction not in ("followers", "following"):
+                    raise ValueError("A valid direction (followers or following) is required.")
+                target_id = ((query_args.get("user_id") or [""])[0].strip() or str(user["id"]))
+                if not target_id or len(target_id) > 64:
+                    raise ValueError("A valid user_id is required.")
+                column = "following_id" if direction == "followers" else "follower_id"
+                params = urllib.parse.urlencode({
+                    column: "eq." + target_id,
+                    "select": "follower_id,following_id,created_at",
+                    "order": "created_at.desc",
+                    "limit": "1000",
+                })
+                relations = _supabase("GET", "/rest/v1/community_follows?" + params)
+                relations = relations if isinstance(relations, list) else []
+                member_ids = []
+                for relation in relations:
+                    candidate = str(relation.get("follower_id" if direction == "followers" else "following_id", ""))
+                    if candidate and candidate != target_id and candidate not in member_ids:
+                        member_ids.append(candidate)
+                members = _attach_member_profiles(member_ids, str(user["id"]))
+                _send(self, 200, {"members": members, "direction": direction, "user_id": target_id, "count": len(members), "limit": 1000})
                 return
             if action == "comments":
                 post_id = (query_args.get("post_id") or [""])[0].strip()
