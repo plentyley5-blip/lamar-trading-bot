@@ -75,6 +75,7 @@ def notify_user_ids(user_ids, title, body, data=None):
     rows = _supabase_request("GET", "/rest/v1/device_tokens?" + query)
     rows = rows if isinstance(rows, list) else []
     sent = failed = 0
+    failures = {}
     extra_data = {str(k): str(v) for k, v in (data or {}).items() if v is not None}
     for row in rows:
         token = str(row.get("device_token", "")).strip()
@@ -91,11 +92,14 @@ def notify_user_ids(user_ids, title, body, data=None):
             sent += 1
         except Exception as exc:
             failed += 1
-            error_name = type(exc).__name__.lower()
+            # Return only a safe Firebase error class, never the device token or credentials.
+            error_type = type(exc).__name__
+            failures[error_type] = failures.get(error_type, 0) + 1
+            error_name = error_type.lower()
             error_text = str(exc).lower()
             if "unregistered" in error_name or "unregistered" in error_text or "registration-token-not-registered" in error_text:
                 try:
                     _deactivate_token(token)
                 except Exception:
                     pass
-    return {"sent": sent, "failed": failed}
+    return {"sent": sent, "failed": failed, "failure_types": failures}
