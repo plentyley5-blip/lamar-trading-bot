@@ -1,4 +1,3 @@
-
 import base64
 import json
 import os
@@ -39,7 +38,7 @@ Return one directional decision:
 BUY, SELL, or NO TRADE.
 
 Determine entry readiness independently:
-READY, WAITING, INVALID, or NO_SETUP.
+READY, WAITING, LATE ENTRY, INVALID, or NO_SETUP.
 
 Supported instrument categories include:
 - Forex majors, crosses, and exotic pairs
@@ -70,6 +69,11 @@ A SELL is allowed when the overall evidence is sufficiently bearish.
 
 When direction is reasonably clear but price has not reached a
 suitable entry, preserve the directional signal and use WAITING.
+
+When the original entry opportunity has already passed, preserve
+the directional signal if it remains justified and use LATE ENTRY.
+Do not confuse a valid directional idea with an entry that is still
+available now.
 
 Use NO TRADE only when evidence is genuinely too unclear, too weak,
 materially conflicting, or chart quality prevents responsible analysis.
@@ -157,16 +161,66 @@ DIRECTION AND ENTRY READINESS
 
 Determine independently:
 1. Directional bias: BUY, SELL, or NO TRADE.
-2. Entry readiness: READY, WAITING, INVALID, or NO_SETUP.
+2. Entry readiness: READY, WAITING, LATE ENTRY, INVALID, or NO_SETUP.
 3. Order type: MARKET, BUY_LIMIT, SELL_LIMIT, WAIT, or NONE.
 
 A clear direction does not automatically justify immediate entry.
 
-When direction is justified but entry timing is not ready:
-- order_type = WAIT
-- setup_status = WAITING
+READY:
+The setup is valid and the entry opportunity is available now.
+The visible chart evidence supports the proposed entry at the current
+stage of the setup. Required confirmation must be present when the
+selected strategy requires confirmation.
 
-Explain the entry zone and the condition required before entry.
+WAITING:
+The setup is developing, but the planned entry trigger or required
+confirmation has not happened yet. Specify what must happen next.
+
+LATE ENTRY:
+The original planned entry zone was reached and price subsequently
+moved away enough that the original entry opportunity has passed.
+The directional idea may remain technically valid, but entering now
+would mean chasing the original move.
+
+When this condition is established:
+- Keep signal as BUY or SELL if that direction remains justified.
+- Set setup_status = LATE ENTRY.
+- Set order_type = WAIT.
+- Explain that the original entry opportunity has passed.
+- Warn the user not to chase the move.
+- Do not automatically create a new entry price.
+- Do not imply that the trade will continue in the original direction.
+- Keep any original planned levels clearly identified as planned
+  levels, not as a guaranteed available entry.
+
+IMPORTANT DISTINCTION:
+A touch of the entry zone alone does not prove that the opportunity
+has passed. A valid retest or required confirmation may still be
+pending. In that case, use WAITING if the setup remains valid.
+
+Use LATE ENTRY only when the chart evidence supports both:
+1. Price reached the relevant original entry zone.
+2. Price subsequently moved away enough that the original entry
+   opportunity is no longer available under the proposed entry plan.
+
+Use the screenshots' visible candles and price structure to evaluate
+this. Do not invent unseen historical movement or claim that a zone
+was touched when the screenshots cannot establish it.
+
+If the available screenshots do not establish whether the zone was
+previously reached and price moved away, do not confidently label it
+LATE ENTRY. Explain the uncertainty and use WAITING when the setup
+remains valid but readiness cannot be established.
+
+INVALID:
+The considered setup's defining conditions have failed or its
+invalidation level has been breached. Do not present it as an
+actionable setup.
+
+NO_SETUP:
+There is no sufficiently justified directional setup.
+
+A WAITING or LATE ENTRY setup is not an executed trade.
 
 ==================================================
 BUY LIMIT
@@ -179,6 +233,7 @@ Consider BUY_LIMIT when:
   fair value gap supports the entry.
 - The stop loss can be placed beyond logical invalidation.
 - Reasonable profit objectives are identifiable.
+- The original entry opportunity has not already passed.
 
 Never propose a BUY_LIMIT above the observed market price.
 
@@ -193,6 +248,7 @@ Consider SELL_LIMIT when:
   fair value gap supports the entry.
 - The stop loss can be placed beyond logical invalidation.
 - Reasonable profit objectives are identifiable.
+- The original entry opportunity has not already passed.
 
 Never propose a SELL_LIMIT below the observed market price.
 
@@ -202,6 +258,9 @@ MARKET ENTRY
 
 Use MARKET only when an immediate entry is justified by the chart
 and appropriate for the selected trade focus.
+
+Do not use MARKET for a setup classified as WAITING, LATE ENTRY,
+INVALID, or NO_SETUP.
 
 Do not invent an exact market price when the chart does not show it
 clearly.
@@ -225,6 +284,9 @@ Use a price zone only when it can reasonably be inferred from
 visible chart structure.
 
 For WAITING setups, entry may describe a planned area.
+For LATE ENTRY setups, any entry level retained must be identified
+as the original planned entry, not a fresh instruction to enter now.
+
 If no reliable numerical price can be established, say so clearly.
 
 ==================================================
@@ -242,17 +304,27 @@ Do not invent targets that contradict visible structure.
 Keep risk/reward consistent with the proposed entry, stop loss,
 and targets. If reliable calculation is impossible, state that.
 
+For LATE ENTRY, do not present the original entry, stop loss,
+take profits, or risk/reward as a recommendation to enter late.
+Explain that the original plan may no longer be suitable at the
+current price.
+
 ==================================================
 SETUP STATUS
 ==================================================
 
 READY:
 An immediate entry is justified, or a defensible limit order can
-be proposed.
+be proposed and the original entry opportunity remains available.
 
 WAITING:
 Direction is reasonably clear, but price or confirmation conditions
 are not yet suitable for entry.
+
+LATE ENTRY:
+The original entry zone was reached and price moved away enough that
+the original opportunity has passed. The direction may remain valid,
+but the user should not chase the original move.
 
 INVALID:
 The considered setup has been invalidated by visible evidence.
@@ -260,7 +332,7 @@ The considered setup has been invalidated by visible evidence.
 NO_SETUP:
 There is no sufficiently justified directional setup.
 
-A WAITING setup is not an executed trade.
+A WAITING or LATE ENTRY setup is not an executed trade.
 
 ==================================================
 NO TRADE
@@ -291,6 +363,9 @@ say so.
 
 Confidence measures confidence in the chart analysis, not a
 guaranteed win rate or probability of profit.
+
+For LATE ENTRY, confidence describes the chart's directional evidence,
+not whether a late entry is advisable.
 
 ==================================================
 OUTPUT
@@ -336,6 +411,7 @@ OUTPUT_SCHEMA = {
             "enum": [
                 "READY",
                 "WAITING",
+                "LATE ENTRY",
                 "INVALID",
                 "NO_SETUP",
             ],
@@ -712,6 +788,16 @@ def create_background_response(
         "consider a limit order only on the correct side of market.\n"
         "If direction is clear but entry is not ready, use "
         "order_type WAIT and setup_status WAITING.\n"
+        "If the original entry zone was reached and price moved away "
+        "so the opportunity has passed, use setup_status LATE ENTRY "
+        "and order_type WAIT. Preserve BUY or SELL only if the "
+        "directional evidence still supports it. Warn against chasing "
+        "and do not invent a replacement entry price.\n"
+        "Do not call a zone touch LATE ENTRY if a valid retest or "
+        "required confirmation is still pending. Use WAITING instead.\n"
+        "Do not infer unseen historical movement. If the screenshots "
+        "cannot establish whether the entry has passed, explain "
+        "the uncertainty and avoid claiming certainty.\n"
         "Use NO TRADE when a responsible direction cannot be established.\n"
         "Do not invent prices or claim an order was executed."
     )
@@ -1015,6 +1101,7 @@ def parse_completed_response(
     allowed_setup_statuses = {
         "READY",
         "WAITING",
+        "LATE ENTRY",
         "INVALID",
         "NO_SETUP",
     }
@@ -1064,6 +1151,10 @@ def parse_completed_response(
         "warnings": _clean_string_list(result.get("warnings")),
     }
 
+    # --------------------------------------------------------
+    # NO TRADE NORMALIZATION
+    # --------------------------------------------------------
+
     if signal == "NO TRADE":
         result["order_type"] = "NONE"
         result["setup_status"] = "NO_SETUP"
@@ -1076,6 +1167,10 @@ def parse_completed_response(
         result["entry_trigger"] = ""
 
     else:
+        # ----------------------------------------------------
+        # DIRECTION / ORDER-TYPE CONSISTENCY
+        # ----------------------------------------------------
+
         if (
             result["order_type"] == "BUY_LIMIT"
             and signal != "BUY"
@@ -1098,10 +1193,87 @@ def parse_completed_response(
                 "Verify the proposed setup before entry."
             )
 
-        if result["setup_status"] == "WAITING":
+        # ----------------------------------------------------
+        # LATE ENTRY SAFETY
+        # ----------------------------------------------------
+
+        if result["setup_status"] == "LATE ENTRY":
+            # The original opportunity has passed. Do not allow
+            # a MARKET or limit order to be presented as actionable.
             result["order_type"] = "WAIT"
 
-        if result["setup_status"] == "NO_SETUP":
+            late_entry_warning = (
+                "LATE ENTRY: The original entry opportunity appears "
+                "to have passed. Do not chase the move. The directional "
+                "idea may still be valid, but continuation is not "
+                "guaranteed. Wait for a new, independently confirmed "
+                "setup rather than entering at the old level."
+            )
+
+            # Avoid repeatedly adding the same warning.
+            if not any(
+                "LATE ENTRY:" in warning.upper()
+                for warning in result["warnings"]
+            ):
+                result["warnings"].append(late_entry_warning)
+
+            if not result["explanation"]:
+                result["explanation"] = (
+                    "The original entry opportunity appears to have "
+                    "passed. The direction may remain valid, but the "
+                    "original entry should not be chased."
+                )
+
+            if not result["entry_trigger"]:
+                result["entry_trigger"] = (
+                    "Do not enter the original setup late. Wait for "
+                    "a new setup and fresh confirmation."
+                )
+
+        # ----------------------------------------------------
+        # WAITING NORMALIZATION
+        # ----------------------------------------------------
+
+        elif result["setup_status"] == "WAITING":
+            result["order_type"] = "WAIT"
+
+        # ----------------------------------------------------
+        # INVALID NORMALIZATION
+        # ----------------------------------------------------
+
+        elif result["setup_status"] == "INVALID":
             result["order_type"] = "NONE"
+
+            if not any(
+                "INVALID" in warning.upper()
+                for warning in result["warnings"]
+            ):
+                result["warnings"].append(
+                    "The setup is marked INVALID. Do not enter using "
+                    "the invalidated setup."
+                )
+
+        # ----------------------------------------------------
+        # NO SETUP NORMALIZATION
+        # ----------------------------------------------------
+
+        elif result["setup_status"] == "NO_SETUP":
+            result["order_type"] = "NONE"
+
+        # ----------------------------------------------------
+        # READY NORMALIZATION
+        # ----------------------------------------------------
+
+        elif result["setup_status"] == "READY":
+            if result["order_type"] in {"WAIT", "NONE"}:
+                # Do not silently promote an uncertain entry to
+                # a market order. Require a fresh analysis.
+                result["setup_status"] = "WAITING"
+                result["order_type"] = "WAIT"
+                result["warnings"].append(
+                    "The analysis marked the setup READY but did not "
+                    "provide an actionable order type. Entry readiness "
+                    "is uncertain; wait for clarification."
+                )
 
     return result
