@@ -194,13 +194,71 @@ def _sync_legacy_profile_count(user_id, used):
         pass
 
 
-def create_queued_job(user_id, instrument, trade_focus, higher_timeframe_image, lower_timeframe_image):
+OPTIONAL_TIMEFRAMES = ("1D", "1H", "5M", "1M")
+
+def normalize_optional_images(value):
+    """Normalize the legacy inline optional image map, if an older client sends it."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("Additional timeframe images must be an object.")
+    if len(value) > len(OPTIONAL_TIMEFRAMES):
+        raise ValueError("Too many additional timeframe images.")
+    normalized = {}
+    for raw_timeframe, image in value.items():
+        timeframe = str(raw_timeframe).strip().upper()
+        if timeframe not in OPTIONAL_TIMEFRAMES:
+            raise ValueError("Unsupported additional timeframe: " + timeframe)
+        if timeframe in normalized:
+            raise ValueError("Duplicate additional timeframe: " + timeframe)
+        normalized[timeframe] = validate_image_data_url(image, timeframe + " chart")
+    return normalized
+
+def verify_optional_upload_ids(user_id, value):
+    """Ensure every staged chart upload belongs to this user and timeframe."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("Additional timeframe upload IDs must be an object.")
+    if len(value) > len(OPTIONAL_TIMEFRAMES):
+        raise ValueError("Too many additional timeframe uploads.")
+    uid = urllib.parse.quote(str(user_id), safe="")
+    normalized = {}
+    for raw_timeframe, raw_id in value.items():
+        timeframe = str(raw_timeframe).strip().upper()
+        if timeframe not in OPTIONAL_TIMEFRAMES:
+            raise ValueError("Unsupported additional timeframe: " + timeframe)
+        if timeframe in normalized:
+            raise ValueError("Duplicate additional timeframe: " + timeframe)
+        try:
+            upload_id = str(uuid.UUID(str(raw_id).strip()))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError("The uploaded " + timeframe + " chart reference is invalid.") from exc
+        rows = supabase_request(
+            "GET",
+            "/rest/v1/analysis_chart_uploads?id=eq." + upload_id
+            + "&user_id=eq." + uid
+            + "&timeframe=eq." + urllib.parse.quote(timeframe, safe="")
+            + "&select=id,timeframe&limit=1",
+            timeout=15,
+        )
+        if not isinstance(rows, list) or not rows or str(rows[0].get("timeframe", "")).upper() != timeframe:
+            raise ValueError("The uploaded " + timeframe + " chart is missing or expired. Please select it again.")
+        normalized[timeframe] = upload_id
+    return normalized
+
+def create_queued_job(
+    user_id, instrument, trade_focus, higher_timeframe_image, lower_timeframe_image,
+    additional_timeframe_images=None, additional_timeframe_upload_ids=None,
+):
     # These fields are required by the existing Supabase schema and worker.
     # openai_response_id is NOT NULL; the worker replaces "pending" with
     # the encoded Gemini analysis after processing the queued job.
     job_id = str(uuid.uuid4())
     job_nonce = uuid.uuid4().hex
     created_at = datetime.now(timezone.utc).isoformat()
+    additional_timeframe_images = additional_timeframe_images or {}
+    additional_timeframe_upload_ids = additional_timeframe_upload_ids or {}
     payload = {
         "id": job_id,
         "job_nonce": job_nonce,
@@ -209,6 +267,8 @@ def create_queued_job(user_id, instrument, trade_focus, higher_timeframe_image, 
         "trade_focus": trade_focus,
         "higher_timeframe_image": higher_timeframe_image,
         "lower_timeframe_image": lower_timeframe_image,
+        "additional_timeframe_images": additional_timeframe_images,
+        "additional_timeframe_upload_ids": additional_timeframe_upload_ids,
         "status": "queued",
         "openai_response_id": "pending",
         "error_message": None,
@@ -227,20 +287,12 @@ def create_queued_job(user_id, instrument, trade_focus, higher_timeframe_image, 
 
 
 def _production_host():
-    """Use the stable production domain for production worker calls."""
-    target_env = os.environ.get("VERCEL_ENV", "").strip().lower()
-    if target_env == "production":
-        host = (
-            os.environ.get("VERCEL_PROJECT_PRODUCTION_URL", "").strip()
-            or os.environ.get("VERCEL_URL", "").strip()
-            or DEFAULT_PRODUCTION_HOST
-        )
-    else:
-        host = (
-            os.environ.get("VERCEL_URL", "").strip()
-            or os.environ.get("VERCEL_PROJECT_PRODUCTION_URL", "").strip()
-            or DEFAULT_PRODUCTION_HOST
-        )
+    """Resolve this deployment's host without accepting a full URL path."""
+    host = (
+        os.environ.get("VERCEL_URL", "").strip()
+        or os.environ.get("VERCEL_PROJECT_PRODUCTION_URL", "").strip()
+        or DEFAULT_PRODUCTION_HOST
+    )
     host = host.removeprefix("https://").removeprefix("http://")
     return host.split("/", 1)[0].strip()
 
@@ -327,9 +379,7 @@ def wake_analysis_worker(job_nonce, user_id, release_reserved_slot=False):
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         if exc.code in {401, 403}:
-            reason = "Worker endpoint returned HTTP {}: {}".format(
-                exc.code, detail[:350] or "empty response"
-            )
+            reason = "The analysis worker rejected its internal secret. Check ANALYSIS_WORKER_SECRET in Vercel."
         elif exc.code == 404:
             reason = "The deployed /api/analysis_worker endpoint was not found. Redeploy api/analysis_worker.py."
         else:
@@ -413,6 +463,14 @@ class handler(BaseHTTPRequestHandler):
             trade_focus = str(body.get("trade_focus", "")).strip().upper()
             higher_image = body.get("higher_timeframe_image")
             lower_image = body.get("lower_timeframe_image")
+            additional_timeframe_images = normalize_optional_images(
+                body.get("additional_timeframe_images", {})
+            )
+            additional_timeframe_upload_ids = verify_optional_upload_ids(
+                user_id, body.get("additional_timeframe_upload_ids", {})
+            )
+            if set(additional_timeframe_images).intersection(additional_timeframe_upload_ids):
+                raise ValueError("Each optional timeframe must be submitted only once.")
 
             # Use the project's existing validators and supported instrument list.
             validate_instrument(instrument)
@@ -459,6 +517,8 @@ class handler(BaseHTTPRequestHandler):
                 trade_focus=trade_focus,
                 higher_timeframe_image=higher_image,
                 lower_timeframe_image=lower_image,
+                additional_timeframe_images=additional_timeframe_images,
+                additional_timeframe_upload_ids=additional_timeframe_upload_ids,
             )
             job_token = create_job_token(job_nonce, instrument, trade_focus, user_id)
 
