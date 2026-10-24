@@ -68,7 +68,7 @@ def json_response(
 
     handler.send_header(
         "Access-Control-Allow-Headers",
-        "Content-Type, Authorization",
+        "Content-Type, Authorization, x-analysis-worker-secret",
     )
 
     handler.send_header(
@@ -360,28 +360,32 @@ class handler(BaseHTTPRequestHandler):
             # -----------------------------------------
             # WORKER SECRET
             # -----------------------------------------
-            if WORKER_SECRET:
-
-                supplied_secret = (
-                    self.headers.get(
-                        "x-analysis-worker-secret",
-                        "",
-                    ).strip()
+            if not WORKER_SECRET:
+                json_response(
+                    self,
+                    503,
+                    {
+                        "error": "worker_secret_not_configured",
+                        "message": "ANALYSIS_WORKER_SECRET is not configured on the worker function.",
+                    },
                 )
+                return
 
-                if (
-                    not supplied_secret
-                    or supplied_secret != WORKER_SECRET
-                ):
-                    json_response(
-                        self,
-                        401,
-                        {
-                            "error":
-                                "Unauthorized"
-                        },
-                    )
-                    return
+            supplied_secret = self.headers.get(
+                "x-analysis-worker-secret",
+                "",
+            ).strip()
+
+            if not supplied_secret or supplied_secret != WORKER_SECRET:
+                json_response(
+                    self,
+                    401,
+                    {
+                        "error": "invalid_worker_secret",
+                        "message": "Worker authentication failed.",
+                    },
+                )
+                return
 
             # -----------------------------------------
             # BODY
