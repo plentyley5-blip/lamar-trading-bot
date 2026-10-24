@@ -287,11 +287,16 @@ def create_queued_job(
 
 
 def _production_host():
-    """Resolve this deployment's host without accepting a full URL path."""
+    """Prefer the stable production alias over a deployment-specific URL.
+
+    VERCEL_URL can point at a protected, unique deployment hostname. The
+    stable project production URL avoids accidentally treating Vercel's own
+    401/403 deployment-protection response as a worker-secret mismatch.
+    """
     host = (
-        os.environ.get("VERCEL_URL", "").strip()
-        or os.environ.get("VERCEL_PROJECT_PRODUCTION_URL", "").strip()
+        os.environ.get("VERCEL_PROJECT_PRODUCTION_URL", "").strip()
         or DEFAULT_PRODUCTION_HOST
+        or os.environ.get("VERCEL_URL", "").strip()
     )
     host = host.removeprefix("https://").removeprefix("http://")
     return host.split("/", 1)[0].strip()
@@ -349,8 +354,15 @@ def wake_analysis_worker(job_nonce, user_id, release_reserved_slot=False):
     payload = json.dumps({"record": {"job_nonce": job_nonce}}).encode("utf-8")
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     worker_secret = os.environ.get("ANALYSIS_WORKER_SECRET", "").strip()
-    if worker_secret:
-        headers["x-analysis-worker-secret"] = worker_secret
+    if not worker_secret:
+        _mark_failed_if_still_queued(
+            job_nonce,
+            user_id,
+            "ANALYSIS_WORKER_SECRET is missing from the analysis submission function's Vercel environment. Configure it for the deployment environment and redeploy.",
+            release_reserved_slot,
+        )
+        return
+    headers["x-analysis-worker-secret"] = worker_secret
 
     request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
     try:
@@ -378,10 +390,26 @@ def wake_analysis_worker(job_nonce, user_id, release_reserved_slot=False):
 
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        if exc.code in {401, 403}:
-            reason = "The analysis worker rejected its internal secret. Check ANALYSIS_WORKER_SECRET in Vercel."
+        try:
+            error_payload = json.loads(detail) if detail else {}
+        except json.JSONDecodeError:
+            error_payload = {}
+        worker_error = str(error_payload.get("error", "")) if isinstance(error_payload, dict) else ""
+
+        if exc.code == 401 and worker_error in {"invalid_worker_secret", "Unauthorized"}:
+            reason = (
+                "The worker code rejected the internal secret. The analysis submission and worker functions are running with different or stale ANALYSIS_WORKER_SECRET configuration. "
+                "Ensure the variable has the same value for the active Vercel environment, then redeploy the latest commit so both functions refresh their environment."
+            )
+        elif exc.code in {401, 403}:
+            reason = (
+                "Vercel returned HTTP {} before the worker's JSON authentication response. This is likely deployment protection or a protected deployment URL, not a confirmed worker-secret mismatch. "
+                "The worker wake now prefers VERCEL_PROJECT_PRODUCTION_URL/the stable production alias; redeploy this file and retry. Response: {}"
+            ).format(exc.code, detail[:300])
+        elif exc.code == 503 and worker_error == "worker_secret_not_configured":
+            reason = "ANALYSIS_WORKER_SECRET is missing in the worker function's Vercel environment. Configure it for this environment and redeploy."
         elif exc.code == 404:
-            reason = "The deployed /api/analysis_worker endpoint was not found. Redeploy api/analysis_worker.py."
+            reason = "The deployed /api/analysis_worker endpoint was not found. Deploy api/analysis_worker.py from the same commit as api/analysis_submit.py."
         else:
             reason = "The analysis worker returned HTTP {}: {}".format(exc.code, detail[:500])
         _mark_failed_if_still_queued(job_nonce, user_id, reason, release_reserved_slot)
