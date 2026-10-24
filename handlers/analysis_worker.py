@@ -1,11 +1,10 @@
-
 import base64
 import json
 import os
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from http.server import BaseHTTPRequestHandler
 
 from analysis_common import (
@@ -16,80 +15,87 @@ from analysis_common import (
     validate_instrument,
 )
 
-from api.user_security import release_analysis_slot
+from api.user_security import (
+    release_analysis_slot,
+)
 
 
 SUPABASE_URL = os.environ.get(
     "SUPABASE_URL",
-    "",
+    ""
 ).strip().rstrip("/")
 
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get(
     "SUPABASE_SERVICE_ROLE_KEY",
-    "",
+    ""
 ).strip()
 
 WORKER_SECRET = os.environ.get(
     "ANALYSIS_WORKER_SECRET",
-    "",
+    ""
 ).strip()
 
-SUPABASE_TIMEOUT_SECONDS = 15
-MAX_REQUEST_BODY_BYTES = 30 * 1024 * 1024
 
-
-def log_event(event, job_nonce="", elapsed=None, detail=""):
-    parts = ["LM_ANALYZER_WORKER", event]
-
-    if job_nonce:
-        parts.append("job=" + job_nonce[:12])
-
-    if elapsed is not None:
-        parts.append("seconds=" + f"{elapsed:.2f}")
-
-    if detail:
-        parts.append(detail[:300])
-
-    print(" | ".join(parts), flush=True)
-
-
-def json_response(handler, status, payload):
+def json_response(
+    handler,
+    status,
+    payload,
+):
     body = json.dumps(
         payload,
         ensure_ascii=False,
         default=str,
     ).encode("utf-8")
 
-    handler.send_response(status)
+    handler.send_response(
+        status
+    )
+
     handler.send_header(
         "Content-Type",
         "application/json; charset=utf-8",
     )
-    handler.send_header("Cache-Control", "no-store")
-    handler.send_header("Access-Control-Allow-Origin", "*")
+
+    handler.send_header(
+        "Cache-Control",
+        "no-store",
+    )
+
+    handler.send_header(
+        "Access-Control-Allow-Origin",
+        "*",
+    )
+
     handler.send_header(
         "Access-Control-Allow-Headers",
-        "Content-Type, Authorization, X-Analysis-Worker-Secret",
+        "Content-Type, Authorization",
     )
+
     handler.send_header(
         "Access-Control-Allow-Methods",
-        "POST, GET, OPTIONS",
+        "POST, OPTIONS",
     )
-    handler.send_header("Content-Length", str(len(body)))
+
+    handler.send_header(
+        "Content-Length",
+        str(len(body)),
+    )
+
     handler.end_headers()
 
-    if status != 204:
-        handler.wfile.write(body)
+    handler.wfile.write(body)
 
 
 def supabase_request(
     method,
     path,
     payload=None,
-    timeout=SUPABASE_TIMEOUT_SECONDS,
+    timeout=30,
 ):
     if not SUPABASE_URL:
-        raise RuntimeError("SUPABASE_URL is not configured.")
+        raise RuntimeError(
+            "SUPABASE_URL is not configured."
+        )
 
     if not SUPABASE_SERVICE_ROLE_KEY:
         raise RuntimeError(
@@ -98,9 +104,13 @@ def supabase_request(
 
     headers = {
         "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": "Bearer " + SUPABASE_SERVICE_ROLE_KEY,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Authorization":
+            "Bearer "
+            + SUPABASE_SERVICE_ROLE_KEY,
+        "Content-Type":
+            "application/json",
+        "Accept":
+            "application/json",
     }
 
     data = None
@@ -123,6 +133,7 @@ def supabase_request(
             request,
             timeout=timeout,
         ) as response:
+
             raw = response.read().decode(
                 "utf-8",
                 errors="replace",
@@ -143,48 +154,62 @@ def supabase_request(
         )
 
         raise RuntimeError(
-            f"Supabase request failed ({exc.code}): {detail[:1000]}"
-        ) from exc
+            "Supabase request failed "
+            f"({exc.code}): {detail}"
+        )
 
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except urllib.error.URLError as exc:
         raise RuntimeError(
-            "Supabase connection failed: " + str(exc)
-        ) from exc
+            "Supabase connection failed: "
+            + str(exc)
+        )
 
 
 def claim_job(job_nonce):
     rows = supabase_request(
         "POST",
         "/rest/v1/rpc/claim_analysis_job",
-        {"p_job_nonce": job_nonce},
+        {
+            "p_job_nonce": job_nonce
+        },
+        timeout=30,
     )
 
-    if not isinstance(rows, list) or not rows:
+    if not isinstance(
+        rows,
+        list,
+    ) or not rows:
         return None
 
-    return rows[0]
+    nonce = urllib.parse.quote(str(job_nonce), safe="")
+    full_rows = supabase_request(
+        "GET",
+        "/rest/v1/analysis_jobs?job_nonce=eq." + nonce + "&select=*&limit=1",
+        timeout=20,
+    )
+    if not isinstance(full_rows, list) or not full_rows:
+        raise RuntimeError("The claimed analysis job could not be reloaded.")
+    return full_rows[0]
 
 
-def patch_job(job_nonce, values, only_if_processing=False):
+def patch_job(
+    job_nonce,
+    values,
+):
     encoded_nonce = urllib.parse.quote(
         job_nonce,
         safe="",
     )
 
-    path = (
-        "/rest/v1/analysis_jobs"
-        "?job_nonce=eq."
-        + encoded_nonce
-    )
-
-    # Prevent late workers from overwriting a completed or failed job.
-    if only_if_processing:
-        path += "&status=eq.processing"
-
-    return supabase_request(
+    supabase_request(
         "PATCH",
-        path,
+        (
+            "/rest/v1/analysis_jobs"
+            "?job_nonce=eq."
+            + encoded_nonce
+        ),
         values,
+        timeout=30,
     )
 
 
@@ -196,23 +221,22 @@ def encode_result(result):
     ).encode("utf-8")
 
     return (
-        base64.urlsafe_b64encode(raw)
+        base64.urlsafe_b64encode(
+            raw
+        )
         .decode("ascii")
         .rstrip("=")
     )
 
 
 def safe_release_slot(user_id):
-    if not user_id:
-        return
-
     try:
-        release_analysis_slot(user_id)
-    except Exception as exc:
-        log_event(
-            "SLOT_RELEASE_WARNING",
-            detail=str(exc),
-        )
+        if user_id:
+            release_analysis_slot(
+                user_id
+            )
+    except Exception:
+        pass
 
 
 def read_request_body(handler):
@@ -222,47 +246,128 @@ def read_request_body(handler):
     )
 
     try:
-        content_length = int(raw_length)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Invalid Content-Length.") from exc
+        content_length = int(
+            raw_length
+        )
+    except ValueError:
+        raise ValueError(
+            "Invalid Content-Length."
+        )
 
     if content_length <= 0:
-        raise ValueError("Empty request body.")
+        raise ValueError(
+            "Empty request body."
+        )
 
-    if content_length > MAX_REQUEST_BODY_BYTES:
-        raise ValueError("Request body is too large.")
+    if content_length > 30 * 1024 * 1024:
+        raise ValueError(
+            "Request body is too large."
+        )
 
-    raw = handler.rfile.read(content_length)
-
-    if len(raw) != content_length:
-        raise ValueError("Incomplete request body.")
+    raw = handler.rfile.read(
+        content_length
+    )
 
     try:
-        return json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("Invalid JSON.") from exc
+        return json.loads(
+            raw.decode("utf-8")
+        )
+    except Exception:
+        raise ValueError(
+            "Invalid JSON."
+        )
+
+
+def load_optional_timeframe_images(user_id, job, cleanup_ids):
+    allowed = ("1D", "1H", "5M", "1M")
+    images = {}
+    legacy = job.get("additional_timeframe_images") or {}
+    if not isinstance(legacy, dict) or len(legacy) > len(allowed):
+        raise ValueError("Stored additional timeframe images are invalid.")
+    for raw_timeframe, image in legacy.items():
+        timeframe = str(raw_timeframe).strip().upper()
+        if timeframe not in allowed or timeframe in images:
+            raise ValueError("Stored additional timeframe key is invalid.")
+        images[timeframe] = validate_image_data_url(image, timeframe + " chart")
+
+    upload_ids = job.get("additional_timeframe_upload_ids") or {}
+    if not isinstance(upload_ids, dict) or len(upload_ids) > len(allowed):
+        raise ValueError("Stored additional timeframe upload references are invalid.")
+    encoded_user_id = urllib.parse.quote(str(user_id), safe="")
+    for raw_timeframe, raw_upload_id in upload_ids.items():
+        timeframe = str(raw_timeframe).strip().upper()
+        if timeframe not in allowed or timeframe in images:
+            raise ValueError("Stored additional timeframe upload key is invalid or duplicated.")
+        try:
+            upload_id = str(uuid.UUID(str(raw_upload_id).strip()))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError("Stored " + timeframe + " chart upload reference is invalid.") from exc
+        if upload_id not in cleanup_ids:
+            cleanup_ids.append(upload_id)
+        rows = supabase_request(
+            "GET",
+            "/rest/v1/analysis_chart_uploads?id=eq." + upload_id
+            + "&user_id=eq." + encoded_user_id
+            + "&timeframe=eq." + urllib.parse.quote(timeframe, safe="")
+            + "&select=id,timeframe,image_data_url&limit=1",
+            timeout=20,
+        )
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("The uploaded " + timeframe + " chart is missing or expired. Please upload it again.")
+        row = rows[0]
+        if str(row.get("timeframe", "")).upper() != timeframe:
+            raise ValueError("The uploaded chart timeframe does not match the request.")
+        images[timeframe] = validate_image_data_url(row.get("image_data_url"), timeframe + " chart")
+    return images
+
+def delete_staged_timeframe_uploads(user_id, upload_ids):
+    if not user_id or not upload_ids:
+        return
+    safe_ids = []
+    for value in upload_ids:
+        try:
+            safe_ids.append(str(uuid.UUID(str(value))))
+        except (ValueError, TypeError, AttributeError):
+            continue
+    if not safe_ids:
+        return
+    query = (
+        "/rest/v1/analysis_chart_uploads?id=in.%28" + ",".join(safe_ids) + "%29"
+        + "&user_id=eq." + urllib.parse.quote(str(user_id), safe="")
+    )
+    try:
+        supabase_request("DELETE", query, timeout=15)
+    except Exception:
+        pass
 
 
 class handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
-        json_response(self, 204, {})
+        json_response(
+            self,
+            204,
+            {},
+        )
 
     def do_POST(self):
-        started = time.monotonic()
         job_nonce = ""
         user_id = ""
-        claimed = False
+        staged_upload_ids = []
 
         try:
+
             # -----------------------------------------
             # WORKER SECRET
             # -----------------------------------------
             if WORKER_SECRET:
-                supplied_secret = self.headers.get(
-                    "x-analysis-worker-secret",
-                    "",
-                ).strip()
+
+                supplied_secret = (
+                    self.headers.get(
+                        "x-analysis-worker-secret",
+                        "",
+                    ).strip()
+                )
 
                 if (
                     not supplied_secret
@@ -271,87 +376,119 @@ class handler(BaseHTTPRequestHandler):
                     json_response(
                         self,
                         401,
-                        {"error": "Unauthorized"},
+                        {
+                            "error":
+                                "Unauthorized"
+                        },
                     )
                     return
 
             # -----------------------------------------
-            # REQUEST BODY
+            # BODY
             # -----------------------------------------
-            payload = read_request_body(self)
+            payload = read_request_body(
+                self
+            )
 
-            if not isinstance(payload, dict):
-                raise ValueError("Invalid webhook payload.")
+            if not isinstance(
+                payload,
+                dict,
+            ):
+                raise ValueError(
+                    "Invalid webhook payload."
+                )
 
-            record = payload.get("record", payload)
+            record = payload.get(
+                "record",
+                payload,
+            )
 
-            if not isinstance(record, dict):
-                raise ValueError("Invalid webhook record.")
+            if not isinstance(
+                record,
+                dict,
+            ):
+                raise ValueError(
+                    "Invalid webhook record."
+                )
 
             job_nonce = str(
-                record.get("job_nonce", "")
+                record.get(
+                    "job_nonce",
+                    "",
+                )
             ).strip()
 
             if not job_nonce:
-                raise ValueError("Missing job_nonce.")
-
-            log_event("RECEIVED", job_nonce)
+                raise ValueError(
+                    "Missing job_nonce."
+                )
 
             # -----------------------------------------
-            # CLAIM JOB
+            # CLAIM
             # -----------------------------------------
-            claim_started = time.monotonic()
-            job = claim_job(job_nonce)
-
-            log_event(
-                "CLAIM_FINISHED",
-                job_nonce,
-                time.monotonic() - claim_started,
+            job = claim_job(
+                job_nonce
             )
 
             if not job:
-                log_event(
-                    "IGNORED_ALREADY_CLAIMED",
-                    job_nonce,
-                )
-
                 json_response(
                     self,
                     200,
                     {
-                        "status": "ignored",
-                        "reason": (
-                            "Job already claimed or does not exist."
-                        ),
+                        "status":
+                            "ignored",
+                        "reason":
+                            "Job already claimed "
+                            "or does not exist.",
                     },
                 )
                 return
-
-            claimed = True
 
             # -----------------------------------------
             # JOB DATA
             # -----------------------------------------
             user_id = str(
-                job.get("user_id", "")
+                job.get(
+                    "user_id",
+                    "",
+                )
             ).strip()
 
             instrument = str(
-                job.get("instrument", "")
+                job.get(
+                    "instrument",
+                    "",
+                )
             ).strip().upper()
 
             trade_focus = str(
-                job.get("trade_focus", "")
+                job.get(
+                    "trade_focus",
+                    "",
+                )
             ).strip().upper()
 
-            h4_image = job.get("higher_timeframe_image")
-            m15_image = job.get("lower_timeframe_image")
+            h4_image = job.get(
+                "higher_timeframe_image"
+            )
+
+            m15_image = job.get(
+                "lower_timeframe_image"
+            )
+            additional_images = load_optional_timeframe_images(
+                user_id, job, staged_upload_ids
+            )
 
             # -----------------------------------------
             # VALIDATION
             # -----------------------------------------
-            validate_instrument(instrument)
-            validate_focus(trade_focus)
+            validate_instrument(
+                instrument
+            )
+
+            validate_focus(
+                trade_focus
+            )
 
             validate_image_data_url(
                 h4_image,
@@ -363,141 +500,117 @@ class handler(BaseHTTPRequestHandler):
                 "lower_timeframe_image",
             )
 
-            log_event(
-                "VALIDATION_FINISHED",
-                job_nonce,
-                time.monotonic() - started,
+            # -----------------------------------------
+            # AI
+            # -----------------------------------------
+            raw_response = (
+                create_background_response(
+                    instrument=instrument,
+                    trade_focus=trade_focus,
+                    higher_image=h4_image,
+                    lower_image=m15_image,
+                    additional_images=additional_images,
+                )
             )
 
             # -----------------------------------------
-            # GEMINI ANALYSIS
+            # PARSE
             # -----------------------------------------
-            ai_started = time.monotonic()
-
-            raw_response = create_background_response(
-                instrument=instrument,
-                trade_focus=trade_focus,
-                higher_image=h4_image,
-                lower_image=m15_image,
+            result = (
+                parse_completed_response(
+                    raw_response,
+                    instrument=instrument,
+                )
             )
 
-            ai_elapsed = time.monotonic() - ai_started
-
-            log_event(
-                "GEMINI_FINISHED",
-                job_nonce,
-                ai_elapsed,
-            )
-
-            # -----------------------------------------
-            # PARSE RESULT
-            # -----------------------------------------
-            parse_started = time.monotonic()
-
-            result = parse_completed_response(
-                raw_response,
-                instrument=instrument,
-                trade_focus=trade_focus,
-            )
-
-            if not isinstance(result, dict):
+            if not isinstance(
+                result,
+                dict,
+            ):
                 raise RuntimeError(
                     "The analysis returned an invalid result."
                 )
 
-            log_event(
-                "PARSE_FINISHED",
-                job_nonce,
-                time.monotonic() - parse_started,
+            # -----------------------------------------
+            # SAVE
+            # -----------------------------------------
+            encoded_result = encode_result(
+                result
             )
-
-            # -----------------------------------------
-            # SAVE RESULT
-            # -----------------------------------------
-            save_started = time.monotonic()
-
-            encoded_result = encode_result(result)
 
             patch_job(
                 job_nonce,
                 {
-                    "status": "completed",
-                    "openai_response_id": encoded_result,
-                    "error_message": None,
+                    "status":
+                        "completed",
+                    "openai_response_id":
+                        encoded_result,
+                    "error_message":
+                        None,
                 },
-                only_if_processing=True,
-            )
-
-            log_event(
-                "SAVE_FINISHED",
-                job_nonce,
-                time.monotonic() - save_started,
-            )
-
-            log_event(
-                "REQUEST_FINISHED",
-                job_nonce,
-                time.monotonic() - started,
             )
 
             json_response(
                 self,
                 200,
                 {
-                    "status": "completed",
-                    "job_id": job_nonce,
+                    "status":
+                        "completed",
+                    "job_id":
+                        job_nonce,
                 },
             )
 
         except Exception as exc:
-            error_message = str(exc).strip()
+
+            error_message = str(
+                exc
+            ).strip()
 
             if not error_message:
-                error_message = "Analysis processing failed."
+                error_message = (
+                    "Analysis processing failed."
+                )
 
-            log_event(
-                "FAILED",
-                job_nonce,
-                time.monotonic() - started,
-                error_message,
-            )
-
-            if job_nonce and claimed:
+            if job_nonce:
                 try:
                     patch_job(
                         job_nonce,
                         {
-                            "status": "failed",
-                            "error_message": error_message[:2000],
+                            "status":
+                                "failed",
+                            "error_message":
+                                error_message[:2000],
                         },
-                        only_if_processing=True,
                     )
-                except Exception as patch_exc:
-                    log_event(
-                        "FAILURE_SAVE_WARNING",
+                except Exception:
+                    pass
+
+            safe_release_slot(
+                user_id
+            )
+
+            json_response(
+                self,
+                200,
+                {
+                    "status":
+                        "failed",
+                    "job_id":
                         job_nonce,
-                        detail=str(patch_exc),
-                    )
-
-            if claimed:
-                safe_release_slot(user_id)
-
-            try:
-                json_response(
-                    self,
-                    200,
-                    {
-                        "status": "failed",
-                        "job_id": job_nonce,
-                        "error": error_message[:2000],
-                    },
-                )
-            except Exception:
-                pass
+                    "error":
+                        error_message[:2000],
+                },
+            )
+        finally:
+            delete_staged_timeframe_uploads(user_id, staged_upload_ids)
 
     def do_GET(self):
         json_response(
             self,
             200,
-            {"status": "analysis worker online"},
+            {
+                "status":
+                    "analysis worker online"
+            },
         )
