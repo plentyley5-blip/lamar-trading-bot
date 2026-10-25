@@ -187,7 +187,48 @@ when that can be inferred responsibly.
 STOP LOSS
 ==================================================
 
-Place the stop beyond the logical invalidation area.
+Place the stop beyond the logical invalidation area, but keep the stop
+range proportionate to the selected trade focus and the recent volatility
+visible on the chart. The stop must protect the setup without being placed
+needlessly far from entry.
+
+For SCALP:
+
+- Use the 15M chart for the stop-loss placement. Find the nearest meaningful
+  15M micro-swing, wick-sweep extreme, or structure level that invalidates
+  the entry.
+- Place the stop just beyond that level with a small, defensible buffer.
+  Estimate the buffer from the nearby candle range and instrument volatility;
+  do not add a large arbitrary buffer.
+- As a guide, aim for an entry-to-stop distance around 0.5 to 1.0 times the
+  typical recent 15M candle range when the visible structure permits it.
+  This is a guide, not a fixed pip limit or a reason to put the stop inside
+  the invalidation level.
+- Do not use a distant 4H swing as the scalp stop merely because it is visible.
+  Use a 4H level for the stop only when it directly defines the actual setup
+  invalidation.
+
+For DAY TRADE:
+
+- Base the stop on the nearest meaningful execution/invalidation structure
+  on 15M, respecting a 4H level only when that level directly invalidates
+  the idea.
+
+For SWING:
+
+- Base the stop on the nearest meaningful 4H structural invalidation level,
+  with only a modest buffer beyond it.
+
+For every instrument:
+
+- Scale the distance to the instrument's displayed price precision and
+  volatility. Do not apply one fixed pip or point range to forex, metals,
+  indices, crypto, and other instruments.
+- Never widen a stop to a distant unrelated swing, and never make it
+  artificially tight inside the nearest valid invalidation level just to
+  produce a preferred risk/reward ratio.
+- If the valid structural stop is wider than the guide, keep it just beyond
+  the actual invalidation level rather than inventing an invalid stop.
 
 ==================================================
 TAKE PROFITS
