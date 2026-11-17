@@ -116,40 +116,57 @@ def _get_rows(path, timeout=15):
     return result
 
 def _get_quota(user_id):
-    """Read subscription and existing job history; requires no schema changes.
-
-    Existing analysis_jobs history is used as the usage ledger. Because no DB
-    reservation/RPC changes are allowed, concurrent submissions can race; see
-    the deployment note accompanying this file.
-    """
+    """Read the latest subscription history and the existing job-history quota ledger."""
     uid = urllib.parse.quote(str(user_id), safe="")
     subs = _get_rows(
         "/rest/v1/subscriptions?user_id=eq." + uid
-        + "&select=plan,duration_months,status,starts_at,expires_at&limit=1"
+        + "&select=plan,duration_months,duration_days,status,starts_at,expires_at,updated_at,created_at"
+        + "&order=updated_at.desc&limit=1000"
     )
     now_utc = datetime.now(timezone.utc)
     now_local = now_utc.astimezone(KAMPALA)
 
+    # A user with any subscription history must never fall back to the free allowance.
     if subs:
-        sub = subs[0] or {}
-        status = str(sub.get("status", "")).strip().lower()
-        try:
-            starts = datetime.fromisoformat(str(sub.get("starts_at", "")).replace("Z", "+00:00"))
-            expires = datetime.fromisoformat(str(sub.get("expires_at", "")).replace("Z", "+00:00"))
-            if starts.tzinfo is None: starts = starts.replace(tzinfo=timezone.utc)
-            if expires.tzinfo is None: expires = expires.replace(tzinfo=timezone.utc)
-        except (TypeError, ValueError):
-            return {"allowed": False, "reason": "subscription_invalid", "quota_type": "blocked", "limit": 0, "used": 0, "remaining": 0}
+        active_subs = []
+        for sub in subs:
+            if str((sub or {}).get("status", "")).strip().lower() != "active":
+                continue
+            try:
+                starts = datetime.fromisoformat(str(sub.get("starts_at", "")).replace("Z", "+00:00"))
+                expires = datetime.fromisoformat(str(sub.get("expires_at", "")).replace("Z", "+00:00"))
+                if starts.tzinfo is None:
+                    starts = starts.replace(tzinfo=timezone.utc)
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            if starts <= now_utc < expires:
+                active_subs.append((sub, starts, expires))
 
-        if status != "active" or starts > now_utc or expires <= now_utc:
+        if not active_subs:
             return {"allowed": False, "reason": "subscription_expired", "quota_type": "blocked", "limit": 0, "used": 0, "remaining": 0}
 
+        # Prefer the most recently updated valid entitlement. Google Play base-plan
+        # replacements should normally leave one active row, but this is deterministic
+        # even when older payment-provider history remains in the table.
+        active_subs.sort(key=lambda item: str(item[0].get("updated_at") or item[0].get("created_at") or ""), reverse=True)
+        sub = active_subs[0][0]
         try:
             months = int(sub.get("duration_months") or 0)
         except (TypeError, ValueError):
             months = 0
-        limits = {1: 10, 3: 30, 6: 50}
-        limit = limits.get(months)
+        try:
+            days = int(sub.get("duration_days") or 0)
+        except (TypeError, ValueError):
+            days = 0
+
+        plan_name = str(sub.get("plan") or "").strip().lower()
+        if plan_name in {"weekly", "week"} and days == 7 and months == 0:
+            limit = 5
+        else:
+            limits = {1: 10, 3: 30, 6: 50}
+            limit = limits.get(months)
         if not limit:
             return {"allowed": False, "reason": "unsupported_plan", "quota_type": "blocked", "limit": 0, "used": 0, "remaining": 0}
 
