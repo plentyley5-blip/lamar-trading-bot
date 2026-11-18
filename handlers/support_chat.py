@@ -24,17 +24,17 @@ GEMINI_API_KEY = (
     os.environ.get("GEMINI_OPENAI_KEY", "").strip()
     or os.environ.get("GEMINI_API_KEY", "").strip()
 )
+# Keep one fast primary and one compatibility fallback. Do not serially walk
+# several models on quota errors or network timeouts.
 GEMINI_MODELS = (
     "gemini-3.8-flash",
     "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
 )
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 MAX_REQUEST_BYTES = 12_000
 MAX_MESSAGE_CHARS = 2_000
 MAX_HISTORY_MESSAGES = 12
-GEMINI_TIMEOUT_SECONDS = 35
+GEMINI_TIMEOUT_SECONDS = 11
 HANDOFF_MARKER = "[[ESCALATE_TO_HUMAN]]"
 VALID_STATUSES = {"bot", "waiting", "assigned", "resolved"}
 
@@ -152,6 +152,21 @@ def get_messages(conversation_id, customer_user_id, limit=300):
          "order": "created_at.asc", "limit": str(limit)},
     )
 
+
+
+def get_recent_gemini_messages(conversation_id, customer_user_id):
+    """Fetch only the newest context Gemini needs; keep full history in storage."""
+    rows = supabase_request(
+        "GET", "support_messages",
+        {"conversation_id": "eq." + conversation_id,
+         "user_id": "eq." + customer_user_id,
+         "select": "id,conversation_id,user_id,role,content,sender_id,sender_name,created_at",
+         "order": "created_at.desc", "limit": str(MAX_HISTORY_MESSAGES)},
+    )
+    if not isinstance(rows, list):
+        return []
+    rows.reverse()
+    return rows
 
 def save_message(conversation_id, customer_user_id, role, content, sender_id=None, sender_name=None):
     payload = {
@@ -390,7 +405,6 @@ def call_gemini(messages):
         elif stored_role == "user":
             role = "user"
         else:
-            # System status notes are UI metadata, not user instructions for Gemini.
             continue
         content = str(item.get("content", "")).strip()
         if content:
@@ -401,52 +415,51 @@ def call_gemini(messages):
     payload = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
-        "generationConfig": {"temperature": 0.35, "maxOutputTokens": 700},
+        "generationConfig": {"temperature": 0.35, "maxOutputTokens": 500},
     }
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    failures = []
-    retryable = {408, 429, 500, 502, 503, 504}
+    started = time.monotonic()
+
     for index, model in enumerate(GEMINI_MODELS):
         request = urllib.request.Request(
             GEMINI_URL.format(model=model), data=body, method="POST",
-            headers={"Content-Type": "application/json", "Accept": "application/json", "x-goog-api-key": GEMINI_API_KEY},
+            headers={"Content-Type": "application/json", "Accept": "application/json",
+                     "x-goog-api-key": GEMINI_API_KEY},
         )
         try:
             with urllib.request.urlopen(request, timeout=GEMINI_TIMEOUT_SECONDS) as response:
                 raw = response.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            try:
-                detail = str(json.loads(detail).get("error", {}).get("message") or detail[:500])
-            except Exception:
-                detail = detail[:500]
-            failures.append("{} HTTP {}: {}".format(model, exc.code, detail))
-            if (exc.code in retryable or exc.code == 404) and index < len(GEMINI_MODELS) - 1:
-                time.sleep(0.5)
+            # Only try the compatibility model when the primary model name is
+            # unavailable. Quota/rate-limit/server errors should fail fast,
+            # not trigger another slow model request.
+            if exc.code == 404 and index == 0 and len(GEMINI_MODELS) > 1:
                 continue
-            if exc.code in {400, 401, 403}:
-                break
-        except (urllib.error.URLError, TimeoutError):
-            failures.append("{} connection error".format(model))
-            if index < len(GEMINI_MODELS) - 1:
-                continue
-        else:
-            try:
-                data = json.loads(raw)
-                pieces = []
-                for candidate in data.get("candidates", []):
-                    content = candidate.get("content", {}) if isinstance(candidate, dict) else {}
-                    for part in content.get("parts", []) if isinstance(content, dict) else []:
-                        if isinstance(part, dict) and isinstance(part.get("text"), str):
-                            pieces.append(part["text"])
-                answer = "\n".join(pieces).strip()
-                if answer:
-                    return answer[:6000]
-                failures.append("{} returned an empty reply".format(model))
-            except (ValueError, TypeError):
-                failures.append("{} returned invalid JSON".format(model))
-    raise RuntimeError("The AI support assistant is temporarily unavailable. Please try again or request a human support agent.")
+            if exc.code == 429:
+                raise RuntimeError("The AI support assistant is busy. Please try again shortly.") from exc
+            raise RuntimeError("The AI support assistant is temporarily unavailable. Please try again shortly.") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError("The AI support assistant timed out. Please try again shortly.") from exc
 
+        try:
+            data = json.loads(raw)
+            pieces = []
+            for candidate in data.get("candidates", []):
+                content = candidate.get("content", {}) if isinstance(candidate, dict) else {}
+                for part in content.get("parts", []) if isinstance(content, dict) else []:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        pieces.append(part["text"])
+            answer = "\\n".join(pieces).strip()
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("The AI support assistant returned an invalid response.") from exc
+
+        if answer:
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            print("LM_SUPPORT_GEMINI model={} duration_ms={}".format(model, elapsed_ms))
+            return answer[:6000]
+        raise RuntimeError("The AI support assistant returned an empty response.")
+
+    raise RuntimeError("The AI support assistant is temporarily unavailable. Please try again shortly.")
 
 def update_conversation_status(conversation_id, changes):
     rows = supabase_request(
@@ -751,7 +764,7 @@ class handler(BaseHTTPRequestHandler):
                     "assigned_agent_name": None, "resolved_at": None,
                 }) or conversation
 
-            context = get_messages(conversation_id, user_id, limit=200)
+            context = get_recent_gemini_messages(conversation_id, user_id)
             try:
                 raw_reply = call_gemini(context)
             except Exception:
