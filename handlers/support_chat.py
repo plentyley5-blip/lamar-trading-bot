@@ -464,20 +464,30 @@ def agent_queue(agent):
          "select": "id,user_id,title,created_at,updated_at,support_status,assigned_agent_id,assigned_agent_name,handoff_requested_at",
          "order": "handoff_requested_at.asc", "limit": "200"},
     )
-    mine = supabase_request(
+    all_assigned = supabase_request(
         "GET", "support_conversations",
-        {"support_status": "eq.assigned", "assigned_agent_id": "eq." + agent_id,
+        {"support_status": "eq.assigned",
          "select": "id,user_id,title,created_at,updated_at,support_status,assigned_agent_id,assigned_agent_name,handoff_requested_at,assigned_at",
-         "order": "updated_at.desc", "limit": "100"},
+         "order": "assigned_at.asc", "limit": "500"},
     )
-    active = len(mine) if isinstance(mine, list) else 0
     waiting = waiting if isinstance(waiting, list) else []
-    mine = mine if isinstance(mine, list) else []
+    all_assigned = all_assigned if isinstance(all_assigned, list) else []
+    mine = []
+    attended_by_others = []
+    for row in all_assigned:
+        item = dict(row)
+        is_mine = str(item.get("assigned_agent_id") or "") == agent_id
+        item["assigned_to_current_agent"] = is_mine
+        if is_mine:
+            mine.append(item)
+        else:
+            attended_by_others.append(item)
     return {
         "waiting": waiting,
         "assigned": mine,
+        "attended_by_others": attended_by_others,
         "waiting_count": len(waiting),
-        "active_count": active,
+        "active_count": len(mine),
         "max_active_chats": int(agent.get("max_active_chats", 1)),
     }
 
