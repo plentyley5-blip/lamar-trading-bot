@@ -416,13 +416,13 @@ def local_support_reply(messages):
         word in normalized for word in ("chart", "4h", "15m", "15 minute", "fifteen minute")
     ):
         return (
-            "To upload your charts in LM Analyzer:\\n"
-            "1. Open the app and tap **Start Analysis**.\\n"
-            "2. Select the trading instrument/pair first (for example EURUSD or XAUUSD).\\n"
-            "3. In the chart-upload area, choose the **4H** chart screenshot for the higher-timeframe view.\\n"
-            "4. Choose the **15M** chart screenshot for the lower-timeframe/entry view.\\n"
-            "5. Check that both screenshots are clear, show the selected instrument, and display the correct timeframe.\\n"
-            "6. Select your trading focus (SCALP, DAY TRADE, or SWING), then tap **Analyze**.\\n\\n"
+            "To upload your charts in LM Analyzer:\n"
+            "1. Open the app and tap **Start Analysis**.\n"
+            "2. Select the trading instrument/pair first (for example EURUSD or XAUUSD).\n"
+            "3. In the chart-upload area, choose the **4H** chart screenshot for the higher-timeframe view.\n"
+            "4. Choose the **15M** chart screenshot for the lower-timeframe/entry view.\n"
+            "5. Check that both screenshots are clear, show the selected instrument, and display the correct timeframe.\n"
+            "6. Select your trading focus (SCALP, DAY TRADE, or SWING), then tap **Analyze**.\n\n"
             "If the upload controls have different labels on your screen, tell me what you see or send a screenshot with any private information hidden, and I’ll guide you from there."
         )
 
@@ -518,7 +518,7 @@ def call_gemini(messages):
                 for part in content.get("parts", []) if isinstance(content, dict) else []:
                     if isinstance(part, dict) and isinstance(part.get("text"), str):
                         pieces.append(part["text"])
-            answer = "\\n".join(pieces).strip()
+            answer = "\n".join(pieces).strip()
         except (ValueError, TypeError) as exc:
             raise RuntimeError("The AI support assistant returned an invalid response.") from exc
 
