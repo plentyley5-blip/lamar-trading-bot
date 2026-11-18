@@ -187,6 +187,26 @@ def simple_greeting_reply(messages):
     return None
 
 
+def simple_acknowledgement_reply(messages):
+    """Handle short acknowledgements locally instead of calling Gemini."""
+    latest = ""
+    for item in reversed(messages or []):
+        if str(item.get("role", "")) == "user":
+            latest = str(item.get("content", "")).strip().lower()
+            break
+    normalized = re.sub(r"[^a-z ]", "", latest)
+    normalized = " ".join(normalized.split())
+    acknowledgements = {
+        "thanks", "thank you", "thanks a lot", "thank you so much",
+        "okay thanks", "ok thanks", "alright thanks", "got it thanks",
+        "thanks got it", "okay thank you", "ok thank you",
+        "got it", "understood", "that helps", "perfect", "great thanks",
+    }
+    if normalized in acknowledgements:
+        return "You're welcome! I'm glad I could help. If you have another LM Analyzer question, just ask."
+    return None
+
+
 def save_message(conversation_id, customer_user_id, role, content, sender_id=None, sender_name=None):
     payload = {
         "conversation_id": conversation_id,
@@ -845,6 +865,8 @@ class handler(BaseHTTPRequestHandler):
                 # Handle a standalone greeting locally so provider/model issues
                 # can never turn a simple hello into a human-support referral.
                 raw_reply = simple_greeting_reply(context)
+                if raw_reply is None:
+                    raw_reply = simple_acknowledgement_reply(context)
                 if raw_reply is None:
                     raw_reply = local_support_reply(context)
                 if raw_reply is None:
