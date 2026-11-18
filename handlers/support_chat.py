@@ -401,6 +401,48 @@ def set_waiting_for_human(conversation, reason=""):
     return updated, delivery, True
 
 
+
+def local_support_reply(messages):
+    """Answer common LM Analyzer workflow questions without depending on Gemini."""
+    latest = ""
+    for item in reversed(messages or []):
+        if str(item.get("role", "")) == "user":
+            latest = str(item.get("content", "")).strip().lower()
+            break
+    normalized = re.sub(r"[^a-z0-9 ]", " ", latest)
+    normalized = " ".join(normalized.split())
+
+    if any(word in normalized for word in ("upload", "attach", "add")) and any(
+        word in normalized for word in ("chart", "4h", "15m", "15 minute", "fifteen minute")
+    ):
+        return (
+            "To upload your charts in LM Analyzer:\\n"
+            "1. Open the app and tap **Start Analysis**.\\n"
+            "2. Select the trading instrument/pair first (for example EURUSD or XAUUSD).\\n"
+            "3. In the chart-upload area, choose the **4H** chart screenshot for the higher-timeframe view.\\n"
+            "4. Choose the **15M** chart screenshot for the lower-timeframe/entry view.\\n"
+            "5. Check that both screenshots are clear, show the selected instrument, and display the correct timeframe.\\n"
+            "6. Select your trading focus (SCALP, DAY TRADE, or SWING), then tap **Analyze**.\\n\\n"
+            "If the upload controls have different labels on your screen, tell me what you see or send a screenshot with any private information hidden, and I’ll guide you from there."
+        )
+
+    if any(term in normalized for term in ("select pair", "choose pair", "instrument", "trading pair")):
+        return (
+            "Before uploading charts, open **Start Analysis** and select the instrument you want analyzed. "
+            "Then upload its 4H and 15M chart screenshots. Make sure both charts are for the same instrument."
+        )
+
+    if any(term in normalized for term in ("analysis result", "what does", "confidence", "take profit", "stop loss", "tp1", "tp2")):
+        return (
+            "LM Analyzer results can show the signal, confidence, trend, entry, stop loss (SL), "
+            "take-profit levels (TP1 and TP2), risk/reward, expected duration, market context, news risk, "
+            "and warnings. A **NO TRADE** result means the analysis did not find a setup that met its conditions; "
+            "do not treat it as a signal to enter."
+        )
+
+    return None
+
+
 def call_gemini(messages):
     if not GEMINI_API_KEY:
         raise RuntimeError("Gemini support is not configured. Set GEMINI_OPENAI_KEY in Vercel.")
@@ -796,6 +838,8 @@ class handler(BaseHTTPRequestHandler):
                 # Handle a standalone greeting locally so provider/model issues
                 # can never turn a simple hello into a human-support referral.
                 raw_reply = simple_greeting_reply(context)
+                if raw_reply is None:
+                    raw_reply = local_support_reply(context)
                 if raw_reply is None:
                     raw_reply = call_gemini(context)
             except Exception as exc:
