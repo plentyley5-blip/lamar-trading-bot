@@ -430,15 +430,19 @@ def call_gemini(messages):
             with urllib.request.urlopen(request, timeout=GEMINI_TIMEOUT_SECONDS) as response:
                 raw = response.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
-            # Only try the compatibility model when the primary model name is
-            # unavailable. Quota/rate-limit/server errors should fail fast,
-            # not trigger another slow model request.
-            if exc.code == 404 and index == 0 and len(GEMINI_MODELS) > 1:
+            # Use the second model for transient capacity/server failures as
+            # well as model-not-found. This keeps Gemini answering instead of
+            # turning a temporary provider issue into a human handoff.
+            if index == 0 and len(GEMINI_MODELS) > 1 and exc.code in {404, 408, 429, 500, 502, 503, 504}:
+                print("LM_SUPPORT_GEMINI primary_model_http={} trying_fallback=true".format(exc.code))
                 continue
             if exc.code == 429:
                 raise RuntimeError("The AI support assistant is busy. Please try again shortly.") from exc
             raise RuntimeError("The AI support assistant is temporarily unavailable. Please try again shortly.") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
+            if index == 0 and len(GEMINI_MODELS) > 1:
+                print("LM_SUPPORT_GEMINI primary_model_timeout trying_fallback=true")
+                continue
             raise RuntimeError("The AI support assistant timed out. Please try again shortly.") from exc
 
         try:
@@ -767,10 +771,15 @@ class handler(BaseHTTPRequestHandler):
             context = get_recent_gemini_messages(conversation_id, user_id)
             try:
                 raw_reply = call_gemini(context)
-            except Exception:
-                raw_reply = ("I'm temporarily unable to resolve this automatically. "
-                             "I'm connecting you with a human support agent from this same chat. "
-                             + HANDOFF_MARKER)
+            except Exception as exc:
+                # A provider timeout/quota spike is not a reason to create a
+                # human-support ticket. Keep the conversation in bot mode so
+                # the customer can retry; explicit model escalation still
+                # follows the normal human-agent handoff path below.
+                print("LM_SUPPORT_GEMINI unavailable error_type={}".format(type(exc).__name__))
+                raw_reply = ("I'm having a temporary issue reaching the AI assistant. "
+                             "Your message is still in this conversation. Please try sending it again in a moment, "
+                             "or ask for a human support agent if you need staff assistance.")
             should_handoff = HANDOFF_MARKER in raw_reply
             reply = raw_reply.replace(HANDOFF_MARKER, "").strip()
             if not reply:
