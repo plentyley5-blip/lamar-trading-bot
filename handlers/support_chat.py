@@ -207,6 +207,26 @@ def simple_acknowledgement_reply(messages):
     return None
 
 
+def fallback_support_reply(messages):
+    """Always return a useful, honest support response if the AI provider is unavailable."""
+    latest = ""
+    for item in reversed(messages or []):
+        if str(item.get("role", "")) == "user":
+            latest = " ".join(str(item.get("content", "")).split()).strip()
+            break
+    if not latest:
+        return "I'm here to help with LM Analyzer. What are you trying to do, and what happens when you try?"
+    short_message = latest[:240]
+    return (
+        "I received your message: \"" + short_message + "\". "
+        "I can help with LM Analyzer setup, chart uploads, analysis results, login, subscriptions, "
+        "and app troubleshooting. I couldn't get the AI response service just now, so I don't want "
+        "to guess and give you incorrect instructions. "
+        "Please tell me which screen or step you're on and what you expected to happen. "
+        "You can also type **human support** if you need an agent."
+    )
+
+
 def save_message(conversation_id, customer_user_id, role, content, sender_id=None, sender_name=None):
     payload = {
         "conversation_id": conversation_id,
@@ -877,9 +897,9 @@ class handler(BaseHTTPRequestHandler):
                 # the customer can retry; explicit model escalation still
                 # follows the normal human-agent handoff path below.
                 print("LM_SUPPORT_GEMINI unavailable error_type={}".format(type(exc).__name__))
-                raw_reply = ("I'm having a temporary issue reaching the AI assistant. "
-                             "Your message is still in this conversation. Please try sending it again in a moment, "
-                             "or ask for a human support agent if you need staff assistance.")
+                # Never leave a customer with the same dead-end error. Preserve bot
+                # mode and return a helpful, honest fallback tied to their message.
+                raw_reply = fallback_support_reply(context)
             should_handoff = HANDOFF_MARKER in raw_reply
             reply = raw_reply.replace(HANDOFF_MARKER, "").strip()
             if not reply:
