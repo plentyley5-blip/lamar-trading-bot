@@ -34,7 +34,7 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:ge
 MAX_REQUEST_BYTES = 12_000
 MAX_MESSAGE_CHARS = 2_000
 MAX_HISTORY_MESSAGES = 12
-GEMINI_TIMEOUT_SECONDS = 11
+GEMINI_TIMEOUT_SECONDS = 8
 HANDOFF_MARKER = "[[ESCALATE_TO_HUMAN]]"
 VALID_STATUSES = {"bot", "waiting", "assigned", "resolved"}
 
