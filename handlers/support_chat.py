@@ -6,6 +6,7 @@ support_conversations and support_messages rows, with role-based API access.
 """
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -167,6 +168,24 @@ def get_recent_gemini_messages(conversation_id, customer_user_id):
         return []
     rows.reverse()
     return rows
+
+def simple_greeting_reply(messages):
+    """Answer a standalone greeting immediately; never send it to human support."""
+    greeting = ""
+    for item in reversed(messages or []):
+        if str(item.get("role", "")) == "user":
+            greeting = str(item.get("content", "")).strip().lower()
+            break
+    normalized = re.sub(r"[^a-z ]", "", greeting)
+    normalized = " ".join(normalized.split())
+    greetings = {
+        "hi", "hello", "hey", "hiya", "hello there", "hi there",
+        "good morning", "good afternoon", "good evening", "howdy",
+    }
+    if normalized in greetings:
+        return "Hello! Welcome to LM Analyzer support. How can I help you today?"
+    return None
+
 
 def save_message(conversation_id, customer_user_id, role, content, sender_id=None, sender_name=None):
     payload = {
@@ -393,8 +412,12 @@ def call_gemini(messages):
         "Do not claim access to the user's account, payments, private data, or backend logs. Do not request passwords, one-time codes, "
         "API keys, or payment-card details. Never guarantee profits, fabricate subscription status, or present yourself as a human. "
         "You are customer support, not a signal service: do not promise a trade will win or invent live prices. Explain that AI can make mistakes. "
-        "If the customer explicitly asks for a human, has a payment/account-specific issue that requires staff access, has repeated an unresolved problem, "
-        "or you cannot confidently solve the issue, answer briefly and append the exact token [[ESCALATE_TO_HUMAN]] at the very end of your response. "
+        "Your first responsibility is to solve the customer's problem yourself whenever it is within your support knowledge. "
+        "Answer greetings warmly and answer ordinary LM Analyzer questions directly. For a vague or incomplete request, ask one clear follow-up question. "
+        "Do not escalate merely because a message is short, is a greeting, is unfamiliar, or you are not completely certain; make a reasonable attempt, "
+        "explain limitations honestly, and ask for the missing details. "
+        "Append the exact token [[ESCALATE_TO_HUMAN]] only if the customer explicitly requests a human, the issue requires staff-only account/payment access, "
+        "or the customer has tried the relevant troubleshooting steps and the problem remains unresolved. "
         "Do not display or explain the token. Keep answers practical and step-by-step. Do not use markdown tables."
     )
     contents = []
@@ -770,7 +793,11 @@ class handler(BaseHTTPRequestHandler):
 
             context = get_recent_gemini_messages(conversation_id, user_id)
             try:
-                raw_reply = call_gemini(context)
+                # Handle a standalone greeting locally so provider/model issues
+                # can never turn a simple hello into a human-support referral.
+                raw_reply = simple_greeting_reply(context)
+                if raw_reply is None:
+                    raw_reply = call_gemini(context)
             except Exception as exc:
                 # A provider timeout/quota spike is not a reason to create a
                 # human-support ticket. Keep the conversation in bot mode so
