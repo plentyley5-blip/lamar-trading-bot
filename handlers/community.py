@@ -352,7 +352,7 @@ def _registered_member_count():
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
             content_range = response.headers.get("Content-Range", "")
-            match = re.search(r"/(\\d+|\\*)$", content_range)
+            match = re.search(r"/(\d+|\*)$", content_range)
             if match and match.group(1) != "*":
                 return int(match.group(1))
             raw = response.read().decode("utf-8", errors="replace")
@@ -411,8 +411,8 @@ def _upload_community_image(user_id, image_data_url, avatar=False):
     if not image_bytes or len(image_bytes) > MAX_COMMUNITY_IMAGE_BYTES:
         raise ValueError("Community images must be 1.5 MB or smaller after compression.")
     valid_signature = (
-        (content_type == "image/jpeg" and image_bytes.startswith(b"\\xff\\xd8\\xff")) or
-        (content_type == "image/png" and image_bytes.startswith(b"\\x89PNG\\r\\n\\x1a\\n")) or
+        (content_type == "image/jpeg" and image_bytes.startswith(b"\xff\xd8\xff")) or
+        (content_type == "image/png" and image_bytes.startswith(b"\x89PNG\r\n\x1a\n")) or
         (content_type == "image/webp" and len(image_bytes) >= 12 and image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP")
     )
     if not valid_signature:
