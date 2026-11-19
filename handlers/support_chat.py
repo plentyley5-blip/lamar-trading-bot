@@ -35,7 +35,7 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:ge
 MAX_REQUEST_BYTES = 12_000
 MAX_MESSAGE_CHARS = 2_000
 MAX_HISTORY_MESSAGES = 12
-GEMINI_TIMEOUT_SECONDS = 8
+GEMINI_TIMEOUT_SECONDS = 18
 HANDOFF_MARKER = "[[ESCALATE_TO_HUMAN]]"
 VALID_STATUSES = {"bot", "waiting", "assigned", "resolved"}
 
@@ -223,7 +223,7 @@ def fallback_support_reply(messages):
         "and app troubleshooting. I couldn't get the AI response service just now, so I don't want "
         "to guess and give you incorrect instructions. "
         "Please tell me which screen or step you're on and what you expected to happen. "
-        "You can also type **human support** if you need an agent."
+        "I will use those details to guide you through the next troubleshooting step."
     )
 
 
@@ -501,13 +501,20 @@ def call_gemini(messages):
         "Do not claim access to the user's account, payments, private data, or backend logs. Do not request passwords, one-time codes, "
         "API keys, or payment-card details. Never guarantee profits, fabricate subscription status, or present yourself as a human. "
         "You are customer support, not a signal service: do not promise a trade will win or invent live prices. Explain that AI can make mistakes. "
-        "Your first responsibility is to solve the customer's problem yourself whenever it is within your support knowledge. "
-        "Answer greetings warmly and answer ordinary LM Analyzer questions directly. For a vague or incomplete request, ask one clear follow-up question. "
-        "Do not escalate merely because a message is short, is a greeting, is unfamiliar, or you are not completely certain; make a reasonable attempt, "
-        "explain limitations honestly, and ask for the missing details. "
-        "Append the exact token [[ESCALATE_TO_HUMAN]] only if the customer explicitly requests a human, the issue requires staff-only account/payment access, "
-        "or the customer has tried the relevant troubleshooting steps and the problem remains unresolved. "
-        "Do not display or explain the token. Keep answers practical and step-by-step. Do not use markdown tables."
+        "Your first responsibility is to resolve the customer's question yourself. You are a real general-purpose AI assistant as well as an LM Analyzer product-support specialist: "
+        "answer ordinary knowledge questions, explanations, definitions, and general forex/trading-education questions when safe, while clearly separating general education from personalized financial advice. "
+        "For LM Analyzer questions, give direct practical instructions using the product facts in this prompt. "
+        "The Community lets signed-in members read posts; only active paid subscribers and the owner can publish, and only the owner can change the official community avatar. "
+        "The support chat keeps conversation history and can be continued later. "
+        "Answer greetings warmly. For an incomplete question, ask one focused follow-up and continue helping; do not send the customer away. "
+        "Never tell a customer to contact an admin or human agent just because a question is unfamiliar, general, short, or outside the exact examples in this prompt. "
+        "Use your general knowledge to make a best effort, state uncertainty plainly, and ask for missing details when needed. "
+        "Only append the exact token [[ESCALATE_TO_HUMAN]] when the customer explicitly asks for a person, an action requires private staff-only access you do not have "
+        "(for example verifying a specific payment, changing account entitlements, or investigating private server records), or the customer has followed reasonable troubleshooting "
+        "steps and the issue is still unresolved. Before escalating a technical issue, give practical steps and ask for the result at least once. "
+        "Do not claim you have changed account settings, checked private records, or completed a payment. Do not request passwords, one-time codes, API keys, or card details. "
+        "For trading topics, explain concepts and risk; never promise profit, issue fabricated live prices, or guarantee a trade outcome. "
+        "Do not display or explain the handoff token. Keep answers practical, clear, and step-by-step. Do not use markdown tables."
     )
     contents = []
     for item in messages[-MAX_HISTORY_MESSAGES:]:
@@ -525,7 +532,7 @@ def call_gemini(messages):
         raise ValueError("Please enter a message.")
 
     payload = {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
         "generationConfig": {"temperature": 0.35, "maxOutputTokens": 500},
     }
@@ -542,11 +549,26 @@ def call_gemini(messages):
             with urllib.request.urlopen(request, timeout=GEMINI_TIMEOUT_SECONDS) as response:
                 raw = response.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
-            # Use the second model for transient capacity/server failures as
-            # well as model-not-found. This keeps Gemini answering instead of
-            # turning a temporary provider issue into a human handoff.
+            # Log only the provider status and model. Never log the API key,
+            # prompt, message content, or raw upstream response.
+            provider_error = ""
+            try:
+                detail = json.loads(exc.read().decode("utf-8", errors="replace") or "{}")
+                provider_error = str(
+                    (detail.get("error") or {}).get("status")
+                    or (detail.get("error") or {}).get("code")
+                    or ""
+                )[:48]
+            except Exception:
+                pass
+            print("LM_SUPPORT_GEMINI model={} http={} provider_status={}".format(
+                model, exc.code, provider_error or "unavailable"
+            ))
+            # Try the compatibility model for model-specific, capacity, and
+            # transient upstream errors. A malformed local request is not
+            # retried with the same payload.
             if index == 0 and len(GEMINI_MODELS) > 1 and exc.code in {404, 408, 429, 500, 502, 503, 504}:
-                print("LM_SUPPORT_GEMINI primary_model_http={} trying_fallback=true".format(exc.code))
+                print("LM_SUPPORT_GEMINI trying_fallback=true")
                 continue
             if exc.code == 429:
                 raise RuntimeError("The AI support assistant is busy. Please try again shortly.") from exc
