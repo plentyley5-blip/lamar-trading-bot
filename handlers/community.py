@@ -473,7 +473,23 @@ def _upload_community_image(user_id, image_data_url, avatar=False):
         with urllib.request.urlopen(request, timeout=25) as response:
             response.read()
     except urllib.error.HTTPError as exc:
-        raise RuntimeError("Community image upload failed (HTTP {}).".format(exc.code)) from exc
+        raw_detail = exc.read().decode("utf-8", errors="replace")
+        error_code = ""
+        error_message = ""
+        try:
+            detail_obj = json.loads(raw_detail) if raw_detail else {}
+            error_code = str(detail_obj.get("code") or "").strip()
+            error_message = str(detail_obj.get("message") or "").strip()
+        except (TypeError, ValueError):
+            pass
+        # Supabase Storage error codes/messages are safe diagnostics; strip
+        # control characters and cap length so no raw response or credentials
+        # can leak into the app.
+        safe_detail = re.sub(r"[^A-Za-z0-9 _.,()/:-]", "", error_message)[:90].strip()
+        suffix = (" " + error_code) if error_code else ""
+        if safe_detail:
+            suffix += ": " + safe_detail
+        raise RuntimeError("Community image upload failed (HTTP {}{}).".format(exc.code, suffix)) from exc
     # Store a bucket-relative object path. The feed API signs it only
     # after authenticating a registered LM Analyzer member.
     return object_path
