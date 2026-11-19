@@ -373,7 +373,7 @@ def _ensure_community_storage_bucket():
     payload = json.dumps({
         "id": COMMUNITY_STORAGE_BUCKET,
         "name": COMMUNITY_STORAGE_BUCKET,
-        "public": True,
+        "public": False,
         "file_size_limit": MAX_COMMUNITY_IMAGE_BYTES,
         "allowed_mime_types": ["image/jpeg", "image/png", "image/webp"],
     }, separators=(",", ":")).encode("utf-8")
@@ -392,9 +392,37 @@ def _ensure_community_storage_bucket():
         with urllib.request.urlopen(request, timeout=15) as response:
             response.read()
     except urllib.error.HTTPError as exc:
-        # A duplicate bucket means it is already ready; do not recreate or alter it.
         if exc.code != 409:
             raise RuntimeError("Community image storage could not be prepared (HTTP {}).".format(exc.code)) from exc
+        # If the bucket already exists, verify that it is private. Never leave
+        # community trade images publicly readable through an object URL.
+        inspect = urllib.request.Request(
+            base + "/storage/v1/bucket/" + COMMUNITY_STORAGE_BUCKET,
+            headers={"apikey": key, "Authorization": "Bearer " + key, "Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(inspect, timeout=15) as response:
+                existing = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
+        except Exception as inspect_error:
+            raise RuntimeError("Existing community image storage could not be verified.") from inspect_error
+        if isinstance(existing, dict) and existing.get("public") is True:
+            update = urllib.request.Request(
+                base + "/storage/v1/bucket/" + COMMUNITY_STORAGE_BUCKET,
+                data=json.dumps({"public": False}, separators=(",", ":")).encode("utf-8"),
+                headers={
+                    "apikey": key,
+                    "Authorization": "Bearer " + key,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                method="PUT",
+            )
+            try:
+                with urllib.request.urlopen(update, timeout=15) as response:
+                    response.read()
+            except Exception as update_error:
+                raise RuntimeError("Community image storage could not be changed to private access.") from update_error
 
 
 def _upload_community_image(user_id, image_data_url, avatar=False):
@@ -419,7 +447,9 @@ def _upload_community_image(user_id, image_data_url, avatar=False):
         raise ValueError("The selected file is not a valid supported image.")
     extension = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[content_type]
     if avatar:
-        object_path = "official/channel-avatar." + extension
+        if content_type != "image/jpeg":
+            raise ValueError("The community avatar must be a JPEG image.")
+        object_path = "official/channel-avatar.jpg"
     else:
         object_path = "members/{}/{}.{}".format(user_id, uuid.uuid4().hex, extension)
     _ensure_community_storage_bucket()
@@ -443,19 +473,78 @@ def _upload_community_image(user_id, image_data_url, avatar=False):
             response.read()
     except urllib.error.HTTPError as exc:
         raise RuntimeError("Community image upload failed (HTTP {}).".format(exc.code)) from exc
-    public_url = base + "/storage/v1/object/public/{}/{}".format(
-        COMMUNITY_STORAGE_BUCKET, encoded_path
+    # Store a bucket-relative object path. The feed API signs it only
+    # after authenticating a registered LM Analyzer member.
+    return object_path
+
+
+def _signed_community_image_url(object_path, expires_in=86400):
+    """Create a short-lived read URL for an authenticated community member."""
+    path = str(object_path or "").strip().lstrip("/")
+    if not path or path.startswith(("http://", "https://")):
+        return path
+    if not (path.startswith("members/") or path.startswith("official/")):
+        return ""
+    base = get_supabase_url().rstrip("/")
+    key = get_supabase_service_key()
+    encoded_path = urllib.parse.quote(path, safe="/")
+    payload = json.dumps({"expiresIn": int(expires_in)}, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(
+        base + "/storage/v1/object/sign/{}/{}".format(COMMUNITY_STORAGE_BUCKET, encoded_path),
+        data=payload,
+        headers={
+            "apikey": key,
+            "Authorization": "Bearer " + key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
     )
-    if avatar:
-        public_url += "?v=" + str(int(time.time()))
-    return public_url
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            result = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
+        signed_url = str(result.get("signedURL") or result.get("signedUrl") or "").strip()
+        if not signed_url:
+            raise RuntimeError("Storage did not return a signed image link.")
+        if signed_url.startswith("https://") or signed_url.startswith("http://"):
+            return signed_url
+        if signed_url.startswith("/storage/v1/"):
+            return base + signed_url
+        if signed_url.startswith("/"):
+            return base + "/storage/v1" + signed_url
+        return base + "/storage/v1/" + signed_url
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError("Community image could not be prepared for viewing (HTTP {}).".format(exc.code)) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError("Community image could not be prepared for viewing.") from exc
+
+
+def _attach_community_post_images(posts):
+    """Replace private object paths with short-lived signed URLs on response only."""
+    if not isinstance(posts, list):
+        return []
+    result = []
+    for post in posts:
+        if not isinstance(post, dict):
+            continue
+        item = dict(post)
+        image_path = str(item.get("image_url") or "").strip()
+        if image_path and not image_path.startswith(("http://", "https://")):
+            try:
+                item["image_url"] = _signed_community_image_url(image_path)
+            except Exception:
+                # A broken/missing image must not take down the member feed.
+                item["image_url"] = ""
+        result.append(item)
+    return result
 
 
 def _community_avatar_url():
-    base = get_supabase_url().rstrip("/")
-    return base + "/storage/v1/object/public/{}/official/channel-avatar.jpg?v={}".format(
-        COMMUNITY_STORAGE_BUCKET, int(time.time())
-    )
+    try:
+        return _signed_community_image_url("official/channel-avatar.jpg", expires_in=86400)
+    except Exception:
+        return ""
+
 
 
 def _query_post_id(handler):
@@ -573,6 +662,7 @@ class handler(BaseHTTPRequestHandler):
             owner = is_owner_user(user)
             if owner:
                 _award_verified(str(user["id"]), "owner")
+            rows = _attach_community_post_images(rows)
             rows = _attach_author_profiles(rows, str(user["id"]))
             rows = _attach_post_engagement(rows, str(user["id"]))
             can_post = owner or _has_active_subscription(str(user["id"]))
@@ -607,9 +697,10 @@ class handler(BaseHTTPRequestHandler):
                 if not is_owner_user(user):
                     _send(self, 403, {"error": "Only the LM Analyzer admin can change the community avatar."})
                     return
-                avatar_url = _upload_community_image(
+                avatar_path = _upload_community_image(
                     user_id, body.get("image_data_url"), avatar=True
                 )
+                avatar_url = _signed_community_image_url(avatar_path)
                 _send(self, 200, {"success": True, "avatar_url": avatar_url})
                 return
             if action in ("like", "unlike", "comment"):
@@ -720,7 +811,8 @@ class handler(BaseHTTPRequestHandler):
             except Exception as push_error:
                 # Do not log credentials, access tokens, or post content.
                 print("community push delivery failed; error_type={}".format(type(push_error).__name__))
-            enriched = _attach_author_profiles([post], user_id)
+            enriched = _attach_community_post_images([post])
+            enriched = _attach_author_profiles(enriched, user_id)
             _send(self, 201, {
                 "post": enriched[0] if enriched else post,
                 "notifications": {
