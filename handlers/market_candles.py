@@ -1,8 +1,8 @@
 """Authenticated OHLC history endpoint for the Live Markets candlestick view."""
-import json, os, urllib.error, urllib.parse, urllib.request
+import json, os, time, urllib.error, urllib.parse, urllib.request\nfrom datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from analysis_common import json_response
-from api.user_security import extract_bearer_token, verify_access_token
+from api.user_security import extract_bearer_token, verify_access_token\nfrom service_cache import read_shared_cache, write_shared_cache, claim_shared_cache_refresh, release_shared_cache_refresh, SharedCacheError
 
 SYMBOLS = {
  "EURUSD":"EUR/USD","GBPUSD":"GBP/USD","USDJPY":"USD/JPY","USDCHF":"USD/CHF","USDCAD":"USD/CAD","AUDUSD":"AUD/USD","NZDUSD":"NZD/USD",
@@ -55,8 +55,26 @@ class handler(BaseHTTPRequestHandler):
         interval=(params.get("interval") or ["15min"])[0].lower()
         if symbol not in SYMBOLS or interval not in INTERVALS:
             json_response(self,400,{"error":"Unsupported instrument or timeframe."}); return
-        try: json_response(self,200,_candles(symbol,INTERVALS[interval],os.environ.get("TWELVE_DATA_API_KEY","").strip()))
-        except (ValueError,RuntimeError) as exc: json_response(self,503,{"error":str(exc)[:180]})
+        cache_key="market_candles_"+symbol+"_"+interval
+        try:
+            cached=read_shared_cache(cache_key)
+            payload=cached.get("payload") if isinstance(cached,dict) else None
+            stamp=str(cached.get("updated_at") or "") if isinstance(cached,dict) else ""
+            try: fresh=(datetime.now(timezone.utc)-datetime.fromisoformat(stamp.replace("Z","+00:00"))).total_seconds()<55
+            except Exception: fresh=False
+            if fresh and isinstance(payload,dict):
+                response=dict(payload); response["cached"]=True; json_response(self,200,response); return
+            if not claim_shared_cache_refresh(cache_key,lock_seconds=25):
+                if isinstance(payload,dict):
+                    response=dict(payload); response["cached"]=True; json_response(self,200,response); return
+                json_response(self,503,{"error":"Candles are refreshing. Retry shortly."}); return
+            try:
+                result=_candles(symbol,INTERVALS[interval],os.environ.get("TWELVE_DATA_API_KEY","").strip())
+                write_shared_cache(cache_key,result)
+                json_response(self,200,result)
+            except Exception:
+                release_shared_cache_refresh(cache_key); raise
+        except (ValueError,RuntimeError,SharedCacheError) as exc: json_response(self,503,{"error":str(exc)[:180]})
         except Exception as exc:
             print("market_candles error:",str(exc)[:180]); json_response(self,500,{"error":"Market chart could not be loaded."})
     def log_message(self,*_args): return
