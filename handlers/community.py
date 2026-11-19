@@ -392,10 +392,11 @@ def _ensure_community_storage_bucket():
         with urllib.request.urlopen(request, timeout=15) as response:
             response.read()
     except urllib.error.HTTPError as exc:
-        if exc.code != 409:
+        # Supabase Storage deployments have returned both 400 and 409 for an
+        # already-existing bucket. Confirm that it really exists before treating
+        # either response as an idempotent create.
+        if exc.code not in (400, 409):
             raise RuntimeError("Community image storage could not be prepared (HTTP {}).".format(exc.code)) from exc
-        # If the bucket already exists, verify that it is private. Never leave
-        # community trade images publicly readable through an object URL.
         inspect = urllib.request.Request(
             base + "/storage/v1/bucket/" + COMMUNITY_STORAGE_BUCKET,
             headers={"apikey": key, "Authorization": "Bearer " + key, "Accept": "application/json"},
@@ -824,9 +825,15 @@ class handler(BaseHTTPRequestHandler):
             message = str(exc)
             status = 401 if ("session" in message.lower() or "bearer" in message.lower() or "token" in message.lower()) else 400
             _send(self, status, {"error": message})
-        except RuntimeError:
-            _send(self, 503, {"error": "Community publishing is temporarily unavailable."})
-        except Exception:
+        except RuntimeError as exc:
+            # RuntimeError messages in this module contain only sanitized
+            # service names/status codes, never bearer tokens or request data.
+            message = str(exc).strip()
+            _send(self, 503, {
+                "error": message[:220] if message else "Community publishing is temporarily unavailable."
+            })
+        except Exception as exc:
+            print("community POST unexpected failure; type={}".format(type(exc).__name__))
             _send(self, 500, {"error": "The post could not be published."})
 
     def do_DELETE(self):
