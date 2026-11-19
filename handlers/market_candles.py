@@ -1,8 +1,10 @@
 """Authenticated OHLC history endpoint for the Live Markets candlestick view."""
-import json, os, time, urllib.error, urllib.parse, urllib.request\nfrom datetime import datetime, timezone
+import json, os, time, urllib.error, urllib.parse, urllib.request
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from analysis_common import json_response
-from api.user_security import extract_bearer_token, verify_access_token\nfrom service_cache import read_shared_cache, write_shared_cache, claim_shared_cache_refresh, release_shared_cache_refresh, SharedCacheError
+from api.user_security import extract_bearer_token, verify_access_token
+from service_cache import read_shared_cache, write_shared_cache, claim_shared_cache_refresh, release_shared_cache_refresh, SharedCacheError
 
 SYMBOLS = {
  "EURUSD":"EUR/USD","GBPUSD":"GBP/USD","USDJPY":"USD/JPY","USDCHF":"USD/CHF","USDCAD":"USD/CAD","AUDUSD":"AUD/USD","NZDUSD":"NZD/USD",
