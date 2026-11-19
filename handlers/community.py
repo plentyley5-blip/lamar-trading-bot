@@ -5,11 +5,15 @@ GET  /api/community  -> latest published posts (signed-in users)
 POST /api/community -> publish a text post (active subscribers or owner)
 DELETE /api/community -> remove a post (author or owner)
 """
+import base64
 import json
 import os
+import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
@@ -27,8 +31,10 @@ from api.user_security import (
     verify_access_token,
 )
 
-MAX_BODY_BYTES = 16_384
+MAX_BODY_BYTES = 2_150_000
 MAX_POST_LENGTH = 5_000
+MAX_COMMUNITY_IMAGE_BYTES = 1_500_000
+COMMUNITY_STORAGE_BUCKET = "lm-community-media"
 FEED_LIMIT = 50
 
 
@@ -327,6 +333,131 @@ def _attach_comment_authors(comments):
     return result
 
 
+def _registered_member_count():
+    """Count real LM Analyzer profiles without relying on a capped page size."""
+    base = get_supabase_url().rstrip("/")
+    key = get_supabase_service_key()
+    query = urllib.parse.urlencode({"select": "id", "limit": "1"})
+    request = urllib.request.Request(
+        base + "/rest/v1/profiles?" + query,
+        headers={
+            "apikey": key,
+            "Authorization": "Bearer " + key,
+            "Accept": "application/json",
+            "Prefer": "count=exact",
+            "Range": "0-0",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            content_range = response.headers.get("Content-Range", "")
+            match = re.search(r"/(\\d+|\\*)$", content_range)
+            if match and match.group(1) != "*":
+                return int(match.group(1))
+            raw = response.read().decode("utf-8", errors="replace")
+            rows = json.loads(raw) if raw else []
+            if isinstance(rows, list):
+                return len(rows)
+            raise RuntimeError("Community member count was not returned.")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError("Community member count is temporarily unavailable (HTTP {}).".format(exc.code)) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError("Community member count is temporarily unavailable.") from exc
+
+
+def _ensure_community_storage_bucket():
+    """Create the additive public-media bucket once, using the server-only key."""
+    base = get_supabase_url().rstrip("/")
+    key = get_supabase_service_key()
+    payload = json.dumps({
+        "id": COMMUNITY_STORAGE_BUCKET,
+        "name": COMMUNITY_STORAGE_BUCKET,
+        "public": True,
+        "file_size_limit": MAX_COMMUNITY_IMAGE_BYTES,
+        "allowed_mime_types": ["image/jpeg", "image/png", "image/webp"],
+    }, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(
+        base + "/storage/v1/bucket",
+        data=payload,
+        headers={
+            "apikey": key,
+            "Authorization": "Bearer " + key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            response.read()
+    except urllib.error.HTTPError as exc:
+        # A duplicate bucket means it is already ready; do not recreate or alter it.
+        if exc.code != 409:
+            raise RuntimeError("Community image storage could not be prepared (HTTP {}).".format(exc.code)) from exc
+
+
+def _upload_community_image(user_id, image_data_url, avatar=False):
+    """Validate an Android-compressed image and upload it to the public community bucket."""
+    value = str(image_data_url or "").strip()
+    match = re.fullmatch(r"data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)", value)
+    if not match:
+        raise ValueError("Choose a valid JPG, PNG, or WebP image.")
+    content_type, encoded = match.groups()
+    try:
+        image_bytes = base64.b64decode(encoded, validate=True)
+    except (ValueError, base64.binascii.Error) as exc:
+        raise ValueError("The selected image could not be decoded.") from exc
+    if not image_bytes or len(image_bytes) > MAX_COMMUNITY_IMAGE_BYTES:
+        raise ValueError("Community images must be 1.5 MB or smaller after compression.")
+    valid_signature = (
+        (content_type == "image/jpeg" and image_bytes.startswith(b"\\xff\\xd8\\xff")) or
+        (content_type == "image/png" and image_bytes.startswith(b"\\x89PNG\\r\\n\\x1a\\n")) or
+        (content_type == "image/webp" and len(image_bytes) >= 12 and image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP")
+    )
+    if not valid_signature:
+        raise ValueError("The selected file is not a valid supported image.")
+    extension = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[content_type]
+    if avatar:
+        object_path = "official/channel-avatar." + extension
+    else:
+        object_path = "members/{}/{}.{}".format(user_id, uuid.uuid4().hex, extension)
+    _ensure_community_storage_bucket()
+    base = get_supabase_url().rstrip("/")
+    key = get_supabase_service_key()
+    encoded_path = urllib.parse.quote(object_path, safe="/")
+    request = urllib.request.Request(
+        base + "/storage/v1/object/{}/{}".format(COMMUNITY_STORAGE_BUCKET, encoded_path),
+        data=image_bytes,
+        headers={
+            "apikey": key,
+            "Authorization": "Bearer " + key,
+            "Content-Type": content_type,
+            "x-upsert": "true" if avatar else "false",
+            "Cache-Control": "public, max-age=31536000" if not avatar else "public, max-age=60",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=25) as response:
+            response.read()
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError("Community image upload failed (HTTP {}).".format(exc.code)) from exc
+    public_url = base + "/storage/v1/object/public/{}/{}".format(
+        COMMUNITY_STORAGE_BUCKET, encoded_path
+    )
+    if avatar:
+        public_url += "?v=" + str(int(time.time()))
+    return public_url
+
+
+def _community_avatar_url():
+    base = get_supabase_url().rstrip("/")
+    return base + "/storage/v1/object/public/{}/official/channel-avatar.jpg?v={}".format(
+        COMMUNITY_STORAGE_BUCKET, int(time.time())
+    )
+
+
 def _query_post_id(handler):
     values = urllib.parse.parse_qs(
         urllib.parse.urlparse(handler.path).query, keep_blank_values=False
@@ -346,6 +477,14 @@ class handler(BaseHTTPRequestHandler):
             user = _authenticate(self)
             query_args = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             action = (query_args.get("action") or [""])[0].strip().lower()
+            if action == "meta":
+                member_count = _registered_member_count()
+                _send(self, 200, {
+                    "member_count": member_count,
+                    "avatar_url": _community_avatar_url(),
+                    "description": "Official space for LM Analyzer traders to share chart ideas, trade images, lessons and questions.",
+                })
+                return
             if action == "profile":
                 target_id = ((query_args.get("user_id") or [""])[0].strip() or str(user.get("id", "")).strip())
                 if not target_id or len(target_id) > 64:
@@ -464,6 +603,15 @@ class handler(BaseHTTPRequestHandler):
             user_id = str(user["id"])
             body = _read_body(self)
             action = str(body.get("action", "publish")).strip().lower()
+            if action == "channel_avatar":
+                if not is_owner_user(user):
+                    _send(self, 403, {"error": "Only the LM Analyzer admin can change the community avatar."})
+                    return
+                avatar_url = _upload_community_image(
+                    user_id, body.get("image_data_url"), avatar=True
+                )
+                _send(self, 200, {"success": True, "avatar_url": avatar_url})
+                return
             if action in ("like", "unlike", "comment"):
                 post_id = str(body.get("post_id", "")).strip()
                 if not post_id or len(post_id) > 64:
@@ -517,21 +665,26 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             text = str(body.get("body", "")).strip()
-            if not text:
-                raise ValueError("Write a message before publishing.")
             if len(text) > MAX_POST_LENGTH:
                 raise ValueError("Posts must be 5,000 characters or fewer.")
+            image_data_url = body.get("image_data_url")
+            image_url = ""
+            if image_data_url is not None and str(image_data_url).strip():
+                image_url = _upload_community_image(user_id, image_data_url, avatar=False)
+            if not text and not image_url:
+                raise ValueError("Write a message or attach an image before sending.")
 
-            # Images are deliberately not accepted in this first backend step;
-            # add authenticated Storage uploads separately before enabling them.
+            post_payload = {
+                "user_id": user_id,
+                "body": text,
+                "status": "published",
+            }
+            if image_url:
+                post_payload["image_url"] = image_url
             result = _supabase(
                 "POST",
                 "/rest/v1/community_posts",
-                {
-                    "user_id": user_id,
-                    "body": text,
-                    "status": "published",
-                },
+                post_payload,
                 prefer="return=representation",
             )
             post = result[0] if isinstance(result, list) and result else None
@@ -561,7 +714,7 @@ class handler(BaseHTTPRequestHandler):
                     push_summary = notify_user_ids(
                         follower_ids,
                         title="New community post",
-                        body=author_name + ": " + " ".join(text.split())[:110],
+                        body=author_name + ": " + (" ".join(text.split())[:95] if text else "shared a trade image"),
                         data={"type": "community_post", "post_id": str(post.get("id", ""))},
                     ) or push_summary
             except Exception as push_error:
