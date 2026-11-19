@@ -50,6 +50,10 @@
       "destination": "/api/router?route=market_quotes"
     },
     {
+      "source": "/api/market_candles",
+      "destination": "/api/router?route=market_candles"
+    },
+    {
       "source": "/api/payment",
       "destination": "/api/router?route=payment"
     },
