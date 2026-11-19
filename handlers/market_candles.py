@@ -1,0 +1,62 @@
+"""Authenticated OHLC history endpoint for the Live Markets candlestick view."""
+import json, os, urllib.error, urllib.parse, urllib.request
+from http.server import BaseHTTPRequestHandler
+from analysis_common import json_response
+from api.user_security import extract_bearer_token, verify_access_token
+
+SYMBOLS = {
+ "EURUSD":"EUR/USD","GBPUSD":"GBP/USD","USDJPY":"USD/JPY","USDCHF":"USD/CHF","USDCAD":"USD/CAD","AUDUSD":"AUD/USD","NZDUSD":"NZD/USD",
+ "EURGBP":"EUR/GBP","EURJPY":"EUR/JPY","GBPJPY":"GBP/JPY","AUDJPY":"AUD/JPY","EURCHF":"EUR/CHF",
+ "XAUUSD":"XAU/USD","XAGUSD":"XAG/USD","XPTUSD":"XPT/USD",
+ "WTI":"WTI","BRENT":"BRENT","COPPER":"XCU/USD",
+ "BTCUSD":"BTC/USD","ETHUSD":"ETH/USD","SOLUSD":"SOL/USD","XRPUSD":"XRP/USD","LTCUSD":"LTC/USD","ADAUSD":"ADA/USD",
+ "AAPL":"AAPL","MSFT":"MSFT","NVDA":"NVDA","TSLA":"TSLA","AMZN":"AMZN","GOOGL":"GOOGL","META":"META",
+ "US500":os.environ.get("TWELVE_DATA_US500_SYMBOL","").strip(),
+ "NAS100":os.environ.get("TWELVE_DATA_NAS100_SYMBOL","").strip(),
+ "US30":os.environ.get("TWELVE_DATA_US30_SYMBOL","").strip(),
+ "GER40":os.environ.get("TWELVE_DATA_GER40_SYMBOL","").strip(),
+ "UK100":os.environ.get("TWELVE_DATA_UK100_SYMBOL","").strip(),
+}
+INTERVALS={"1min":"1min","5min":"5min","15min":"15min","1h":"1h","4h":"4h","1day":"1day"}
+
+def _candles(symbol, interval, api_key):
+    provider_symbol=SYMBOLS.get(symbol)
+    if not provider_symbol:
+        raise ValueError("No verified provider symbol is configured for this market.")
+    if not api_key: raise RuntimeError("Live market data is not configured.")
+    query=urllib.parse.urlencode({"symbol":provider_symbol,"interval":interval,"outputsize":"100","apikey":api_key},safe="/")
+    req=urllib.request.Request("https://api.twelvedata.com/time_series?"+query,headers={"Accept":"application/json","User-Agent":"LMAnalyzer/1.0"})
+    try:
+        with urllib.request.urlopen(req,timeout=12) as response: data=json.loads(response.read().decode("utf-8",errors="replace"))
+    except urllib.error.HTTPError as exc:
+        try: message=json.loads(exc.read().decode("utf-8",errors="replace")).get("message","Provider rejected candle request.")
+        except Exception: message="Provider rejected candle request."
+        raise RuntimeError(str(message)[:160]) from exc
+    except (urllib.error.URLError,TimeoutError) as exc: raise RuntimeError("Market chart provider is temporarily unavailable.") from exc
+    if not isinstance(data,dict) or data.get("status")=="error" or not isinstance(data.get("values"),list):
+        raise RuntimeError(str((data or {}).get("message","No candle history is available."))[:160])
+    values=[]
+    for row in reversed(data["values"]):
+        try:
+            values.append({"time":row["datetime"],"open":float(row["open"]),"high":float(row["high"]),"low":float(row["low"]),"close":float(row["close"])})
+        except (KeyError,TypeError,ValueError): continue
+    if not values: raise RuntimeError("The provider returned no valid candles.")
+    return {"symbol":symbol,"interval":interval,"candles":values,"provider":"Twelve Data","updated_at":__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat().replace("+00:00","Z")}
+
+class handler(BaseHTTPRequestHandler):
+    def do_OPTIONS(self): json_response(self,204,{})
+    def do_GET(self):
+        try: verify_access_token(extract_bearer_token(self))
+        except Exception as exc:
+            json_response(self,401,{"error":str(exc) or "Sign in to view market charts."}); return
+        from urllib.parse import parse_qs,urlsplit
+        params=parse_qs(urlsplit(self.path).query)
+        symbol=(params.get("symbol") or [""])[0].upper()
+        interval=(params.get("interval") or ["15min"])[0].lower()
+        if symbol not in SYMBOLS or interval not in INTERVALS:
+            json_response(self,400,{"error":"Unsupported instrument or timeframe."}); return
+        try: json_response(self,200,_candles(symbol,INTERVALS[interval],os.environ.get("TWELVE_DATA_API_KEY","").strip()))
+        except (ValueError,RuntimeError) as exc: json_response(self,503,{"error":str(exc)[:180]})
+        except Exception as exc:
+            print("market_candles error:",str(exc)[:180]); json_response(self,500,{"error":"Market chart could not be loaded."})
+    def log_message(self,*_args): return
