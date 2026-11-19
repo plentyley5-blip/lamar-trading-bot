@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from handlers import (
-    analysis_history, analysis_submit, analysis_status, analysis_worker,
+    analysis_history, analysis_submit, analysis_status, analysis_worker, market_candles,
     analyze, auth, community, delete_account, health, market_quotes,
     news, payment, pesapal, register_device, send_notification,
     subscription_access, subscription_status, support_chat,
@@ -28,6 +28,7 @@ HANDLERS = {
         "delete_account": delete_account,
         "health": health,
         "market_quotes": market_quotes,
+        "market_candles": market_candles,
         "news": news,
         "payment": payment,
         "pesapal": pesapal,
