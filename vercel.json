@@ -81,5 +81,10 @@
       "source": "/api/trader_tools",
       "destination": "/api/router?route=trader_tools"
     }
-  ]
+  ],
+  "functions": {
+    "api/router.py": {
+      "maxDuration": 60
+    }
+  }
 }
