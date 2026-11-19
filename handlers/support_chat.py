@@ -21,15 +21,19 @@ from api.user_security import (
     verify_access_token,
 )
 
-GEMINI_API_KEY = (
-    os.environ.get("GEMINI_OPENAI_KEY", "").strip()
-    or os.environ.get("GEMINI_API_KEY", "").strip()
-)
-# Keep one fast primary and one compatibility fallback. Do not serially walk
-# several models on quota errors or network timeouts.
+def get_gemini_api_key():
+    """Use the same canonical key as LM Analyzer's working analysis backend."""
+    return (
+        os.environ.get("GEMINI_API_KEY", "").strip()
+        or os.environ.get("GEMINI_OPENAI_KEY", "").strip()
+    )
+
+
+# Keep one current primary and one fallback already used by the main analysis
+# service. This prevents support from depending on a separate model entitlement.
 GEMINI_MODELS = (
     "gemini-3.8-flash",
-    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
 )
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 MAX_REQUEST_BYTES = 12_000
@@ -484,8 +488,9 @@ def local_support_reply(messages):
 
 
 def call_gemini(messages):
-    if not GEMINI_API_KEY:
-        raise RuntimeError("Gemini support is not configured. Set GEMINI_OPENAI_KEY in Vercel.")
+    api_key = get_gemini_api_key()
+    if not api_key:
+        raise RuntimeError("Gemini support is not configured. Set GEMINI_API_KEY in Vercel.")
 
     system_prompt = (
         "You are LM Analyzer's friendly, concise customer-support assistant for a forex chart-analysis Android app. "
@@ -543,7 +548,7 @@ def call_gemini(messages):
         request = urllib.request.Request(
             GEMINI_URL.format(model=model), data=body, method="POST",
             headers={"Content-Type": "application/json", "Accept": "application/json",
-                     "x-goog-api-key": GEMINI_API_KEY},
+                     "x-goog-api-key": api_key},
         )
         try:
             with urllib.request.urlopen(request, timeout=GEMINI_TIMEOUT_SECONDS) as response:
@@ -918,7 +923,10 @@ class handler(BaseHTTPRequestHandler):
                 # human-support ticket. Keep the conversation in bot mode so
                 # the customer can retry; explicit model escalation still
                 # follows the normal human-agent handoff path below.
-                print("LM_SUPPORT_GEMINI unavailable error_type={}".format(type(exc).__name__))
+                safe_reason = re.sub(r"[^A-Za-z0-9 _.,():/-]", "", str(exc))[:180]
+                print("LM_SUPPORT_GEMINI unavailable error_type={} reason={}".format(
+                    type(exc).__name__, safe_reason or "unspecified"
+                ))
                 # Never leave a customer with the same dead-end error. Preserve bot
                 # mode and return a helpful, honest fallback tied to their message.
                 raw_reply = fallback_support_reply(context)
