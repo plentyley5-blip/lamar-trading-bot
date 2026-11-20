@@ -77,6 +77,7 @@ def _unavailable(item, reason):
         "change_percent": None,
         "updated_at": "",
         "error": str(reason or "Quote unavailable.")[:180],
+        "quote_state": "UNAVAILABLE",
     }
 
 
@@ -153,6 +154,7 @@ def _quote_item(item, provider_row):
         "change_percent": round(percent, 6) if percent is not None else None,
         "updated_at": _parse_time(provider_row.get("last_quote_at") or provider_row.get("timestamp") or provider_row.get("datetime")),
         "error": "",
+        "quote_state": "LIVE",
     }
 
 
@@ -247,9 +249,12 @@ def _fetch_quotes(api_key, category, previous_payload=None):
             retained = dict(previous_rows[symbol])
             retained["name"] = item["name"]
             retained["category"] = category
+            retained["quote_state"] = "DELAYED"
             results.append(retained)
         else:
-            results.append(_unavailable(item, "Waiting for this instrument's first refresh cycle."))
+            waiting = _unavailable(item, "Waiting for the first provider quote. No sample price is shown.")
+            waiting["quote_state"] = "WAITING"
+            results.append(waiting)
 
     return {
         "markets": results,
@@ -279,6 +284,27 @@ def _response_payload(row, cached):
     payload = dict(row.get("payload") or {})
     payload["cached"] = bool(cached)
     payload["cache_updated_at"] = str(row.get("updated_at") or "")
+    now = datetime.now(timezone.utc)
+    markets = payload.get("markets")
+    if isinstance(markets, list):
+        enriched = []
+        for original in markets:
+            if not isinstance(original, dict):
+                continue
+            item = dict(original)
+            raw_time = str(item.get("updated_at") or "")
+            age_seconds = None
+            if raw_time:
+                try:
+                    quote_time = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+                    age_seconds = max(0, int((now - quote_time).total_seconds()))
+                except (ValueError, TypeError):
+                    age_seconds = None
+            item["quote_age_seconds"] = age_seconds
+            if item.get("available") and item.get("quote_state") != "DELAYED":
+                item["quote_state"] = "LIVE" if age_seconds is not None and age_seconds <= CACHE_SECONDS else "DELAYED"
+            enriched.append(item)
+        payload["markets"] = enriched
     return payload
 
 
