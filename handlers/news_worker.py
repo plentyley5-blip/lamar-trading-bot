@@ -176,6 +176,7 @@ def _process_one():
     if not job:
         return {"processed": False, "reason": "queue_empty"}
     now = datetime.now(timezone.utc)
+    event = job.get("event_data") or {}
     expires = datetime.fromisoformat(str(job["expires_at"]).replace("Z", "+00:00"))
     if expires <= now:
         _patch_job(job["id"], {"status": "skipped", "error": "Assessment window expired.",
@@ -195,8 +196,6 @@ def _process_one():
             and bool(result.get("entry") and result.get("stop_loss")
                      and result.get("take_profit_1") and result.get("take_profit_2"))
         )
-        if should_notify:
-            patch["notification_sent"] = True
         _patch_job(job["id"], patch)
         if should_notify:
             user_ids = _active_subscriber_ids()
@@ -219,6 +218,10 @@ def _process_one():
                      "take_profit_1": str(result.get("take_profit_1", "")),
                      "take_profit_2": str(result.get("take_profit_2", ""))},
                 )
+            _patch_job(job["id"], {
+                "notification_sent": True,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
         return {"processed": True, "status": "completed",
                 "notification_eligible": should_notify}
     except Exception as exc:
