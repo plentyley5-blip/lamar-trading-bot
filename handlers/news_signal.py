@@ -16,14 +16,14 @@ TZ = ZoneInfo("Africa/Kampala")
 MODEL = "gemini-3.5-flash-lite"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent"
 RELATED = {
-    "USD": {"XAUUSD","XAGUSD","EURUSD","GBPUSD","GBPJPY","USDCHF","USDJPY","USDCAD","AUDUSD","NZDUSD"},
-    "EUR": {"EURUSD","EURGBP","EURJPY","EURCHF"},
-    "GBP": {"GBPUSD","GBPJPY","EURGBP"},
-    "JPY": {"USDJPY","GBPJPY","EURJPY","AUDJPY"},
-    "CHF": {"USDCHF","EURCHF"},
-    "CAD": {"USDCAD"},
-    "AUD": {"AUDUSD","AUDJPY"},
-    "NZD": {"NZDUSD"},
+    "USD": {"EURUSD","GBPUSD","USDJPY","USDCHF","USDCAD","AUDUSD","NZDUSD","XAUUSD","XAGUSD"},
+    "EUR": {"EURUSD","EURGBP","EURJPY","EURCHF","EURAUD","EURCAD","EURNZD"},
+    "GBP": {"GBPUSD","EURGBP","GBPJPY","GBPCHF","GBPAUD","GBPCAD","GBPNZD"},
+    "JPY": {"USDJPY","EURJPY","GBPJPY","AUDJPY","CADJPY","CHFJPY","NZDJPY"},
+    "CHF": {"USDCHF","EURCHF","GBPCHF","AUDCHF","CADCHF","NZDCHF","CHFJPY"},
+    "CAD": {"USDCAD","EURCAD","GBPCAD","AUDCAD","CADJPY","CADCHF","NZDCAD"},
+    "AUD": {"AUDUSD","EURAUD","GBPAUD","AUDJPY","AUDCAD","AUDCHF","AUDNZD"},
+    "NZD": {"NZDUSD","EURNZD","GBPNZD","AUDNZD","NZDJPY","NZDCAD","NZDCHF"},
 }
 
 def parse_event_dt(event):
