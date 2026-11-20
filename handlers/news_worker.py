@@ -188,6 +188,7 @@ def _process_one():
             and result.get("setup_status") == "READY"
             and result.get("order_type") == "MARKET"
             and result.get("signal") in ("BUY", "SELL")
+            and not bool(job.get("notification_sent"))
             and bool(result.get("entry") and result.get("stop_loss")
                      and result.get("take_profit_1") and result.get("take_profit_2"))
         )
