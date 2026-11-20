@@ -308,12 +308,14 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         # The economic calendar itself is part of the paid High Impact News feature.
-        from api.user_security import extract_bearer_token, verify_access_token
+        from api.user_security import extract_bearer_token, verify_access_token, is_owner_user
         from handlers.subscription_access import has_active_subscription
         try:
             user = verify_access_token(extract_bearer_token(self))
             user_id = str(user.get("id", "")).strip() if isinstance(user, dict) else ""
-            if not user_id or not has_active_subscription(user_id):
+            # Owner identity is verified server-side against OWNER_EMAIL.
+            # All other users must have a current, non-expired subscription.
+            if not user_id or (not is_owner_user(user) and not has_active_subscription(user_id)):
                 response(self, 403, {
                     "error": "An active LM Analyzer subscription is required to access High Impact News.",
                     "premium_feature": "high_impact_news",
