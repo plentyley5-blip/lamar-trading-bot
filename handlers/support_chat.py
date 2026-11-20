@@ -18,6 +18,7 @@ from api.user_security import (
     extract_bearer_token,
     get_supabase_service_key,
     get_supabase_url,
+    is_owner_user,
     verify_access_token,
 )
 
@@ -658,6 +659,18 @@ class handler(BaseHTTPRequestHandler):
             user_id = str(user["id"])
             params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             action = str((params.get("action") or [""])[0]).strip().lower()
+            if action == "bot_profile":
+                rows = supabase_request(
+                    "GET", "support_bot_settings",
+                    {"id": "eq.global", "select": "avatar_data_url,updated_at", "limit": "1"},
+                )
+                setting = rows[0] if isinstance(rows, list) and rows else {}
+                json_response(self, 200, {
+                    "is_owner": bool(is_owner_user(user)),
+                    "avatar_data_url": str(setting.get("avatar_data_url") or ""),
+                    "updated_at": str(setting.get("updated_at") or ""),
+                })
+                return
             if action == "agent_me":
                 agent = get_agent(user_id)
                 if not agent:
@@ -711,6 +724,31 @@ class handler(BaseHTTPRequestHandler):
             user_id = str(user["id"])
             data = read_json(self)
             action = str(data.get("action", "send")).strip().lower()
+
+            if action == "update_bot_avatar":
+                if not is_owner_user(user):
+                    raise PermissionError("Only the LM Analyzer administrator can change the support avatar.")
+                avatar_data_url = str(data.get("avatar_data_url", "")).strip()
+                if not avatar_data_url.startswith(("data:image/jpeg;base64,", "data:image/png;base64,", "data:image/webp;base64,")):
+                    raise ValueError("Choose a valid JPG, PNG, or WEBP image.")
+                encoded = avatar_data_url.split(",", 1)[1]
+                if len(encoded) > 700_000:
+                    raise ValueError("The support avatar must be 500 KB or smaller after compression.")
+                try:
+                    import base64
+                    decoded = base64.b64decode(encoded, validate=True)
+                except Exception as exc:
+                    raise ValueError("The selected avatar image is invalid.") from exc
+                if not decoded or len(decoded) > 500_000:
+                    raise ValueError("The support avatar must be 500 KB or smaller after compression.")
+                supabase_request(
+                    "POST", "support_bot_settings?on_conflict=id",
+                    payload={"id": "global", "avatar_data_url": avatar_data_url,
+                             "updated_by": user_id, "updated_at": utc_now()},
+                    prefer="resolution=merge-duplicates,return=representation",
+                )
+                json_response(self, 200, {"updated": True, "avatar_data_url": avatar_data_url})
+                return
 
             if action == "agent_me":
                 agent = get_agent(user_id)
