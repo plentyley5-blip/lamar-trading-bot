@@ -4,7 +4,7 @@ import math
 import os
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 from zoneinfo import ZoneInfo
 
@@ -56,7 +56,7 @@ def parse_candle_time(value):
         dt = None
         for fmt in ("%Y-%m-%d %H:%M:%S","%Y-%m-%d %H:%M"):
             try:
-                dt = datetime.strptime(raw,fmt).replace(tzinfo=TZ)
+                dt = datetime.strptime(raw,fmt).replace(tzinfo=timezone.utc)
                 break
             except ValueError:
                 pass
@@ -93,6 +93,9 @@ def validate_candles(raw, updated_at, stale=False):
     rows.sort(key=lambda x:x["time"])
     if len(rows) < 30:
         raise ValueError("The provider returned insufficient valid candles.")
+    candle_age = (datetime.now(TZ)-rows[-1]["time"]).total_seconds()
+    if candle_age < -180 or candle_age > 180:
+        raise ValueError("The latest market candle is not current. No live news signal can be issued.")
     return rows,age
 
 def atr(rows):
