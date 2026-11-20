@@ -29,7 +29,7 @@ from api.user_security import extract_bearer_token, verify_access_token
 
 PROVIDER_URL = "https://api.twelvedata.com/quote"
 CACHE_KEY = "market_quotes"
-CACHE_SECONDS = 75
+CACHE_SECONDS = 60
 PROVIDER_TIMEOUT_SECONDS = 9
 MAX_PROVIDER_CREDITS_PER_REFRESH = 8
 PROVIDER_CREDIT_LIMIT_PER_MINUTE = 8
