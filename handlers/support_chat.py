@@ -37,7 +37,7 @@ GEMINI_MODELS = (
     "gemini-3.5-flash-lite",
 )
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-MAX_REQUEST_BYTES = 12_000
+MAX_REQUEST_BYTES = 800_000
 MAX_MESSAGE_CHARS = 2_000
 MAX_HISTORY_MESSAGES = 12
 GEMINI_TIMEOUT_SECONDS = 18
@@ -154,7 +154,7 @@ def get_messages(conversation_id, customer_user_id, limit=300):
     return supabase_request(
         "GET", "support_messages",
         {"conversation_id": "eq." + conversation_id, "user_id": "eq." + customer_user_id,
-         "select": "id,conversation_id,user_id,role,content,sender_id,sender_name,created_at",
+         "select": "id,conversation_id,user_id,role,content,attachment_data_url,sender_id,sender_name,created_at",
          "order": "created_at.asc", "limit": str(limit)},
     )
 
@@ -232,13 +232,15 @@ def fallback_support_reply(messages):
     )
 
 
-def save_message(conversation_id, customer_user_id, role, content, sender_id=None, sender_name=None):
+def save_message(conversation_id, customer_user_id, role, content, sender_id=None, sender_name=None, attachment_data_url=None):
     payload = {
         "conversation_id": conversation_id,
         "user_id": customer_user_id,
         "role": role,
         "content": content,
     }
+    if attachment_data_url:
+        payload["attachment_data_url"] = attachment_data_url
     if sender_id:
         payload["sender_id"] = sender_id
     if sender_name:
@@ -532,8 +534,17 @@ def call_gemini(messages):
         else:
             continue
         content = str(item.get("content", "")).strip()
+        parts = []
         if content:
-            contents.append({"role": role, "parts": [{"text": content[:MAX_MESSAGE_CHARS]}]})
+            parts.append({"text": content[:MAX_MESSAGE_CHARS]})
+        attachment = str(item.get("attachment_data_url", "")).strip()
+        if attachment.startswith("data:image/") and ";base64," in attachment:
+            mime_type = attachment[5:].split(";", 1)[0].lower()
+            encoded_image = attachment.split(",", 1)[1]
+            if mime_type in {"image/jpeg", "image/png", "image/webp"} and len(encoded_image) <= 700_000:
+                parts.append({"inline_data": {"mime_type": mime_type, "data": encoded_image}})
+        if parts:
+            contents.append({"role": role, "parts": parts})
     if not contents:
         raise ValueError("Please enter a message.")
 
@@ -907,10 +918,24 @@ class handler(BaseHTTPRequestHandler):
             if action != "send":
                 raise ValueError("Unsupported support chat action.")
             message = str(data.get("message", "")).strip()
-            if not message:
-                raise ValueError("Type a message before sending.")
+            attachment_data_url = str(data.get("attachment_data_url", "")).strip()
+            if not message and not attachment_data_url:
+                raise ValueError("Type a message or attach an image before sending.")
             if len(message) > MAX_MESSAGE_CHARS:
                 raise ValueError("Messages must be 2,000 characters or fewer.")
+            if attachment_data_url:
+                if not attachment_data_url.startswith(("data:image/jpeg;base64,", "data:image/png;base64,", "data:image/webp;base64,")):
+                    raise ValueError("Choose a valid JPG, PNG, or WEBP image.")
+                encoded_image = attachment_data_url.split(",", 1)[1]
+                if len(encoded_image) > 700_000:
+                    raise ValueError("Support images must be 500 KB or smaller after compression.")
+                try:
+                    import base64
+                    decoded_image = base64.b64decode(encoded_image, validate=True)
+                except Exception as exc:
+                    raise ValueError("The attached image is invalid.") from exc
+                if not decoded_image or len(decoded_image) > 500_000:
+                    raise ValueError("Support images must be 500 KB or smaller after compression.")
 
             conversation_id = str(data.get("conversation_id", "")).strip()
             if conversation_id:
@@ -929,7 +954,7 @@ class handler(BaseHTTPRequestHandler):
                 if not conversation_id:
                     raise RuntimeError("Support conversation was created without an ID.")
 
-            save_message(conversation_id, user_id, "user", message)
+            save_message(conversation_id, user_id, "user", message, attachment_data_url=attachment_data_url or None)
             touch_conversation(conversation_id)
             status = str(conversation.get("support_status") or "bot")
             if status in {"waiting", "assigned"}:
