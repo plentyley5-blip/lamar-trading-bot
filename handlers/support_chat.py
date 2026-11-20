@@ -923,6 +923,8 @@ class handler(BaseHTTPRequestHandler):
                 raise ValueError("Type a message or attach an image before sending.")
             if len(message) > MAX_MESSAGE_CHARS:
                 raise ValueError("Messages must be 2,000 characters or fewer.")
+            if attachment_data_url and not message:
+                message = "Please review the attached image and help me with it."
             if attachment_data_url:
                 if not attachment_data_url.startswith(("data:image/jpeg;base64,", "data:image/png;base64,", "data:image/webp;base64,")):
                     raise ValueError("Choose a valid JPG, PNG, or WEBP image.")
