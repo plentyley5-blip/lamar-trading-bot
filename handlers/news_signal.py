@@ -65,27 +65,35 @@ def parse_candle_time(value):
         return None
     return (dt.replace(tzinfo=TZ) if dt.tzinfo is None else dt).astimezone(TZ)
 
-def validate_candles(raw):
+def validate_candles(raw, updated_at, stale=False):
     if not isinstance(raw,list) or not 30 <= len(raw) <= 120:
         raise ValueError("At least 30 recent one-minute candles are required.")
+    if stale:
+        raise ValueError("Market candles are delayed. No live news signal can be issued.")
+    try:
+        stamp = datetime.fromisoformat(str(updated_at or "").replace("Z","+00:00"))
+        if stamp.tzinfo is None:
+            raise ValueError("Market candle freshness could not be verified.")
+        age = max(0,int((datetime.now(TZ)-stamp.astimezone(TZ)).total_seconds()))
+    except (TypeError,ValueError) as exc:
+        raise ValueError("Market candle freshness could not be verified.") from exc
+    if age > 180:
+        raise ValueError("Market candles are delayed. No live news signal can be issued.")
     rows = []
     for item in raw:
         if not isinstance(item,dict):
             continue
-        stamp = parse_candle_time(item.get("time"))
+        candle_time = parse_candle_time(item.get("time"))
         try:
             o,h,l,c = [float(item[k]) for k in ("open","high","low","close")]
         except (KeyError,TypeError,ValueError):
             continue
-        if stamp is None or not all(math.isfinite(x) and x > 0 for x in (o,h,l,c)) or h < max(o,c,l) or l > min(o,c,h):
+        if candle_time is None or not all(math.isfinite(x) and x > 0 for x in (o,h,l,c)) or h < max(o,c,l) or l > min(o,c,h):
             continue
-        rows.append({"time":stamp,"open":o,"high":h,"low":l,"close":c})
+        rows.append({"time":candle_time,"open":o,"high":h,"low":l,"close":c})
     rows.sort(key=lambda x:x["time"])
     if len(rows) < 30:
         raise ValueError("The provider returned insufficient valid candles.")
-    age = max(0,int((datetime.now(TZ)-rows[-1]["time"]).total_seconds()))
-    if age > 180:
-        raise ValueError("Market candles are delayed. No live news signal can be issued.")
     return rows,age
 
 def atr(rows):
@@ -192,7 +200,7 @@ class handler(BaseHTTPRequestHandler):
             currency=str(event.get("currency") or "").upper()
             if symbol not in RELATED.get(currency,set()):
                 raise ValueError("This instrument is not related to the selected event currency.")
-            rows,age=validate_candles(payload.get("candles"))
+            rows,age=validate_candles(payload.get("candles"),payload.get("market_data_updated_at"),payload.get("market_data_stale",False))
             event_dt=parse_event_dt(event)
             now=datetime.now(TZ)
             if now<event_dt:
