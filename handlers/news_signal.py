@@ -62,7 +62,7 @@ def parse_candle_time(value):
                 pass
     if dt is None:
         return None
-    return (dt.replace(tzinfo=TZ) if dt.tzinfo is None else dt).astimezone(TZ)
+    return (dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt).astimezone(TZ)
 
 def validate_candles(raw, updated_at, stale=False):
     if not isinstance(raw,list) or not 30 <= len(raw) <= 120:
