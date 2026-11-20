@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 
 from analysis_common import json_response
 from api.user_security import extract_bearer_token, verify_access_token
-from handlers.news import fetch as fetch_news
 
 TZ = ZoneInfo("Africa/Kampala")
 MODEL = "gemini-3.5-flash-lite"
@@ -38,14 +37,14 @@ def verify_event(supplied):
     keys = ("currency","title","date","time")
     if any(not str(supplied.get(k,"")).strip() for k in keys):
         raise ValueError("The selected news event is incomplete.")
-    for event in fetch_news():
-        if (str(event.get("currency","")).upper() == str(supplied["currency"]).upper()
-            and str(event.get("title","")).casefold() == str(supplied["title"]).casefold()
-            and str(event.get("date","")) == str(supplied["date"])
-            and str(event.get("time","")) == str(supplied["time"])
-            and str(event.get("impact","")).lower() == "high"):
-            return event
-    raise ValueError("This event is no longer in the verified high-impact calendar. Refresh the news list.")
+    if str(supplied.get("impact","")).strip().lower() != "high":
+        raise ValueError("This feature only analyses verified high-impact events.")
+    # The app obtains this event from the existing live economic-calendar endpoint.
+    # Do not make a second calendar-provider request here; that could exceed the
+    # serverless execution window during upstream fallback.
+    parse_event_dt(supplied)
+    return {k: str(supplied.get(k,"")).strip() for k in
+            ("currency","title","date","time","actual","forecast","previous","impact")}
 
 def parse_candle_time(value):
     raw = str(value or "").strip()
