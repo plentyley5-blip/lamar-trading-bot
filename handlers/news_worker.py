@@ -209,7 +209,15 @@ def _process_one():
                     + " | TP2 " + result["take_profit_2"],
                     {"type": "high_impact_news_signal", "event_key": str(job["event_key"]),
                      "job_id": str(job["id"]), "instrument": result["instrument"],
-                     "stage": "POST_NEWS"},
+                     "stage": "POST_NEWS", "event_title": str(event.get("title", "")),
+                     "event_currency": str(event.get("currency", "")),
+                     "event_date": str(event.get("date", "")),
+                     "event_time": str(event.get("time", "")),
+                     "signal": str(result.get("signal", "")),
+                     "entry": str(result.get("entry", "")),
+                     "stop_loss": str(result.get("stop_loss", "")),
+                     "take_profit_1": str(result.get("take_profit_1", "")),
+                     "take_profit_2": str(result.get("take_profit_2", ""))},
                 )
         return {"processed": True, "status": "completed",
                 "notification_eligible": should_notify}
