@@ -26,6 +26,10 @@
       "destination": "/api/router?route=news"
     },
     {
+      "source": "/api/news_signal",
+      "destination": "/api/router?route=news_signal"
+    },
+    {
       "source": "/api/subscription_status",
       "destination": "/api/router?route=subscription_status"
     },
