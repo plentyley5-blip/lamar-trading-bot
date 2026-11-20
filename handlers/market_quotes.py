@@ -29,7 +29,7 @@ from api.user_security import extract_bearer_token, verify_access_token
 
 PROVIDER_URL = "https://api.twelvedata.com/quote"
 CACHE_KEY = "market_quotes"
-CACHE_SECONDS = 5
+CACHE_SECONDS = 60
 PROVIDER_TIMEOUT_SECONDS = 9
 MAX_PROVIDER_CREDITS_PER_REFRESH = 8
 PROVIDER_CREDIT_LIMIT_PER_MINUTE = 8
@@ -155,12 +155,23 @@ def _quote_item(item, provider_row):
     }
 
 
-def _fetch_quotes(api_key, category):
-    """Fetch every configured symbol in the selected market category."""
+def _fetch_quotes(api_key, category, previous_payload=None):
+    """Refresh only the symbols covered by the shared credit budget.
+
+    Unrefreshed symbols retain their last valid cached quote. A rotating cursor
+    ensures every configured instrument gets refreshed over successive cycles.
+    """
     items = [{"symbol": s, "name": n, "provider_symbol": p, "category": category}
              for s, n, p in MARKET_CATALOG[category]]
-    symbols = [item["provider_symbol"] for item in items if item["provider_symbol"]]
-    if not symbols:
+    previous_payload = previous_payload if isinstance(previous_payload, dict) else {}
+    previous_rows = {
+        str(row.get("symbol")): row
+        for row in previous_payload.get("markets", [])
+        if isinstance(row, dict) and row.get("symbol")
+    }
+    configured_items = [item for item in items if item["provider_symbol"]]
+
+    if not configured_items:
         return {
             "markets": [
                 _unavailable(item, "Configure the exact provider symbol for this index in Vercel.")
@@ -170,8 +181,29 @@ def _fetch_quotes(api_key, category):
             "configured": True,
             "updated_at": _utc_now(),
             "cached": False,
+            "rotation_offset": 0,
         }
 
+    try:
+        rotation_offset = int(previous_payload.get("rotation_offset", 0))
+    except (TypeError, ValueError):
+        rotation_offset = 0
+    rotation_offset %= len(configured_items)
+
+    requested_credits = min(len(configured_items), MAX_PROVIDER_CREDITS_PER_REFRESH)
+    granted_credits = claim_provider_credits(
+        requested_credits,
+        credit_limit=PROVIDER_CREDIT_LIMIT_PER_MINUTE,
+        window_seconds=60,
+    )
+    if granted_credits <= 0:
+        return None
+
+    selected_items = [
+        configured_items[(rotation_offset + index) % len(configured_items)]
+        for index in range(granted_credits)
+    ]
+    symbols = [item["provider_symbol"] for item in selected_items]
     query = urllib.parse.urlencode(
         {"symbol": ",".join(symbols), "apikey": api_key},
         safe="/,",
@@ -197,13 +229,26 @@ def _fetch_quotes(api_key, category):
     if not isinstance(data, dict) or data.get("status") == "error" or data.get("code"):
         raise RuntimeError(_provider_error((data or {}).get("message")))
 
+    refreshed_rows = {
+        item["symbol"]: _quote_item(item, _quote_for_symbol(data, item["provider_symbol"]))
+        for item in selected_items
+    }
+
     results = []
     for item in items:
-        provider_symbol = item["provider_symbol"]
-        if not provider_symbol:
+        symbol = item["symbol"]
+        if not item["provider_symbol"]:
             results.append(_unavailable(item, "Exact provider symbol is not configured."))
+        elif symbol in refreshed_rows:
+            results.append(refreshed_rows[symbol])
+        elif symbol in previous_rows:
+            # Keep the last real provider value until this symbol's next turn.
+            retained = dict(previous_rows[symbol])
+            retained["name"] = item["name"]
+            retained["category"] = category
+            results.append(retained)
         else:
-            results.append(_quote_item(item, _quote_for_symbol(data, provider_symbol)))
+            results.append(_unavailable(item, "Waiting for this instrument's first refresh cycle."))
 
     return {
         "markets": results,
@@ -211,6 +256,9 @@ def _fetch_quotes(api_key, category):
         "configured": True,
         "updated_at": _utc_now(),
         "cached": False,
+        "rotation_offset": (rotation_offset + granted_credits) % len(configured_items),
+        "last_refresh_symbols": [item["symbol"] for item in selected_items],
+        "last_refresh_credits": granted_credits,
     }
 
 
@@ -267,7 +315,21 @@ class handler(BaseHTTPRequestHandler):
 
             if claim_shared_cache_refresh(cache_key, lock_seconds=25):
                 try:
-                    payload = _fetch_quotes(api_key, category)
+                    previous_payload = snapshot.get("payload") if isinstance(snapshot.get("payload"), dict) else {}
+                    payload = _fetch_quotes(api_key, category, previous_payload)
+                    if payload is None:
+                        release_shared_cache_refresh(cache_key)
+                        if isinstance(previous_payload.get("markets"), list) and previous_payload.get("markets"):
+                            stale_response = _response_payload(snapshot, True)
+                            stale_response["stale"] = True
+                            stale_response["rate_limited"] = True
+                            json_response(self, 200, stale_response)
+                        else:
+                            json_response(self, 429, {
+                                "error": "The shared Twelve Data credit allowance is used for this minute. Existing prices will remain visible; retry after the next minute.",
+                                "retry_after_seconds": 60,
+                            })
+                        return
                     write_shared_cache(cache_key, payload)
                     # Re-read database timestamp written by Supabase to keep the
                     # cache age authoritative across serverless instances.
