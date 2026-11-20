@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler
 from zoneinfo import ZoneInfo
 
 from analysis_common import json_response
-from api.user_security import extract_bearer_token, verify_access_token
+from api.user_security import extract_bearer_token, verify_access_token, is_owner_user
 from handlers.subscription_access import has_active_subscription
 
 TZ = ZoneInfo("Africa/Kampala")
@@ -199,7 +199,9 @@ class handler(BaseHTTPRequestHandler):
         if not user_id:
             json_response(self,401,{"error":"A valid signed-in session is required."})
             return
-        if not has_active_subscription(user_id):
+        # Owner identity is verified server-side against OWNER_EMAIL.
+        # Every non-owner still needs an active, non-expired subscription.
+        if not is_owner_user(user) and not has_active_subscription(user_id):
             json_response(self,403,{"error":"An active LM Analyzer subscription is required to access High Impact News AI outlooks and signals.","premium_feature":"high_impact_news"})
             return
         try:
