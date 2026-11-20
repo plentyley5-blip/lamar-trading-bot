@@ -18,6 +18,7 @@ from handlers.news_signal import (
     RELATED, TZ, parse_event_dt, validate_candles, ai_assess, trade_levels, fmt
 )
 from handlers.market_candles import _candles
+from service_cache import claim_provider_credits
 
 LOCAL = ZoneInfo("Africa/Kampala")
 PRE_MINUTES = 15
@@ -119,6 +120,8 @@ def _assess(job):
     if symbol not in _instruments(event.get("currency")):
         raise ValueError("Instrument is not related to the event currency.")
     api_key = os.environ.get("TWELVE_DATA_API_KEY", "").strip()
+    if claim_provider_credits(1, credit_limit=8, window_seconds=60) < 1:
+        raise RuntimeError("The shared market-data credit allowance is temporarily used. Retry next cycle.")
     candles = _candles(symbol, "1min", api_key)
     rows, age = validate_candles(
         candles.get("candles"), candles.get("updated_at"), False
