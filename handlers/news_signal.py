@@ -170,16 +170,18 @@ def trade_levels(rows,signal):
         risk=entry-stop
         reached=price>=entry
         tp1,tp2=entry+risk*1.5,entry+risk*2.5
+        late = price>=tp1 or price-entry>volatility*.75
     else:
         entry=min(x["low"] for x in prior)-volatility*.10
         stop=max(x["high"] for x in swing)+volatility*.20
         risk=stop-entry
         reached=price<=entry
         tp1,tp2=entry-risk*1.5,entry-risk*2.5
+        late = price<=tp1 or entry-price>volatility*.75
     if risk<=0 or risk>volatility*8:
         return None
     return {"entry":fmt(entry),"stop_loss":fmt(stop),"take_profit_1":fmt(tp1),"take_profit_2":fmt(tp2),
-            "entry_reached":reached,"current_price":fmt(price)}
+            "entry_reached":reached,"late_entry":late,"current_price":fmt(price)}
 
 class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
@@ -236,13 +238,20 @@ class handler(BaseHTTPRequestHandler):
                 levels=trade_levels(rows,outlook["signal"])
                 if levels:
                     reached=levels.pop("entry_reached")
+                    late=levels.pop("late_entry")
                     out.update(levels)
-                    out["setup_status"]="READY" if reached else "WAITING"
-                    out["order_type"]="MARKET" if reached else "WAIT"
-                    if reached:
-                        out["headline"]=symbol+" "+outlook["signal"]+" NOW"
+                    if late:
+                        out["setup_status"]="LATE_ENTRY"
+                        out["order_type"]="NONE"
+                        out["headline"]="TRADE MISSED"
+                        out["warning"]="The entry opportunity has moved too far or its first target has already been reached. Do not chase price."
                     else:
-                        out["warning"]="Entry has not been reached. Wait for price to reach the stated entry; do not chase."
+                        out["setup_status"]="READY" if reached else "WAITING"
+                        out["order_type"]="MARKET" if reached else "WAIT"
+                        if reached:
+                            out["headline"]=symbol+" "+outlook["signal"]+" NOW"
+                        else:
+                            out["warning"]="Entry has not been reached. Wait for price to reach the stated entry; do not chase."
                 else:
                     out["signal"]="WAIT"; out["confidence"]=min(outlook["confidence"],50)
                     out["setup_status"]="NO_SETUP"; out["order_type"]="NONE"
