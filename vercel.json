@@ -30,6 +30,10 @@
       "destination": "/api/router?route=news_signal"
     },
     {
+      "source": "/api/news_worker",
+      "destination": "/api/router?route=news_worker"
+    },
+    {
       "source": "/api/subscription_status",
       "destination": "/api/router?route=subscription_status"
     },
