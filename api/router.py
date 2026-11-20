@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 from handlers import (
     analysis_history, analysis_submit, analysis_status, analysis_worker, market_candles,
     analyze, auth, community, delete_account, health, market_quotes,
-    news, payment, pesapal, register_device, send_notification,
+    news, news_signal, payment, pesapal, register_device, send_notification,
     subscription_access, subscription_status, support_chat,
     trader_stats, trader_tools,
 )
@@ -30,6 +30,7 @@ HANDLERS = {
         "market_quotes": market_quotes,
         "market_candles": market_candles,
         "news": news,
+        "news_signal": news_signal,
         "payment": payment,
         "pesapal": pesapal,
         "register_device": register_device,
