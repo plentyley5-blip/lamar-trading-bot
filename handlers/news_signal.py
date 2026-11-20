@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from analysis_common import json_response
 from api.user_security import extract_bearer_token, verify_access_token
+from handlers.subscription_access import has_active_subscription
 
 TZ = ZoneInfo("Africa/Kampala")
 MODEL = "gemini-3.5-flash-lite"
@@ -190,9 +191,16 @@ class handler(BaseHTTPRequestHandler):
         json_response(self,204,{})
     def do_POST(self):
         try:
-            verify_access_token(extract_bearer_token(self))
+            user = verify_access_token(extract_bearer_token(self))
         except Exception as exc:
             json_response(self,401,{"error":str(exc) or "Sign in to request a news assessment."})
+            return
+        user_id = str(user.get("id", "")).strip() if isinstance(user, dict) else ""
+        if not user_id:
+            json_response(self,401,{"error":"A valid signed-in session is required."})
+            return
+        if not has_active_subscription(user_id):
+            json_response(self,403,{"error":"An active LM Analyzer subscription is required to access High Impact News AI outlooks and signals.","premium_feature":"high_impact_news"})
             return
         try:
             length=int(self.headers.get("Content-Length","0"))
