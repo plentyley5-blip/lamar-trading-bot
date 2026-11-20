@@ -69,24 +69,22 @@ set search_path = public, pg_temp
 as $function$
 declare
     v_now timestamptz := clock_timestamp();
-    v_window_started_at timestamptz;
-    v_credits_used integer := 0;
+    v_events jsonb;
+    v_active_events jsonb := '[]'::jsonb;
+    v_used integer := 0;
     v_requested integer := greatest(0, least(coalesce(p_requested_credits, 0), 8));
     v_limit integer := greatest(1, least(coalesce(p_credit_limit, 8), 8));
     v_window_seconds integer := greatest(10, least(coalesce(p_window_seconds, 60), 60));
     v_granted integer := 0;
     v_payload jsonb;
+    v_index integer;
 begin
     if v_requested = 0 then
         return 0;
     end if;
 
     insert into public.lm_service_cache (cache_key, payload, updated_at)
-    values (
-        'market_quotes_api_budget',
-        jsonb_build_object('window_started_at', v_now, 'credits_used', 0),
-        v_now
-    )
+    values ('market_quotes_api_budget', jsonb_build_object('events', '[]'::jsonb), v_now)
     on conflict (cache_key) do nothing;
 
     select payload
@@ -95,31 +93,28 @@ begin
      where cache_key = 'market_quotes_api_budget'
      for update;
 
-    begin
-        v_window_started_at := nullif(v_payload ->> 'window_started_at', '')::timestamptz;
-    exception when others then
-        v_window_started_at := null;
-    end;
-
-    begin
-        v_credits_used := greatest(0, coalesce((v_payload ->> 'credits_used')::integer, 0));
-    exception when others then
-        v_credits_used := 0;
-    end;
-
-    if v_window_started_at is null
-       or v_window_started_at + make_interval(secs => v_window_seconds) <= v_now then
-        v_window_started_at := v_now;
-        v_credits_used := 0;
+    v_events := coalesce(v_payload -> 'events', '[]'::jsonb);
+    if jsonb_typeof(v_events) <> 'array' then
+        v_events := '[]'::jsonb;
     end if;
 
-    v_granted := least(v_requested, greatest(0, v_limit - v_credits_used));
+    select coalesce(jsonb_agg(e.value), '[]'::jsonb), count(*)::integer
+      into v_active_events, v_used
+      from jsonb_array_elements(v_events) as e(value)
+     where (e.value #>> '{}')::timestamptz >
+           v_now - make_interval(secs => v_window_seconds);
+
+    v_granted := least(v_requested, greatest(0, v_limit - v_used));
 
     if v_granted > 0 then
+        for v_index in 1..v_granted loop
+            v_active_events := v_active_events || jsonb_build_array(v_now);
+        end loop;
+
         update public.lm_service_cache
            set payload = jsonb_build_object(
-                   'window_started_at', v_window_started_at,
-                   'credits_used', v_credits_used + v_granted,
+                   'events', v_active_events,
+                   'credits_used', v_used + v_granted,
                    'credit_limit', v_limit,
                    'window_seconds', v_window_seconds
                ),
@@ -130,7 +125,6 @@ begin
     return v_granted;
 end;
 $function$;
-
 revoke all on function public.claim_lm_provider_credits(integer, integer, integer) from public, anon, authenticated;
 grant execute on function public.claim_lm_provider_credits(integer, integer, integer) to service_role;
 
