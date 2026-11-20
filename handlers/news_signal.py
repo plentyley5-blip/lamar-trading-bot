@@ -16,13 +16,13 @@ MODEL = "gemini-3.5-flash-lite"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent"
 RELATED = {
     "USD": {"XAUUSD","XAGUSD","EURUSD","GBPUSD","GBPJPY","USDCHF","USDJPY","USDCAD","AUDUSD","NZDUSD"},
-    "EUR": {"EURUSD","EURGBP","EURJPY","EURCHF","EURAUD","EURCAD","EURNZD"},
-    "GBP": {"GBPUSD","GBPJPY","GBPCHF","GBPAUD","GBPCAD","GBPNZD","EURGBP"},
-    "JPY": {"USDJPY","GBPJPY","EURJPY","AUDJPY","CADJPY","CHFJPY","NZDJPY"},
-    "CHF": {"USDCHF","EURCHF","GBPCHF","AUDCHF","CADCHF","NZDCHF","CHFJPY"},
-    "CAD": {"USDCAD","EURCAD","GBPCAD","AUDCAD","CADJPY","CADCHF","NZDCAD"},
-    "AUD": {"AUDUSD","EURAUD","GBPAUD","AUDJPY","AUDCAD","AUDCHF","AUDNZD"},
-    "NZD": {"NZDUSD","EURNZD","GBPNZD","AUDNZD","NZDJPY","NZDCAD","NZDCHF"},
+    "EUR": {"EURUSD","EURGBP","EURJPY","EURCHF"},
+    "GBP": {"GBPUSD","GBPJPY","EURGBP"},
+    "JPY": {"USDJPY","GBPJPY","EURJPY","AUDJPY"},
+    "CHF": {"USDCHF","EURCHF"},
+    "CAD": {"USDCAD"},
+    "AUD": {"AUDUSD","AUDJPY"},
+    "NZD": {"NZDUSD"},
 }
 
 def parse_event_dt(event):
