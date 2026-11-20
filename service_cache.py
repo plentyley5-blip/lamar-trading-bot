@@ -90,6 +90,33 @@ def claim_shared_cache_refresh(cache_key, lock_seconds=25):
 
 
 
+def claim_provider_credits(requested_credits, credit_limit=8, window_seconds=60):
+    """Atomically reserve provider credits from the shared one-minute budget."""
+    requested = max(0, min(int(requested_credits), 8))
+    if requested == 0:
+        return 0
+
+    base, key = _config()
+    result = _request_json(
+        "POST",
+        base + "/rest/v1/rpc/claim_lm_provider_credits",
+        key,
+        body={
+            "p_requested_credits": requested,
+            "p_credit_limit": min(8, max(1, int(credit_limit))),
+            "p_window_seconds": min(60, max(10, int(window_seconds))),
+        },
+        timeout=8,
+    )
+    if isinstance(result, bool):
+        raise SharedCacheError("Supabase returned an invalid provider-credit reservation.")
+    try:
+        granted = int(result)
+    except (TypeError, ValueError):
+        raise SharedCacheError("Supabase returned an invalid provider-credit reservation.")
+    return max(0, min(requested, granted))
+
+
 def write_shared_cache(cache_key, payload):
     base, key = _config()
     params = urllib.parse.urlencode({"cache_key": "eq." + cache_key}, safe="(),.*:")
