@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from analysis_common import json_response
 from api.user_security import extract_bearer_token, verify_access_token
-from service_cache import read_shared_cache, write_shared_cache, claim_shared_cache_refresh, release_shared_cache_refresh, SharedCacheError
+from service_cache import read_shared_cache, write_shared_cache, claim_shared_cache_refresh, release_shared_cache_refresh, claim_provider_credits, SharedCacheError
 
 SYMBOLS = {
  "EURUSD":"EUR/USD","GBPUSD":"GBP/USD","USDJPY":"USD/JPY","USDCHF":"USD/CHF","USDCAD":"USD/CAD","AUDUSD":"AUD/USD","NZDUSD":"NZD/USD",
@@ -62,7 +62,7 @@ class handler(BaseHTTPRequestHandler):
             cached=read_shared_cache(cache_key)
             payload=cached.get("payload") if isinstance(cached,dict) else None
             stamp=str(cached.get("updated_at") or "") if isinstance(cached,dict) else ""
-            try: fresh=(datetime.now(timezone.utc)-datetime.fromisoformat(stamp.replace("Z","+00:00"))).total_seconds()<10
+            try: fresh=(datetime.now(timezone.utc)-datetime.fromisoformat(stamp.replace("Z","+00:00"))).total_seconds()<55
             except Exception: fresh=False
             if fresh and isinstance(payload,dict):
                 response=dict(payload); response["cached"]=True; json_response(self,200,response); return
@@ -71,6 +71,21 @@ class handler(BaseHTTPRequestHandler):
                     response=dict(payload); response["cached"]=True; json_response(self,200,response); return
                 json_response(self,503,{"error":"Candles are refreshing. Retry shortly."}); return
             try:
+                granted_credits = claim_provider_credits(1, credit_limit=8, window_seconds=60)
+                if granted_credits < 1:
+                    release_shared_cache_refresh(cache_key)
+                    if isinstance(payload, dict) and isinstance(payload.get("candles"), list):
+                        response = dict(payload)
+                        response["cached"] = True
+                        response["stale"] = True
+                        response["rate_limited"] = True
+                        json_response(self, 200, response)
+                    else:
+                        json_response(self, 429, {
+                            "error": "The shared Twelve Data credit allowance is used for this minute. Retry after the next minute.",
+                            "retry_after_seconds": 60,
+                        })
+                    return
                 result=_candles(symbol,INTERVALS[interval],os.environ.get("TWELVE_DATA_API_KEY","").strip())
                 write_shared_cache(cache_key,result)
                 json_response(self,200,result)
