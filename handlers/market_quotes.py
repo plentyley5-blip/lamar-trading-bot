@@ -31,7 +31,8 @@ PROVIDER_URL = "https://api.twelvedata.com/quote"
 CACHE_KEY = "market_quotes"
 CACHE_SECONDS = 60
 PROVIDER_TIMEOUT_SECONDS = 9
-MAX_PROVIDER_CREDITS_PER_REFRESH = 8
+# Keep one Basic-plan credit available for the selected pair's candle chart.
+MAX_PROVIDER_CREDITS_PER_REFRESH = 7
 PROVIDER_CREDIT_LIMIT_PER_MINUTE = 8
 
 MARKET_CATALOG = {
