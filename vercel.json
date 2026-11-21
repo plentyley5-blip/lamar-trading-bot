@@ -34,6 +34,14 @@
       "destination": "/api/router?route=news_worker"
     },
     {
+      "source": "/api/live_market",
+      "destination": "/api/router?route=live_market"
+    },
+    {
+      "source": "/api/live_market_worker",
+      "destination": "/api/router?route=live_market_worker"
+    },
+    {
       "source": "/api/subscription_status",
       "destination": "/api/router?route=subscription_status"
     },
