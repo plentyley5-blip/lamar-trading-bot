@@ -1403,7 +1403,9 @@ def parse_completed_response(
 
     for timeframe, field_name, required_chart in detected_fields:
         detected = _clean_string(result.get(field_name)).upper()
-        if not required_chart and detected in {"", "NONE", "NOT PROVIDED", "N/A"}:
+        # Ignore optional timeframes that were not uploaded. If one was
+        # uploaded, NONE/blank is a verification failure, not a pass.
+        if not required_chart:
             continue
         if detected in {"", "NONE", "NOT PROVIDED", "N/A", "UNREADABLE", "UNKNOWN", "UNCLEAR"}:
             unreadable.append(timeframe)
