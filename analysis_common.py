@@ -35,6 +35,43 @@ You may also receive optional screenshots labelled 1D, 1H, 5M, or 1M. Use every 
 
 The selected instrument and trade focus are supplied separately.
 
+==================================================
+MANDATORY INSTRUMENT IDENTITY CHECK — RUN FIRST
+==================================================
+
+Before analysing price action or creating a trade idea, independently read
+the visible ticker/symbol from every supplied chart screenshot.
+
+The user-selected instrument is NOT proof of what is shown in the image.
+Never assume the chart matches the selected instrument.
+
+Check these images separately:
+- Required 4H chart
+- Required 15M chart
+- Each optional 1D, 1H, 5M, or 1M chart that is actually supplied
+
+Read the chart's visible symbol/ticker label. Do not guess from price,
+candlestick patterns, currency values, or the selected-instrument text.
+
+Return the exact detected ticker in the corresponding detected_*_instrument
+field. Return "NONE" for an optional timeframe image that was not supplied.
+If a supplied chart's symbol cannot be read confidently, return "UNREADABLE".
+
+Set chart_instrument_status to:
+- "MATCH" only when every supplied chart clearly shows the selected instrument.
+- "MISMATCH" when any supplied chart clearly shows a different instrument.
+- "UNREADABLE" when the symbol on any supplied chart cannot be identified
+  confidently, including either required chart.
+
+If status is "MISMATCH" or "UNREADABLE", do not perform trading analysis.
+Return signal "NO TRADE", confidence 0, setup_status "INVALID",
+order_type "NONE", empty entry/stop-loss/take-profit/risk-reward fields,
+and explain which chart does not match or cannot be verified in warnings
+and explanation.
+
+Only proceed to trading analysis after all supplied chart symbols have
+been independently verified as an exact match.
+
 Your task is to analyze both charts and produce exactly one decision:
 
 BUY
@@ -337,6 +374,29 @@ OUTPUT_SCHEMA = {
             "type": "string",
         },
 
+        "chart_instrument_status": {
+            "type": "string",
+            "enum": ["MATCH", "MISMATCH", "UNREADABLE"],
+        },
+        "detected_4h_instrument": {
+            "type": "string",
+        },
+        "detected_15m_instrument": {
+            "type": "string",
+        },
+        "detected_1d_instrument": {
+            "type": "string",
+        },
+        "detected_1h_instrument": {
+            "type": "string",
+        },
+        "detected_5m_instrument": {
+            "type": "string",
+        },
+        "detected_1m_instrument": {
+            "type": "string",
+        },
+
         "trend": {
             "type": "string",
         },
@@ -430,6 +490,13 @@ OUTPUT_SCHEMA = {
         "signal",
         "confidence",
         "instrument",
+        "chart_instrument_status",
+        "detected_4h_instrument",
+        "detected_15m_instrument",
+        "detected_1d_instrument",
+        "detected_1h_instrument",
+        "detected_5m_instrument",
+        "detected_1m_instrument",
         "trend",
         "trade_idea",
         "higher_timeframe_context",
@@ -872,8 +939,18 @@ def create_background_response(
         }
 
     user_prompt = (
-        "Analyze the supplied trading charts.\n\n"
-        f"Instrument: {instrument}\n"
+        "FIRST perform the mandatory chart-instrument identity check.\n"
+        "Independently read the visible ticker from each supplied screenshot; "
+        "never assume it matches the selected instrument.\n"
+        "Compare the 4H, 15M, and every supplied optional chart against the "
+        "selected instrument.\n"
+        "If any chart differs, set chart_instrument_status=MISMATCH and do not "
+        "analyse the trade. If any supplied chart ticker is unclear, set "
+        "chart_instrument_status=UNREADABLE and do not analyse the trade.\n"
+        "Return only the ticker code in each detected_*_instrument field; "
+        "use NONE only when that optional timeframe image was not supplied.\n\n"
+        "Analyze the supplied trading charts only after all symbols match.\n\n"
+        f"Selected instrument: {instrument}\n"
         f"Trade focus: {trade_focus}\n\n"
         "IMAGE 1 = required 4H chart.\n"
         "IMAGE 2 = required 15M chart.\n"
@@ -1272,6 +1349,7 @@ def parse_completed_response(
     response_data,
     instrument,
     trade_focus="DAY TRADE",
+    additional_timeframes=None,
 ):
     text = clean_json_text(
         extract_output_text(
@@ -1298,6 +1376,76 @@ def parse_completed_response(
 
         raise RuntimeError(
             "Gemini returned an invalid analysis object."
+        )
+
+    # Do not trust the selected instrument echoed by the model. Independently
+    # validate the chart-identity fields before accepting any trade signal.
+    selected_instrument = _clean_string(instrument).upper()
+    check_status = _clean_string(result.get("chart_instrument_status")).upper()
+    if check_status not in {"MATCH", "MISMATCH", "UNREADABLE"}:
+        check_status = "UNREADABLE"
+
+    supplied_optional = {
+        str(value).strip().upper()
+        for value in (additional_timeframes or [])
+        if str(value).strip()
+    }
+    detected_fields = [
+        ("4H", "detected_4h_instrument", True),
+        ("15M", "detected_15m_instrument", True),
+        ("1D", "detected_1d_instrument", "1D" in supplied_optional),
+        ("1H", "detected_1h_instrument", "1H" in supplied_optional),
+        ("5M", "detected_5m_instrument", "5M" in supplied_optional),
+        ("1M", "detected_1m_instrument", "1M" in supplied_optional),
+    ]
+    mismatches = []
+    unreadable = []
+
+    for timeframe, field_name, required_chart in detected_fields:
+        detected = _clean_string(result.get(field_name)).upper()
+        if not required_chart and detected in {"", "NONE", "NOT PROVIDED", "N/A"}:
+            continue
+        if detected in {"", "NONE", "NOT PROVIDED", "N/A", "UNREADABLE", "UNKNOWN", "UNCLEAR"}:
+            unreadable.append(timeframe)
+            continue
+
+        compact = "".join(character for character in detected if character.isalnum())
+        # Broker suffixes such as EURUSDm or EURUSDpro are acceptable only
+        # when the complete selected ticker is the leading symbol.
+        if compact.startswith(selected_instrument) and len(compact) <= len(selected_instrument) + 5:
+            compact = selected_instrument
+        if compact != selected_instrument:
+            mismatches.append((timeframe, detected))
+
+    if check_status == "UNREADABLE" or unreadable:
+        labels = ", ".join(unreadable) if unreadable else "one or more charts"
+        raise RuntimeError(
+            "Cannot verify chart instrument: the ticker on the "
+            + labels
+            + " chart could not be read clearly. Please upload a clearer screenshot "
+              "with the symbol visible. No analysis was generated."
+        )
+
+    if check_status == "MISMATCH" or mismatches:
+        if mismatches:
+            details = "; ".join(
+                timeframe + " chart shows " + detected
+                for timeframe, detected in mismatches
+            )
+            raise RuntimeError(
+                "Instrument mismatch: you selected "
+                + selected_instrument
+                + ", but the uploaded "
+                + details
+                + ". Select the correct instrument or upload matching charts. "
+                  "No analysis was generated."
+            )
+        raise RuntimeError(
+            "Instrument mismatch: Gemini detected that at least one uploaded "
+            "chart does not match the selected "
+            + selected_instrument
+            + ". Please check the 4H, 15M, and optional chart uploads. "
+              "No analysis was generated."
         )
 
     signal = (
