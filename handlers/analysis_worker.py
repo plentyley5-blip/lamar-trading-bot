@@ -524,6 +524,7 @@ class handler(BaseHTTPRequestHandler):
                 parse_completed_response(
                     raw_response,
                     instrument=instrument,
+                    additional_timeframes=additional_images.keys(),
                 )
             )
 
