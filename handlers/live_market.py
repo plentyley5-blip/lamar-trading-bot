@@ -2,7 +2,7 @@
 import json, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler
 from analysis_common import json_response
-from api.user_security import extract_bearer_token, verify_access_token
+from api.user_security import extract_bearer_token, verify_access_token, is_owner_user
 from handlers.subscription_access import has_active_subscription
 
 def _get(path):
@@ -40,7 +40,7 @@ class handler(BaseHTTPRequestHandler):
                 if isinstance(alert,dict):
                     items.append({**alert,"delivery_status":row.get("status","sent"),
                                   "plan_tier":row.get("plan_tier","free"),"delivered_at":row.get("created_at","")})
-            paid=has_active_subscription(user_id)
+            paid=has_active_subscription(user_id) or is_owner_user(user)
             json_response(self,200,{"ok":True,"provider":"Twelve Data","plan_tier":"paid" if paid else "free",
                 "free_instruments":["EURUSD","GBPUSD","USDJPY"],"free_timeframes":["15min","1h"],"items":items})
         except Exception as exc:
