@@ -78,12 +78,40 @@ def _anon_headers():
     }
 
 
+def _profile_avatar_url(path):
+    path = str(path or "").strip().lstrip("/")
+    if not path or not path.startswith("avatars/"):
+        return ""
+    base = get_supabase_url().rstrip("/")
+    key = get_supabase_service_key()
+    encoded_path = urllib.parse.quote(path, safe="/")
+    payload = json.dumps({"expiresIn": 86400}, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(
+        base + "/storage/v1/object/sign/lm-community-media/" + encoded_path,
+        data=payload,
+        headers={"apikey": key, "Authorization": "Bearer " + key,
+                 "Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            result = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
+        signed = str(result.get("signedURL") or result.get("signedUrl") or "").strip()
+        if signed.startswith(("https://", "http://")):
+            return signed
+        if signed.startswith("/"):
+            return base + (signed if signed.startswith("/storage/v1/") else "/storage/v1" + signed)
+        return base + "/storage/v1/" + signed if signed else ""
+    except Exception:
+        return ""
+
+
 def _profile_row(user_id):
     url = (
         get_supabase_url()
         + "/rest/v1/profiles?id=eq."
         + urllib.parse.quote(str(user_id), safe="")
-        + "&select=id,full_name,email,daily_analysis_count,last_analysis_date,created_at"
+        + "&select=id,full_name,email,avatar_path,daily_analysis_count,last_analysis_date,created_at"
         + "&limit=1"
     )
     data = _request(url, headers=_service_headers())
@@ -217,7 +245,7 @@ def _profile_payload(user, profile):
             "email": str(user.get("email", "")),
             "full_name": str(profile.get("full_name", "")),
         },
-        "profile": profile,
+        "profile": {**profile, "avatar_url": _profile_avatar_url(profile.get("avatar_path"))},
         "is_owner": owner,
         "daily_analysis_count": count,
         "daily_limit": quota.get("daily_limit"),
