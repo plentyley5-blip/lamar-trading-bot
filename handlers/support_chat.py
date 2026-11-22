@@ -282,6 +282,94 @@ def require_agent(user):
     return agent
 
 
+def record_agent_activity(agent, action, conversation_id, details=None):
+    """Best-effort audit trail; monitoring failures must never break customer support."""
+    try:
+        supabase_request(
+            "POST", "support_agent_activity",
+            payload={"agent_id": str(agent["user_id"]), "action": str(action),
+                     "conversation_id": str(conversation_id) if conversation_id else None,
+                     "details": details if isinstance(details, dict) else {}, "created_at": utc_now()},
+            prefer="return=minimal",
+        )
+    except Exception as exc:
+        print("LM_SUPPORT_AUDIT_WRITE_FAILED type={}".format(type(exc).__name__))
+
+
+def update_agent_presence(agent, status="online"):
+    if status not in {"online", "away"}:
+        status = "online"
+    now = utc_now()
+    supabase_request(
+        "POST", "support_agent_presence?on_conflict=agent_id",
+        payload={"agent_id": str(agent["user_id"]), "status": status,
+                 "last_seen_at": now, "updated_at": now},
+        prefer="resolution=merge-duplicates,return=minimal",
+    )
+
+
+def admin_monitor_snapshot(conversation_id=""):
+    """Operational support data; caller must already have passed owner authorization."""
+    agents = supabase_request("GET", "support_agents",
+        {"select": "user_id,display_name,role,is_active,max_active_chats,created_at,updated_at",
+         "order": "created_at.asc", "limit": "500"})
+    agents = agents if isinstance(agents, list) else []
+    presence_rows = supabase_request("GET", "support_agent_presence",
+        {"select": "agent_id,status,last_seen_at,updated_at", "limit": "500"})
+    presence = {str(x.get("agent_id")): x for x in (presence_rows if isinstance(presence_rows, list) else [])}
+    conversations = supabase_request("GET", "support_conversations",
+        {"select": "id,user_id,title,created_at,updated_at,support_status,assigned_agent_id,assigned_agent_name,handoff_requested_at,assigned_at,resolved_at",
+         "order": "updated_at.desc", "limit": "250"})
+    conversations = conversations if isinstance(conversations, list) else []
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    resolved_today = sum(1 for c in conversations if c.get("support_status") == "resolved"
+                         and str(c.get("resolved_at") or "") >= today_start)
+    active = [c for c in conversations if c.get("support_status") == "assigned"]
+    waiting = [c for c in conversations if c.get("support_status") == "waiting"]
+    activity_rows = supabase_request("GET", "support_agent_activity",
+        {"select": "id,agent_id,action,conversation_id,details,created_at",
+         "order": "created_at.desc", "limit": "100"})
+    activity_rows = activity_rows if isinstance(activity_rows, list) else []
+    agent_names = {str(a.get("user_id")): str(a.get("display_name") or "Support Agent") for a in agents}
+    roster = []
+    for agent in agents:
+        agent_id = str(agent.get("user_id") or "")
+        p = presence.get(agent_id) or {}
+        last_seen = str(p.get("last_seen_at") or "")
+        online = False
+        if last_seen:
+            try:
+                seen = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
+                online = (now - seen).total_seconds() <= 90 and bool(agent.get("is_active"))
+            except (ValueError, TypeError):
+                online = False
+        agent_activity = [a for a in activity_rows if str(a.get("agent_id") or "") == agent_id]
+        roster.append({
+            "user_id": agent_id, "display_name": str(agent.get("display_name") or "Support Agent"),
+            "role": str(agent.get("role") or "agent"), "is_active": bool(agent.get("is_active")),
+            "status": "online" if online else "offline", "last_seen_at": last_seen,
+            "active_count": sum(1 for c in active if str(c.get("assigned_agent_id") or "") == agent_id),
+            "max_active_chats": int(agent.get("max_active_chats") or 1),
+            "replies_recorded": sum(1 for a in agent_activity if a.get("action") == "replied"),
+            "resolved_recorded": sum(1 for a in agent_activity if a.get("action") == "resolved"),
+        })
+    for item in activity_rows:
+        item["agent_name"] = agent_names.get(str(item.get("agent_id") or ""), "Support Agent")
+    result = {"agents": roster, "conversations": conversations, "activity": activity_rows,
+        "metrics": {"online_agents": sum(1 for a in roster if a["status"] == "online"),
+                    "active_chats": len(active), "waiting_customers": len(waiting),
+                    "resolved_today": resolved_today, "total_agents": len(roster)}}
+    if conversation_id:
+        matching = next((c for c in conversations if str(c.get("id")) == conversation_id), None)
+        if not matching:
+            raise LookupError("Conversation not found.")
+        messages = get_messages(conversation_id, str(matching["user_id"]), limit=500)
+        result["selected_conversation"] = matching
+        result["messages"] = messages if isinstance(messages, list) else []
+    return result
+
+
 def active_assignments_for_agents(agent_ids):
     if not agent_ids:
         return []
@@ -698,6 +786,12 @@ class handler(BaseHTTPRequestHandler):
                 agent = require_agent(user)
                 json_response(self, 200, agent_queue(agent))
                 return
+            if action == "admin_monitor":
+                if not is_owner_user(user):
+                    raise PermissionError("Only the LM Analyzer administrator can monitor support agents.")
+                monitor_conversation_id = str((params.get("monitor_conversation_id") or [""])[0]).strip()
+                json_response(self, 200, admin_monitor_snapshot(monitor_conversation_id))
+                return
 
             conversation_id = str((params.get("conversation_id") or [""])[0]).strip()
             if conversation_id:
@@ -813,6 +907,13 @@ class handler(BaseHTTPRequestHandler):
                 json_response(self, 200, {"registered": True, "pending_alert_sent": pending_alert_sent})
                 return
 
+            if action == "agent_heartbeat":
+                agent = require_agent(user)
+                presence_status = str(data.get("status", "online")).strip().lower()
+                update_agent_presence(agent, presence_status)
+                json_response(self, 200, {"heartbeat": True, "status": presence_status if presence_status in {"online", "away"} else "online", "last_seen_at": utc_now()})
+                return
+
             if action == "agent_unregister_device":
                 agent = require_agent(user)
                 device_token = str(data.get("device_token", "")).strip()
@@ -835,6 +936,8 @@ class handler(BaseHTTPRequestHandler):
                     json_response(self, 409, {"claimed": False, "error": result.get("reason", "This request has already been attended or your active-chat limit has been reached.")})
                     return
                 conversation = result.get("conversation") or {}
+                record_agent_activity(agent, "claimed", conversation_id, {"title": str(conversation.get("title") or "")[:120]})
+                update_agent_presence(agent, "online")
                 # Notify available agents about the next oldest waiting request.
                 # The newly assigned agent is excluded automatically if their capacity is full.
                 waiting_rows = supabase_request(
@@ -862,6 +965,8 @@ class handler(BaseHTTPRequestHandler):
                 saved = save_message(conversation_id, str(conversation["user_id"]), "agent", message,
                                      agent["user_id"], agent["display_name"])
                 touch_conversation(conversation_id)
+                record_agent_activity(agent, "replied", conversation_id, {"message_id": str(saved.get("id") or "")})
+                update_agent_presence(agent, "online")
                 json_response(self, 200, {"message": saved})
                 return
 
@@ -879,6 +984,8 @@ class handler(BaseHTTPRequestHandler):
                 })
                 save_message(conversation_id, str(conversation["user_id"]), "system",
                              "Your conversation was marked resolved by " + agent["display_name"] + ".")
+                record_agent_activity(agent, "resolved", conversation_id, {"title": str(conversation.get("title") or "")[:120]})
+                update_agent_presence(agent, "online")
                 # Wake the remaining queue now that one agent's slot is free.
                 waiting_rows = supabase_request(
                     "GET", "support_conversations",
