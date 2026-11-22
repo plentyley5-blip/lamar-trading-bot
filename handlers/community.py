@@ -164,6 +164,25 @@ def _verified_rows(user_ids):
 def _award_verified(user_id, reason):
     _supabase("POST", "/rest/v1/community_verified_users", {"user_id": user_id, "reason": reason}, prefer="resolution=ignore-duplicates,return=minimal")
 
+def _support_agent_ids(user_ids):
+    ids = list(dict.fromkeys(str(value).strip() for value in user_ids if value))
+    if not ids:
+        return set()
+    query = urllib.parse.urlencode({"user_id": "in.({})".format(",".join(ids)), "select": "user_id"})
+    try:
+        rows = _supabase("GET", "/rest/v1/support_agents?" + query)
+        return {str(row.get("user_id")) for row in rows if isinstance(row, dict)} if isinstance(rows, list) else set()
+    except Exception:
+        return set()
+
+
+def _profile_avatar_url(path):
+    try:
+        return _signed_community_image_url(path, expires_in=86400) if path else ""
+    except Exception:
+        return ""
+
+
 def _attach_member_profiles(member_ids, viewer_id=""):
     """Return real public profile data and server-derived follow/badge state."""
     ids = list(dict.fromkeys(str(value).strip() for value in member_ids if value and str(value).strip()))
@@ -172,7 +191,7 @@ def _attach_member_profiles(member_ids, viewer_id=""):
     in_values = ",".join(ids)
     profile_query = urllib.parse.urlencode({
         "id": "in.({})".format(in_values),
-        "select": "id,full_name",
+        "select": "id,full_name,avatar_path",
     })
     profile_rows = _supabase("GET", "/rest/v1/profiles?" + profile_query)
     profile_rows = profile_rows if isinstance(profile_rows, list) else []
@@ -192,6 +211,8 @@ def _attach_member_profiles(member_ids, viewer_id=""):
             following_counts[follower] = following_counts.get(follower, 0) + 1
 
     verified = _verified_rows(ids)
+    agent_ids = _support_agent_ids(ids)
+    avatar_paths = {str(row.get("id")): str(row.get("avatar_path") or "") for row in profile_rows if isinstance(row, dict)}
     for member_id in ids:
         if member_id not in verified and follower_counts.get(member_id, 0) >= 500 and _has_active_subscription(member_id):
             _award_verified(member_id, "500_followers")
@@ -207,6 +228,7 @@ def _attach_member_profiles(member_ids, viewer_id=""):
         result.append({
             "user_id": member_id,
             "full_name": profiles.get(member_id) or "LM Analyzer member",
+            "avatar_url": "" if member_id in agent_ids else _profile_avatar_url(avatar_paths.get(member_id, "")),
             "is_verified": member_id in verified,
             "verification_reason": str(verified.get(member_id, {}).get("reason", "")),
             "follower_count": follower_counts.get(member_id, 0),
@@ -236,10 +258,10 @@ def _attach_author_profiles(posts, viewer_id=""):
         "select": "id,full_name",
     })
     profiles = _supabase("GET", "/rest/v1/profiles?" + query)
-    names = {
-        str(row.get("id")): str(row.get("full_name", "")).strip()
-        for row in profiles if isinstance(row, dict)
-    } if isinstance(profiles, list) else {}
+    profile_rows = profiles if isinstance(profiles, list) else []
+    names = {str(row.get("id")): str(row.get("full_name", "")).strip() for row in profile_rows if isinstance(row, dict)}
+    avatar_paths = {str(row.get("id")): str(row.get("avatar_path") or "") for row in profile_rows if isinstance(row, dict)}
+    agent_ids = _support_agent_ids(ids)
     # Read real follow rows once for the authors shown in this feed.
     follow_rows = _follow_rows_for_ids(ids)
     follower_counts = {}
@@ -267,7 +289,7 @@ def _attach_author_profiles(posts, viewer_id=""):
         item = dict(post)
         author_id = str(item.get("user_id", ""))
         item["author_name"] = names.get(author_id) or "LM Analyzer member"
-        item["author_avatar_url"] = None
+        item["author_avatar_url"] = "" if author_id in agent_ids else _profile_avatar_url(avatar_paths.get(author_id, ""))
         item["follower_count"] = follower_counts.get(author_id, 0)
         item["following_count"] = following_counts.get(author_id, 0)
         item["is_following"] = author_id in following_now and author_id != str(viewer_id)
@@ -322,13 +344,18 @@ def _attach_comment_authors(comments):
     ids = list(dict.fromkeys(str(row.get("user_id", "")) for row in comments if isinstance(row, dict) and row.get("user_id")))
     if not ids:
         return comments
-    query = urllib.parse.urlencode({"id": "in.({})".format(",".join(ids)), "select": "id,full_name"})
+    query = urllib.parse.urlencode({"id": "in.({})".format(",".join(ids)), "select": "id,full_name,avatar_path"})
     profiles = _supabase("GET", "/rest/v1/profiles?" + query)
-    names = {str(r.get("id")): str(r.get("full_name") or "").strip() for r in profiles if isinstance(r, dict)} if isinstance(profiles, list) else {}
+    profile_rows = profiles if isinstance(profiles, list) else []
+    names = {str(r.get("id")): str(r.get("full_name") or "").strip() for r in profile_rows if isinstance(r, dict)}
+    avatar_paths = {str(r.get("id")): str(r.get("avatar_path") or "") for r in profile_rows if isinstance(r, dict)}
+    agent_ids = _support_agent_ids(ids)
     result = []
     for row in comments:
         item = dict(row)
-        item["author_name"] = names.get(str(item.get("user_id", ""))) or "LM Analyzer member"
+        author_id = str(item.get("user_id", ""))
+        item["author_name"] = names.get(author_id) or "LM Analyzer member"
+        item["author_avatar_url"] = "" if author_id in agent_ids else _profile_avatar_url(avatar_paths.get(author_id, ""))
         result.append(item)
     return result
 
@@ -426,7 +453,7 @@ def _ensure_community_storage_bucket():
                 raise RuntimeError("Community image storage could not be changed to private access.") from update_error
 
 
-def _upload_community_image(user_id, image_data_url, avatar=False):
+def _upload_community_image(user_id, image_data_url, avatar=False, profile_avatar=False):
     """Validate an Android-compressed image and upload it to the public community bucket."""
     value = str(image_data_url or "").strip()
     match = re.fullmatch(r"data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)", value)
@@ -451,6 +478,8 @@ def _upload_community_image(user_id, image_data_url, avatar=False):
         if content_type != "image/jpeg":
             raise ValueError("The community avatar must be a JPEG image.")
         object_path = "official/channel-avatar.jpg"
+    elif profile_avatar:
+        object_path = "avatars/{}/profile.{}".format(user_id, extension)
     else:
         object_path = "members/{}/{}.{}".format(user_id, uuid.uuid4().hex, extension)
     _ensure_community_storage_bucket()
@@ -464,8 +493,8 @@ def _upload_community_image(user_id, image_data_url, avatar=False):
             "apikey": key,
             "Authorization": "Bearer " + key,
             "Content-Type": content_type,
-            "x-upsert": "true" if avatar else "false",
-            "Cache-Control": "public, max-age=31536000" if not avatar else "public, max-age=60",
+            "x-upsert": "true" if (avatar or profile_avatar) else "false",
+            "Cache-Control": "public, max-age=31536000" if not (avatar or profile_avatar) else "public, max-age=300",
         },
         method="POST",
     )
@@ -500,7 +529,7 @@ def _signed_community_image_url(object_path, expires_in=86400):
     path = str(object_path or "").strip().lstrip("/")
     if not path or path.startswith(("http://", "https://")):
         return path
-    if not (path.startswith("members/") or path.startswith("official/")):
+    if not (path.startswith("members/") or path.startswith("official/") or path.startswith("avatars/")):
         return ""
     base = get_supabase_url().rstrip("/")
     key = get_supabase_service_key()
@@ -607,7 +636,7 @@ class handler(BaseHTTPRequestHandler):
                 authored_posts = []
                 badge = {}
                 try:
-                    profile_query = urllib.parse.urlencode({"id": "eq." + target_id, "select": "id,full_name", "limit": "1"})
+                    profile_query = urllib.parse.urlencode({"id": "eq." + target_id, "select": "id,full_name,avatar_path", "limit": "1"})
                     profile_rows = _supabase("GET", "/rest/v1/profiles?" + profile_query)
                     profile = profile_rows[0] if isinstance(profile_rows, list) and profile_rows else {}
                 except Exception as exc:
@@ -629,7 +658,9 @@ class handler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     print("community optional badge lookup failed; type={}; error={!r}".format(type(exc).__name__, str(exc)))
 
-                _send(self, 200, {"profile": {"id": target_id, "full_name": str(profile.get("full_name") or "LM Analyzer member"), "followers": followers, "following": following, "posts_count": len(authored_posts), "is_following": is_following, "is_self": target_id == str(user["id"]), "is_verified": bool(badge), "verification_reason": str(badge.get("reason", ""))}, "posts": authored_posts})
+                agent_ids = _support_agent_ids([target_id])
+                avatar_url = "" if target_id in agent_ids else _profile_avatar_url(profile.get("avatar_path"))
+                _send(self, 200, {"profile": {"id": target_id, "full_name": str(profile.get("full_name") or "LM Analyzer member"), "avatar_url": avatar_url, "followers": followers, "following": following, "posts_count": len(authored_posts), "is_following": is_following, "is_self": target_id == str(user["id"]), "is_verified": bool(badge), "verification_reason": str(badge.get("reason", ""))}, "posts": authored_posts})
                 return
             if action == "members":
                 direction = (query_args.get("direction") or [""])[0].strip().lower()
@@ -710,6 +741,15 @@ class handler(BaseHTTPRequestHandler):
             user_id = str(user["id"])
             body = _read_body(self)
             action = str(body.get("action", "publish")).strip().lower()
+            if action == "profile_avatar":
+                if _support_agent_ids([user_id]):
+                    _send(self, 403, {"error": "Support-agent avatars are managed separately."})
+                    return
+                avatar_path = _upload_community_image(user_id, body.get("image_data_url"), profile_avatar=True)
+                _supabase("PATCH", "/rest/v1/profiles?id=eq." + urllib.parse.quote(user_id, safe=""),
+                          {"avatar_path": avatar_path}, prefer="return=minimal")
+                _send(self, 200, {"success": True, "avatar_url": _profile_avatar_url(avatar_path)})
+                return
             if action == "channel_avatar":
                 if not is_owner_user(user):
                     _send(self, 403, {"error": "Only the LM Analyzer admin can change the community avatar."})
