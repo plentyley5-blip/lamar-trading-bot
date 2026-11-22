@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from http.server import BaseHTTPRequestHandler
 
 from api.user_security import (
@@ -322,11 +323,19 @@ def admin_monitor_snapshot(conversation_id=""):
          "order": "updated_at.desc", "limit": "250"})
     conversations = conversations if isinstance(conversations, list) else []
     now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    resolved_today = sum(1 for c in conversations if c.get("support_status") == "resolved"
-                         and str(c.get("resolved_at") or "") >= today_start)
-    active = [c for c in conversations if c.get("support_status") == "assigned"]
-    waiting = [c for c in conversations if c.get("support_status") == "waiting"]
+    today_start = datetime.now(ZoneInfo("Africa/Kampala")).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).astimezone(timezone.utc).isoformat()
+    resolved_today_rows = supabase_request("GET", "support_conversations",
+        {"support_status": "eq.resolved", "resolved_at": "gte." + today_start,
+         "select": "id", "limit": "1000"})
+    active_rows = supabase_request("GET", "support_conversations",
+        {"support_status": "eq.assigned", "select": "id,assigned_agent_id", "limit": "1000"})
+    waiting_rows = supabase_request("GET", "support_conversations",
+        {"support_status": "eq.waiting", "select": "id", "limit": "1000"})
+    resolved_today = len(resolved_today_rows) if isinstance(resolved_today_rows, list) else 0
+    active = active_rows if isinstance(active_rows, list) else []
+    waiting = waiting_rows if isinstance(waiting_rows, list) else []
     activity_rows = supabase_request("GET", "support_agent_activity",
         {"select": "id,agent_id,action,conversation_id,details,created_at",
          "order": "created_at.desc", "limit": "100"})
