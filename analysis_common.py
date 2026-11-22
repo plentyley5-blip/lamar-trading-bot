@@ -3,6 +3,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+import time
 
 
 # ============================================================
@@ -1029,118 +1030,97 @@ def create_background_response(
         method="POST",
     )
 
-    try:
+    # Retry only transient upstream/network failures. Validation, authentication,
+    # model-not-found, and malformed-request errors fail immediately.
+    max_attempts = 3
+    last_error = None
 
-        with urllib.request.urlopen(
-            request,
-            timeout=120,
-        ) as response:
-
-            raw = (
-                response
-                .read()
-                .decode("utf-8")
-            )
-
-            data = json.loads(
-                raw
-            )
-
-            if not isinstance(
-                data,
-                dict,
-            ):
-
-                raise RuntimeError(
-                    "Gemini returned an invalid response."
-                )
-
-            return data
-
-    except urllib.error.HTTPError as exc:
-
-        raw = b""
-
+    for attempt in range(max_attempts):
         try:
-            raw = exc.read()
-        except Exception:
-            pass
+            with urllib.request.urlopen(
+                request,
+                timeout=120,
+            ) as response:
+                raw = response.read().decode("utf-8")
+                data = json.loads(raw)
 
-        message = _gemini_error_message(
-            raw
-        )
+                if not isinstance(data, dict):
+                    raise RuntimeError(
+                        "Gemini returned an invalid response."
+                    )
 
-        if exc.code == 400:
+                return data
+
+        except urllib.error.HTTPError as exc:
+            raw = b""
+            try:
+                raw = exc.read()
+            except Exception:
+                pass
+
+            message = _gemini_error_message(raw)
+            transient = exc.code in {408, 425, 429} or 500 <= exc.code <= 599
+
+            if transient and attempt < max_attempts - 1:
+                last_error = exc
+                time.sleep(1.5 * (attempt + 1))
+                continue
+
+            if exc.code == 400:
+                raise RuntimeError(
+                    "Gemini rejected the request: "
+                    + (message or "invalid request")
+                ) from exc
+
+            if exc.code in {401, 403}:
+                raise RuntimeError(
+                    "The Gemini API key was rejected: "
+                    + (message or "access denied")
+                ) from exc
+
+            if exc.code == 404:
+                raise RuntimeError(
+                    "The Gemini model was not found: "
+                    + (message or GEMINI_MODEL)
+                ) from exc
+
+            if exc.code == 429:
+                raise RuntimeError(
+                    "Gemini quota or rate limit reached after "
+                    f"{max_attempts} attempts: "
+                    + (message or "quota exceeded")
+                ) from exc
+
+            if 500 <= exc.code <= 599 or exc.code in {408, 425}:
+                raise RuntimeError(
+                    "Gemini is temporarily unavailable after "
+                    f"{max_attempts} attempts."
+                ) from exc
 
             raise RuntimeError(
-                "Gemini rejected the request: "
-                + (
-                    message
-                    or "invalid request"
-                )
+                "Gemini request failed: "
+                + (message or "unknown error")
             ) from exc
 
-        if exc.code in {
-            401,
-            403,
-        }:
-
+        except (urllib.error.URLError, TimeoutError) as exc:
+            last_error = exc
+            if attempt < max_attempts - 1:
+                time.sleep(1.5 * (attempt + 1))
+                continue
             raise RuntimeError(
-                "The Gemini API key was rejected: "
-                + (
-                    message
-                    or "access denied"
-                )
+                "Gemini could not be reached after "
+                f"{max_attempts} attempts."
             ) from exc
 
-        if exc.code == 404:
-
+        except json.JSONDecodeError as exc:
             raise RuntimeError(
-                "The Gemini model was not found: "
-                + (
-                    message
-                    or GEMINI_MODEL
-                )
+                "Gemini returned invalid JSON."
             ) from exc
 
-        if exc.code == 429:
-
-            raise RuntimeError(
-                "Gemini quota or rate limit reached: "
-                + (
-                    message
-                    or "quota exceeded"
-                )
-            ) from exc
-
-        if 500 <= exc.code <= 599:
-
-            raise RuntimeError(
-                "Gemini is temporarily unavailable."
-            ) from exc
-
-        raise RuntimeError(
-            "Gemini request failed: "
-            + (
-                message
-                or "unknown error"
-            )
-        ) from exc
-
-    except (
-        urllib.error.URLError,
-        TimeoutError,
-    ) as exc:
-
-        raise RuntimeError(
-            "Gemini could not be reached."
-        ) from exc
-
-    except json.JSONDecodeError as exc:
-
-        raise RuntimeError(
-            "Gemini returned invalid JSON."
-        ) from exc
+    raise RuntimeError(
+        "Gemini is temporarily unavailable after "
+        f"{max_attempts} attempts."
+    ) from last_error
 
 
 # ============================================================
