@@ -78,6 +78,22 @@ def _anon_headers():
     }
 
 
+def _is_support_agent(user_id):
+    base = get_supabase_url().rstrip("/")
+    key = get_supabase_service_key()
+    query = urllib.parse.urlencode({"user_id": "eq." + str(user_id), "select": "user_id", "limit": "1"})
+    request = urllib.request.Request(
+        base + "/rest/v1/support_agents?" + query,
+        headers={"apikey": key, "Authorization": "Bearer " + key, "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            rows = json.loads(response.read().decode("utf-8", errors="replace") or "[]")
+        return isinstance(rows, list) and bool(rows)
+    except Exception:
+        return False
+
+
 def _profile_avatar_url(path):
     path = str(path or "").strip().lstrip("/")
     if not path or not path.startswith("avatars/"):
@@ -245,7 +261,7 @@ def _profile_payload(user, profile):
             "email": str(user.get("email", "")),
             "full_name": str(profile.get("full_name", "")),
         },
-        "profile": {**profile, "avatar_url": _profile_avatar_url(profile.get("avatar_path"))},
+        "profile": {**profile, "avatar_url": "" if _is_support_agent(str(user.get("id", ""))) else _profile_avatar_url(profile.get("avatar_path"))},
         "is_owner": owner,
         "daily_analysis_count": count,
         "daily_limit": quota.get("daily_limit"),
