@@ -141,7 +141,7 @@ def _profile_quota(user):
     now_local = now_utc.astimezone(_KAMPALA)
     subscriptions = _quota_rows(
         "/rest/v1/subscriptions?user_id=eq." + user_id
-        + "&select=plan,duration_months,status,starts_at,expires_at&limit=1"
+        + "&select=plan,duration_months,duration_days,status,starts_at,expires_at&order=expires_at.desc&limit=1"
     )
 
     if subscriptions:
@@ -164,7 +164,19 @@ def _profile_quota(user):
             months = int(sub.get("duration_months") or 0)
         except (TypeError, ValueError):
             months = 0
-        limit = {1: 10, 3: 30, 6: 50}.get(months)
+        plan_name = str(sub.get("plan") or "").strip().lower()
+        try:
+            days = int(sub.get("duration_days") or 0)
+        except (TypeError, ValueError):
+            days = 0
+
+        # Keep Profile quota eligibility aligned with analysis_submit.py.
+        # Weekly subscriptions are seven-day entitlements with five analyses/day.
+        if plan_name in {"weekly", "week"} and days == 7 and months == 0:
+            limit = 5
+        else:
+            limit = {1: 10, 3: 30, 6: 50}.get(months)
+
         if not limit:
             return {"quota_type": "blocked", "used": 0, "daily_limit": 0, "lifetime_limit": None, "remaining": 0, "analysis_allowed": False, "subscription_active": False}
 
