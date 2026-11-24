@@ -3,10 +3,22 @@
 
 create table if not exists public.lm_service_cache (
     cache_key text primary key,
-    payload jsonb,
+    payload jsonb not null default '{}'::jsonb,
     updated_at timestamptz not null default now(),
     refresh_lock_until timestamptz
 );
+
+-- Normalize an older cache-table version that may already exist.
+-- Refresh-lock inserts must work even when a cache row has no payload yet.
+alter table public.lm_service_cache
+    alter column payload set default '{}'::jsonb;
+
+update public.lm_service_cache
+   set payload = '{}'::jsonb
+ where payload is null;
+
+alter table public.lm_service_cache
+    alter column payload set not null;
 
 alter table public.lm_service_cache enable row level security;
 
@@ -34,7 +46,7 @@ begin
         cache_key, payload, updated_at, refresh_lock_until
     )
     values (
-        p_cache_key, null, now(),
+        p_cache_key, '{}'::jsonb, now(),
         now() + make_interval(secs => v_lock_seconds)
     )
     on conflict (cache_key) do update
