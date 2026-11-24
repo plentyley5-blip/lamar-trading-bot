@@ -31,15 +31,10 @@ begin
     end if;
 
     insert into public.lm_service_cache (
-        cache_key,
-        payload,
-        updated_at,
-        refresh_lock_until
+        cache_key, payload, updated_at, refresh_lock_until
     )
     values (
-        p_cache_key,
-        null,
-        now(),
+        p_cache_key, null, now(),
         now() + make_interval(secs => v_lock_seconds)
     )
     on conflict (cache_key) do update
@@ -87,8 +82,7 @@ begin
     values ('market_quotes_api_budget', jsonb_build_object('events', '[]'::jsonb), v_now)
     on conflict (cache_key) do nothing;
 
-    select payload
-      into v_payload
+    select payload into v_payload
       from public.lm_service_cache
      where cache_key = 'market_quotes_api_budget'
      for update;
@@ -128,8 +122,7 @@ $function$;
 revoke all on function public.claim_lm_provider_credits(integer, integer, integer) from public, anon, authenticated;
 grant execute on function public.claim_lm_provider_credits(integer, integer, integer) to service_role;
 
--- The current Python reader expects one row per supported cache key.
--- Seed all current market categories and every supported candle symbol/timeframe.
+-- Seed every instrument supported by handlers/market_candles.py and all supported intervals.
 insert into public.lm_service_cache (cache_key)
 select 'market_quotes_' || lower(category)
 from unnest(array['Forex', 'Metals', 'Indices', 'Energy', 'Crypto', 'Stocks']::text[]) as categories(category)
@@ -139,7 +132,10 @@ insert into public.lm_service_cache (cache_key)
 select 'market_candles_' || symbol || '_' || interval
 from unnest(array[
     'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'USDCAD', 'AUDUSD', 'NZDUSD',
-    'EURGBP', 'EURJPY', 'GBPJPY', 'AUDJPY', 'EURCHF',
+    'EURGBP', 'EURJPY', 'EURCHF', 'EURAUD', 'EURCAD', 'EURNZD',
+    'GBPJPY', 'GBPCHF', 'GBPAUD', 'GBPCAD', 'GBPNZD',
+    'AUDJPY', 'AUDCAD', 'AUDCHF', 'AUDNZD',
+    'CADJPY', 'CADCHF', 'CHFJPY', 'NZDJPY', 'NZDCAD', 'NZDCHF',
     'XAUUSD', 'XAGUSD', 'XPTUSD',
     'WTI', 'BRENT', 'COPPER',
     'BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'LTCUSD', 'ADAUSD',
