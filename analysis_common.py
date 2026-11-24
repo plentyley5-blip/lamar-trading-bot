@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import random
 import urllib.error
 import urllib.request
 import time
@@ -1030,16 +1031,25 @@ def create_background_response(
         method="POST",
     )
 
-    # Retry only transient upstream/network failures. Validation, authentication,
-    # model-not-found, and malformed-request errors fail immediately.
+    # Keep the complete Gemini retry sequence inside the Vercel router's
+    # 60-second execution window. A slow provider call must not strand the job
+    # in "processing" after the platform terminates the function.
     max_attempts = 3
+    request_budget_seconds = 42.0
+    deadline = time.monotonic() + request_budget_seconds
     last_error = None
 
     for attempt in range(max_attempts):
+        remaining = deadline - time.monotonic()
+        if remaining <= 1.0:
+            break
+
+        request_timeout = min(28.0, remaining)
+
         try:
             with urllib.request.urlopen(
                 request,
-                timeout=120,
+                timeout=request_timeout,
             ) as response:
                 raw = response.read().decode("utf-8")
                 data = json.loads(raw)
@@ -1059,12 +1069,23 @@ def create_background_response(
                 pass
 
             message = _gemini_error_message(raw)
+            last_error = exc
             transient = exc.code in {408, 425, 429} or 500 <= exc.code <= 599
 
+            # Respect Google's Retry-After header when it is a short numeric
+            # delay; otherwise use exponential backoff with jitter.
             if transient and attempt < max_attempts - 1:
-                last_error = exc
-                time.sleep(1.5 * (attempt + 1))
-                continue
+                retry_after = None
+                try:
+                    retry_after = float(exc.headers.get("Retry-After", ""))
+                except (TypeError, ValueError, AttributeError):
+                    pass
+
+                backoff = min(6.0, 1.5 * (2 ** attempt))
+                delay = min(8.0, retry_after) if retry_after is not None and retry_after >= 0 else backoff + random.uniform(0.0, 0.5)
+                if time.monotonic() + delay + 1.0 < deadline:
+                    time.sleep(delay)
+                    continue
 
             if exc.code == 400:
                 raise RuntimeError(
@@ -1086,15 +1107,15 @@ def create_background_response(
 
             if exc.code == 429:
                 raise RuntimeError(
-                    "Gemini quota or rate limit reached after "
-                    f"{max_attempts} attempts: "
+                    "Gemini quota or rate limit reached: "
                     + (message or "quota exceeded")
                 ) from exc
 
             if 500 <= exc.code <= 599 or exc.code in {408, 425}:
+                detail = message or "upstream service error"
                 raise RuntimeError(
                     "Gemini is temporarily unavailable after "
-                    f"{max_attempts} attempts."
+                    f"{attempt + 1} attempt(s) (HTTP {exc.code}): {detail}"
                 ) from exc
 
             raise RuntimeError(
@@ -1105,11 +1126,13 @@ def create_background_response(
         except (urllib.error.URLError, TimeoutError) as exc:
             last_error = exc
             if attempt < max_attempts - 1:
-                time.sleep(1.5 * (attempt + 1))
-                continue
+                backoff = min(6.0, 1.5 * (2 ** attempt)) + random.uniform(0.0, 0.5)
+                if time.monotonic() + backoff + 1.0 < deadline:
+                    time.sleep(backoff)
+                    continue
             raise RuntimeError(
-                "Gemini could not be reached after "
-                f"{max_attempts} attempts."
+                "Gemini could not be reached within the analysis time limit: "
+                + str(getattr(exc, "reason", exc))[:240]
             ) from exc
 
         except json.JSONDecodeError as exc:
@@ -1117,9 +1140,15 @@ def create_background_response(
                 "Gemini returned invalid JSON."
             ) from exc
 
+    if isinstance(last_error, urllib.error.HTTPError):
+        message = _gemini_error_message(getattr(last_error, "headers", None))
+        raise RuntimeError(
+            "Gemini is temporarily unavailable after "
+            f"{max_attempts} attempts (HTTP {last_error.code})."
+        ) from last_error
+
     raise RuntimeError(
-        "Gemini is temporarily unavailable after "
-        f"{max_attempts} attempts."
+        "Gemini could not complete the request within the analysis time limit."
     ) from last_error
 
 
