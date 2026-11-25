@@ -189,40 +189,68 @@ def _process_one():
         result = _assess(job)
         patch = {"status": "completed", "result": result, "error": None,
                  "updated_at": datetime.now(timezone.utc).isoformat()}
-        # Reserve the one notification attempt before sending to prevent concurrent duplicate alerts.
-        should_notify = (
-            job.get("stage") == "POST_NEWS"
+        stage = str(job.get("stage", ""))
+        complete_levels = bool(
+            result.get("entry") and result.get("stop_loss")
+            and result.get("take_profit_1") and result.get("take_profit_2")
+        )
+        pre_news_potential = (
+            stage == "PRE_NEWS"
+            and str(result.get("setup_status", "")).startswith("PRE_NEWS_POTENTIAL_")
+            and result.get("signal") in ("BUY", "SELL")
+            and complete_levels
+        )
+        post_news_confirmed = (
+            stage == "POST_NEWS"
             and result.get("setup_status") == "READY"
             and result.get("order_type") == "MARKET"
             and result.get("signal") in ("BUY", "SELL")
+            and complete_levels
+        )
+        # Notify only when the model and risk checks produced a complete signal.
+        # PRE_NEWS alerts are explicitly conditional; POST_NEWS alerts require READY.
+        should_notify = (
+            (pre_news_potential or post_news_confirmed)
             and not bool(job.get("notification_sent"))
-            and bool(result.get("entry") and result.get("stop_loss")
-                     and result.get("take_profit_1") and result.get("take_profit_2"))
         )
         _patch_job(job["id"], patch)
         if should_notify:
+            is_pre = stage == "PRE_NEWS"
+            instrument = str(result["instrument"])
+            signal = str(result["signal"])
+            title = (
+                instrument + " PRE-NEWS POTENTIAL " + signal
+                if is_pre else
+                result.get("headline") or (instrument + " " + signal + " NOW")
+            )
+            body = (
+                "Conditional pre-news outlook only. Do not enter before event reaction confirms the setup. "
+                if is_pre else
+                "High-impact news setup confirmed. "
+            )
+            body += (
+                "Entry " + result["entry"]
+                + " | SL " + result["stop_loss"] + " | TP1 " + result["take_profit_1"]
+                + " | TP2 " + result["take_profit_2"]
+            )
             user_ids = _active_subscriber_ids()
-            if user_ids:
-                notify_user_ids(
-                    user_ids,
-                    result.get("headline") or (result["instrument"] + " " + result["signal"] + " NOW"),
-                    "High-impact news setup confirmed. Entry " + result["entry"]
-                    + " | SL " + result["stop_loss"] + " | TP1 " + result["take_profit_1"]
-                    + " | TP2 " + result["take_profit_2"],
-                    {"type": "high_impact_news_signal", "event_key": str(job["event_key"]),
-                     "job_id": str(job["id"]), "instrument": result["instrument"],
-                     "stage": "POST_NEWS", "event_title": str(event.get("title", "")),
-                     "event_currency": str(event.get("currency", "")),
-                     "event_date": str(event.get("date", "")),
-                     "event_time": str(event.get("time", "")),
-                     "signal": str(result.get("signal", "")),
-                     "entry": str(result.get("entry", "")),
-                     "stop_loss": str(result.get("stop_loss", "")),
-                     "take_profit_1": str(result.get("take_profit_1", "")),
-                     "take_profit_2": str(result.get("take_profit_2", ""))},
-                )
+            push_result = notify_user_ids(
+                user_ids,
+                title=title,
+                body=body,
+                data={"type": "high_impact_news_signal", "event_key": str(job["event_key"]),
+                      "job_id": str(job["id"]), "instrument": instrument,
+                      "stage": stage, "event_title": str(event.get("title", "")),
+                      "event_currency": str(event.get("currency", "")),
+                      "event_date": str(event.get("date", "")),
+                      "event_time": str(event.get("time", "")),
+                      "signal": signal, "entry": str(result.get("entry", "")),
+                      "stop_loss": str(result.get("stop_loss", "")),
+                      "take_profit_1": str(result.get("take_profit_1", "")),
+                      "take_profit_2": str(result.get("take_profit_2", ""))},
+            ) if user_ids else {"sent": 0, "failed": 0}
             _patch_job(job["id"], {
-                "notification_sent": True,
+                "notification_sent": int(push_result.get("sent", 0)) > 0,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             })
         return {"processed": True, "status": "completed",
