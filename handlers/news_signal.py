@@ -241,85 +241,131 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
         "geopolitical_relevance","geopolitical_direction","geopolitical_confidence","geopolitical_summary","geopolitical_channel","geopolitical_priced_in","reasons","invalidation"]}
     request_payload={"contents":[{"role":"user","parts":[{"text":prompt+"\n\nINPUT:\n"+json.dumps(data,separators=(",",":"))}]}],
       "generationConfig":{"responseMimeType":"application/json","responseJsonSchema":schema,"maxOutputTokens":1300,"thinkingConfig":{"thinkingLevel":"low"}}}
-    def post_with_retry(url, payload, model_label):
+    def post_gemini(url, payload, model_label, retries=1, timeout=9):
         body=json.dumps(payload,separators=(",",":")).encode()
         req=urllib.request.Request(url,data=body,
             headers={"x-goog-api-key":key,"Content-Type":"application/json"},method="POST")
-        for attempt in range(2):
+        for attempt in range(retries+1):
             try:
-                with urllib.request.urlopen(req,timeout=25) as response:
+                with urllib.request.urlopen(req,timeout=timeout) as response:
                     return json.loads(response.read().decode())
             except urllib.error.HTTPError as exc:
-                if exc.code != 503 or attempt == 1:
+                if exc.code != 503 or attempt >= retries:
                     raise
-                # Google documents 503 as temporary capacity overload. Honour a
-                # short Retry-After when present; otherwise use bounded backoff.
                 retry_after=(exc.headers.get("Retry-After") if exc.headers else None)
                 try:
-                    delay=max(0.5,min(float(retry_after),4.0)) if retry_after else 1.5
+                    delay=max(0.5,min(float(retry_after),2.0)) if retry_after else 1.0
                 except (TypeError,ValueError):
-                    delay=1.5
-                delay=min(4.5,delay+random.uniform(0.1,0.4))
-                print("Gemini model {} returned HTTP 503; retrying once after {:.1f}s".format(model_label,delay))
+                    delay=1.0
+                delay=min(2.4,delay+random.uniform(0.1,0.3))
+                print("Gemini model {} returned HTTP 503; one bounded retry in {:.1f}s".format(model_label,delay))
                 time.sleep(delay)
-        raise RuntimeError("Gemini request retry loop ended unexpectedly.")
+        raise RuntimeError("Gemini retry loop ended unexpectedly.")
 
-    def send_gemini(url, payload, model_label):
+    def send_gemini(url, payload, model_label, retries=1):
         try:
-            return post_with_retry(url,payload,model_label)
+            return post_gemini(url,payload,model_label,retries=retries)
         except urllib.error.HTTPError as exc:
             if exc.code != 400:
                 raise
-            # Retry schema rejection once in JSON mode; server-side validation
-            # remains authoritative for every field and trading safeguard.
+            # A rejected Gemini schema gets one JSON-mode retry. All fields are
+            # still validated and trade qualification remains server-side.
             fallback_payload=json.loads(json.dumps(payload))
             fallback_payload["generationConfig"].pop("responseJsonSchema",None)
-            return post_with_retry(url,fallback_payload,model_label+" JSON-mode")
+            return post_gemini(url,fallback_payload,model_label+" JSON-mode",retries=0)
 
-    try:
-        raw=send_gemini(GEMINI_URL,request_payload,MODEL)
-    except urllib.error.HTTPError as exc:
+    def request_openai(model):
+        openai_key=os.environ.get("OPENAI_API_KEY","").strip()
+        if not openai_key:
+            raise RuntimeError("OPENAI_API_KEY is not configured for the independent AI backup.")
+        strict_schema={
+            "type":"object",
+            "additionalProperties":False,
+            "properties":schema["properties"],
+            "required":schema["required"],
+        }
+        openai_payload={
+            "model":model,
+            "messages":[
+                {"role":"system","content":prompt+" Return JSON only. Do not omit any required field."},
+                {"role":"user","content":"INPUT:\n"+json.dumps(data,separators=(",",":"))},
+            ],
+            "response_format":{
+                "type":"json_schema",
+                "json_schema":{
+                    "name":"lm_news_assessment",
+                    "strict":True,
+                    "schema":strict_schema,
+                },
+            },
+            "reasoning_effort":"low",
+            "max_completion_tokens":1500,
+        }
+        body=json.dumps(openai_payload,separators=(",",":")).encode()
+        req=urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=body,
+            headers={"Authorization":"Bearer "+openai_key,"Content-Type":"application/json"},
+            method="POST",
+        )
         try:
-            detail=exc.read().decode("utf-8",errors="replace")[:700]
-        except Exception:
-            detail=""
-        print("Gemini primary news-analysis HTTP {}: {}".format(exc.code,detail))
-        if exc.code == 503:
-            # A separate model is attempted only after the primary model has
-            # had one bounded retry. Keep the prompt, evidence and validation
-            # unchanged; model switching must never bypass risk safeguards.
+            with urllib.request.urlopen(req,timeout=16) as response:
+                return json.loads(response.read().decode())
+        except urllib.error.HTTPError as exc:
+            try:
+                detail=exc.read().decode("utf-8",errors="replace")[:600]
+            except Exception:
+                detail=""
+            print("OpenAI news-analysis fallback model {} HTTP {}: {}".format(model,exc.code,detail))
+            raise
+
+    analysis_provider=MODEL
+    try:
+        raw=send_gemini(GEMINI_URL,request_payload,MODEL,retries=1)
+    except (urllib.error.HTTPError,urllib.error.URLError,TimeoutError,json.JSONDecodeError) as primary_exc:
+        primary_code=primary_exc.code if isinstance(primary_exc,urllib.error.HTTPError) else type(primary_exc).__name__
+        print("Gemini primary news-analysis failed ({}); attempting independent provider failover.".format(primary_code))
+        raw=None
+        # A single second Gemini model attempt may recover a model-specific
+        # capacity issue. It is deliberately not retried to protect the
+        # Vercel function's 60-second execution budget.
+        if isinstance(primary_exc,urllib.error.HTTPError) and primary_exc.code==503:
             fallback_model="gemini-3.8-flash"
             fallback_url="https://generativelanguage.googleapis.com/v1beta/models/"+fallback_model+":generateContent"
             try:
-                raw=send_gemini(fallback_url,request_payload,fallback_model)
-                print("Gemini news-analysis completed using capacity fallback model "+fallback_model)
-            except urllib.error.HTTPError as fallback_exc:
+                raw=send_gemini(fallback_url,request_payload,fallback_model,retries=0)
+                analysis_provider=fallback_model
+                print("Gemini news-analysis completed using alternate model "+fallback_model)
+            except (urllib.error.HTTPError,urllib.error.URLError,TimeoutError,json.JSONDecodeError) as gemini_fallback_exc:
+                fallback_code=gemini_fallback_exc.code if isinstance(gemini_fallback_exc,urllib.error.HTTPError) else type(gemini_fallback_exc).__name__
+                print("Gemini alternate model failed ({}); switching to OpenAI backup.".format(fallback_code))
+        if raw is None:
+            openai_errors=[]
+            for openai_model in ("gpt-6-luna","gpt-5-mini"):
                 try:
-                    fallback_detail=fallback_exc.read().decode("utf-8",errors="replace")[:500]
-                except Exception:
-                    fallback_detail=""
-                print("Gemini capacity fallback HTTP {}: {}".format(fallback_exc.code,fallback_detail))
-                if fallback_exc.code==429:
-                    raise RuntimeError("The AI news-analysis rate limit has been reached. Retry shortly.") from fallback_exc
-                if fallback_exc.code in (401,403):
-                    raise RuntimeError("The Gemini AI service credentials or model permissions need attention.") from fallback_exc
-                if fallback_exc.code==503:
-                    raise RuntimeError("Google Gemini is temporarily overloaded on both analysis models. No news assessment was generated; retry shortly.") from fallback_exc
-                raise RuntimeError("Gemini's primary and fallback models could not complete the assessment (HTTP {}).".format(fallback_exc.code)) from fallback_exc
-        elif exc.code==429:
-            raise RuntimeError("The AI news-analysis rate limit has been reached. Retry shortly.") from exc
-        elif exc.code in (401,403):
-            raise RuntimeError("The Gemini AI service credentials or model permissions need attention.") from exc
-        elif exc.code==503:
-            raise RuntimeError("Google Gemini is temporarily overloaded. No news assessment was generated; retry shortly.") from exc
-        else:
-            raise RuntimeError("The AI news-analysis service could not complete the assessment (provider HTTP {}).".format(exc.code)) from exc
-    except (urllib.error.URLError,TimeoutError,json.JSONDecodeError) as exc:
-        raise RuntimeError("The AI news-analysis service is temporarily unavailable.") from exc
+                    raw=request_openai(openai_model)
+                    analysis_provider="openai:"+openai_model
+                    print("News assessment completed using independent provider "+analysis_provider)
+                    break
+                except (urllib.error.HTTPError,urllib.error.URLError,TimeoutError,json.JSONDecodeError,RuntimeError) as openai_exc:
+                    code=openai_exc.code if isinstance(openai_exc,urllib.error.HTTPError) else type(openai_exc).__name__
+                    openai_errors.append("{}:{}".format(openai_model,code))
+            if raw is None:
+                if not os.environ.get("OPENAI_API_KEY","").strip():
+                    raise RuntimeError("Gemini is unavailable and the independent OpenAI backup is not configured.") from primary_exc
+                raise RuntimeError("Gemini and the independent OpenAI backup are temporarily unavailable ({}).".format(", ".join(openai_errors))) from primary_exc
+
     try:
-        result=json.loads(raw["candidates"][0]["content"]["parts"][0]["text"])
-    except (KeyError,IndexError,TypeError,json.JSONDecodeError) as exc:
-        raise RuntimeError("The AI returned an incomplete news assessment.") from exc
+        if analysis_provider.startswith("openai:"):
+            message=raw["choices"][0]["message"]
+            if message.get("refusal"):
+                raise ValueError("The AI provider declined the assessment.")
+            content=message.get("content")
+            if not isinstance(content,str) or not content.strip():
+                raise ValueError("The AI provider returned an empty assessment.")
+            result=json.loads(content)
+        else:
+            result=json.loads(raw["candidates"][0]["content"]["parts"][0]["text"])
     signal=str(result.get("signal","WAIT")).upper()
     if signal not in ("BUY","SELL","WAIT"):
         signal="WAIT"
@@ -429,6 +475,7 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
             "Recent geopolitical headlines were checked but did not establish a sufficiently relevant directional effect."
         )
     assessment={
+      "analysis_provider":analysis_provider,
       "signal":signal,"confidence":confidence,
       "trend_structure":str(result.get("trend_structure","Insufficient structure evidence."))[:240],
       "event_bias":bias_text,
