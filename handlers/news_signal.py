@@ -170,6 +170,7 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
         "window_hours":int(geo.get("window_hours",72) or 72),
         "independent_source_count":int(geo.get("independent_source_count",0) or 0),
         "corroborated":bool(geo.get("corroborated",False)),
+        "source_domains":geo.get("source_domains") if isinstance(geo.get("source_domains"),list) else [],
         "cache_status":str(geo.get("cache_status","UNKNOWN")),
         "source_note":str(geo.get("source_note",""))[:240],
         "articles":geo_articles,
