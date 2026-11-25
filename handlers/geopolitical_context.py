@@ -93,13 +93,22 @@ def _domain_is_trusted(domain):
 
 
 def _article_domain(article):
-    domain = str(article.get("domain") or "").strip().lower()
-    if not domain:
-        try:
-            domain = (urlsplit(str(article.get("url") or "")).hostname or "").lower()
-        except ValueError:
-            domain = ""
-    return domain[4:] if domain.startswith("www.") else domain
+    # Trust the actual URL host, not a separate provider-supplied domain field.
+    # Reject metadata/URL mismatches rather than accepting a spoofed publisher.
+    try:
+        host = (urlsplit(str(article.get("url") or "")).hostname or "").lower().rstrip(".")
+    except ValueError:
+        host = ""
+    declared = str(article.get("domain") or "").strip().lower().rstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    if declared.startswith("www."):
+        declared = declared[4:]
+    if not host:
+        return ""
+    if declared and not (host == declared or host.endswith("." + declared)):
+        return ""
+    return host
 
 
 def build_gdelt_query(currency):
