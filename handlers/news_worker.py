@@ -141,9 +141,10 @@ def _assess(job):
         "entry": "", "stop_loss": "", "take_profit_1": "", "take_profit_2": "",
         "warning": "News-related market analysis is uncertain. This is not a guaranteed prediction or financial advice.",
     }
-    if assessment["signal"] not in ("BUY", "SELL") or assessment["confidence"] < 65:
+    if not assessment.get("setup_qualified", False):
         result["signal"] = "WAIT"
-        result["reasons"].append("Evidence did not meet the minimum confidence threshold for a trade setup.")
+        result["setup_status"] = "NO_SETUP"
+        result["order_type"] = "NONE"
         return result
 
     levels = trade_levels(rows, assessment["signal"])
