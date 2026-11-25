@@ -341,7 +341,7 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
                 print("Gemini alternate model failed ({}); switching to OpenAI backup.".format(fallback_code))
         if raw is None:
             openai_errors=[]
-            for openai_model,openai_timeout in (("gpt-6-luna",13),("gpt-5-mini",9)):
+            for openai_model,openai_timeout in (("gpt-6-luna",13),("gpt-5.5",9)):
                 try:
                     raw=request_openai(openai_model,timeout=openai_timeout)
                     analysis_provider="openai:"+openai_model
@@ -366,6 +366,8 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
             result=json.loads(content)
         else:
             result=json.loads(raw["candidates"][0]["content"]["parts"][0]["text"])
+    except (KeyError,IndexError,TypeError,json.JSONDecodeError,ValueError) as exc:
+        raise RuntimeError("The AI returned an incomplete or invalid news assessment.") from exc
     signal=str(result.get("signal","WAIT")).upper()
     if signal not in ("BUY","SELL","WAIT"):
         signal="WAIT"
