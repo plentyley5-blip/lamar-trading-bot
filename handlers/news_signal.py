@@ -26,6 +26,43 @@ RELATED = {
     "NZD": {"NZDUSD","EURNZD","GBPNZD","AUDNZD","NZDJPY","NZDCAD","NZDCHF"},
 }
 
+# Flexible confluence model: not every market filter must agree. At least two
+# independent factors must support direction, including structure or momentum.
+# Mechanical data, entry, stop and reward/risk checks remain mandatory below.
+CONFLUENCE_WEIGHTS = {
+    "PRICE_STRUCTURE": 3,
+    "MOMENTUM": 2,
+    "EVENT_REACTION": 2,
+    "TREND_ALIGNMENT": 1,
+    "VOLATILITY_QUALITY": 1,
+    "SUPPORT_RESISTANCE": 1,
+}
+MIN_SIGNAL_CONFIDENCE = 55
+MIN_CONFLUENCE_SCORE = 4
+MIN_CONFIRMED_FACTORS = 2
+
+def qualify_signal(assessment):
+    confirmed = sorted({
+        str(x).upper() for x in assessment.get("confirmed_factors", [])
+        if str(x).upper() in CONFLUENCE_WEIGHTS
+    })
+    score = sum(CONFLUENCE_WEIGHTS[x] for x in confirmed)
+    anchor = bool({"PRICE_STRUCTURE", "MOMENTUM"}.intersection(confirmed))
+    severe_conflict = bool(assessment.get("severe_conflict", False))
+    qualified = (
+        assessment.get("signal") in ("BUY", "SELL")
+        and int(assessment.get("confidence", 0)) >= MIN_SIGNAL_CONFIDENCE
+        and len(confirmed) >= MIN_CONFIRMED_FACTORS
+        and anchor
+        and score >= MIN_CONFLUENCE_SCORE
+        and not severe_conflict
+    )
+    return {
+        "confirmed_factors": confirmed,
+        "qualification_score": score,
+        "setup_qualified": qualified,
+    }
+
 def parse_event_dt(event):
     try:
         return datetime.strptime(str(event.get("date","")) + " " + str(event.get("time","")), "%a %d %b %Y %H:%M").replace(tzinfo=TZ)
@@ -118,25 +155,39 @@ def ai_assess(event,symbol,stage,rows):
       "You are LM Analyzer's high-impact Forex news analyst. Analyse only the verified event and supplied real 1-minute OHLC candles. "
       "Do not assume textbook currency reaction determines direction. Assess actual price response, momentum, volatility and swing structure. "
       "Return JSON only: signal (BUY, SELL, WAIT), confidence (integer 0-100 evidence-strength score, NOT win probability), "
-      "trend_structure, event_bias, reasons (2-4 short strings), invalidation. "
-      "DISPLAY RULES: event_bias must explain the directional bias plainly; WAIT means there is no reliable directional edge, not a hidden BUY or SELL. "
+      "trend_structure, event_bias, confirmed_factors, conflicting_factors, severe_conflict, severe_conflict_reason, "
+      "reasons (2-4 short strings), invalidation. "
+      "FLEXIBLE CONFLUENCE RULE: Do NOT require every indicator or market filter to agree. Judge the current chart context and select the strongest relevant confirmations. "
+      "A setup may qualify when at least TWO independent factors genuinely support the same direction, including PRICE_STRUCTURE or MOMENTUM, "
+      "and the evidence is coherent. Other factors may be NEUTRAL, unavailable, or mildly conflicting; do not reject a sound setup only because every optional factor is not aligned. "
+      "Possible confirmed_factors are PRICE_STRUCTURE, MOMENTUM, EVENT_REACTION, TREND_ALIGNMENT, VOLATILITY_QUALITY, SUPPORT_RESISTANCE. "
+      "Only list a factor as confirmed when the supplied candles actually show it. Do not count the same price movement twice under different names. "
+      "For PRE_NEWS, EVENT_REACTION is unavailable because the release has not occurred; never claim it is confirmed. "
+      "For POST_NEWS, prioritize actual post-release price reaction, structure and momentum. "
+      "Set severe_conflict true only for a material contradiction that invalidates the proposed direction or makes the setup unsafe; a merely neutral/missing optional filter is NOT severe. "
+      "Do not invent confirmations, prices or levels. Confidence reflects overall evidence strength, never win probability. "
+      "HARD SAFETY: no signal if price data is contradictory/unstable, a safe structural stop cannot be placed, or a sensible reward/risk setup cannot be calculated. "
+      "The application independently validates candle freshness and entry/stop/target geometry; do not try to bypass those checks. "
+      "DISPLAY RULES: event_bias must explain the directional bias plainly; WAIT means there is no reliable directional edge. "
       "trend_structure must describe observed structure, not predict the event result. "
       "invalidation must state an observable price/structure condition and, when candles support it, the exact price boundary and direction. "
       "For a ranging market, identify both range boundaries if they are clear. Do not use the vague word 'Invalid' as the whole condition. "
-      "Do not invent levels: if no reliable numeric boundary exists in the supplied candles, say so plainly. "
-      "For PRE_NEWS, clearly separate directional bias from a conditional setup. A BUY/SELL bias is not permission to enter before the release. "
-      "Use WAIT for contradictory, unstable or weak evidence. Confidence is evidence strength, never a win probability. "
+      "For PRE_NEWS, separate directional bias from a conditional setup; a BUY/SELL bias is not permission to enter before release confirmation. "
       "LIVE_REACTION must be conservative. POST_NEWS judges observed reaction rather than forecast."
     )
     data={"event":{k:event.get(k,"") for k in ("currency","title","date","time","actual","forecast","previous","impact")},
           "instrument":symbol,"stage":stage,"latest_price":rows[-1]["close"],"atr_14_1m":atr(rows),
           "candles_1m":[{"time":x["time"].isoformat(),"open":x["open"],"high":x["high"],"low":x["low"],"close":x["close"]} for x in rows[-60:]]}
+    factor_enum=["PRICE_STRUCTURE","MOMENTUM","EVENT_REACTION","TREND_ALIGNMENT","VOLATILITY_QUALITY","SUPPORT_RESISTANCE"]
     schema={"type":"object","properties":{
       "signal":{"type":"string","enum":["BUY","SELL","WAIT"]},
       "confidence":{"type":"integer","minimum":0,"maximum":100},
       "trend_structure":{"type":"string"},"event_bias":{"type":"string"},
+      "confirmed_factors":{"type":"array","items":{"type":"string","enum":factor_enum}},
+      "conflicting_factors":{"type":"array","items":{"type":"string","enum":factor_enum}},
+      "severe_conflict":{"type":"boolean"},"severe_conflict_reason":{"type":"string"},
       "reasons":{"type":"array","items":{"type":"string"}},"invalidation":{"type":"string"}},
-      "required":["signal","confidence","trend_structure","event_bias","reasons","invalidation"]}
+      "required":["signal","confidence","trend_structure","event_bias","confirmed_factors","conflicting_factors","severe_conflict","severe_conflict_reason","reasons","invalidation"]}
     body=json.dumps({"contents":[{"role":"user","parts":[{"text":prompt+"\n\nINPUT:\n"+json.dumps(data,separators=(",",":"))}]}],
       "generationConfig":{"responseMimeType":"application/json","responseJsonSchema":schema,"maxOutputTokens":900,"thinkingConfig":{"thinkingLevel":"low"}}},separators=(",",":")).encode()
     req=urllib.request.Request(GEMINI_URL,data=body,headers={"x-goog-api-key":key,"Content-Type":"application/json"},method="POST")
@@ -190,11 +241,31 @@ def ai_assess(event,symbol,stage,rows):
             "close through the entry level and a hold/retest; a wick or first spike is not confirmation. "
             "If the outlook is WAIT or levels are absent, remain WAIT."
         )
-    return {"signal":signal,"confidence":confidence,
+    assessment={
+      "signal":signal,"confidence":confidence,
       "trend_structure":str(result.get("trend_structure","Insufficient structure evidence."))[:240],
       "event_bias":bias_text,
+      "confirmed_factors":result.get("confirmed_factors") if isinstance(result.get("confirmed_factors"),list) else [],
+      "conflicting_factors":result.get("conflicting_factors") if isinstance(result.get("conflicting_factors"),list) else [],
+      "severe_conflict":bool(result.get("severe_conflict",False)),
+      "severe_conflict_reason":str(result.get("severe_conflict_reason","")).strip()[:200],
       "reasons":reasons[:4],
       "invalidation":invalidation_text}
+    assessment.update(qualify_signal(assessment))
+    if assessment["setup_qualified"]:
+        labels=", ".join(x.replace("_"," ").lower() for x in assessment["confirmed_factors"])
+        note=("Setup qualified by relevant confirmations: "+labels+
+              ". Neutral or unavailable optional filters were not treated as mandatory.")
+    elif signal in ("BUY","SELL"):
+        if assessment["severe_conflict"]:
+            note=("No trade: material conflicting evidence was identified. "+
+                  assessment["severe_conflict_reason"])
+        else:
+            note=("No trade yet: the setup did not meet the minimum combination of independent confirmations.")
+    else:
+        note="No reliable directional setup is present; WAIT remains the correct result."
+    assessment["reasons"]=(assessment["reasons"][:3]+[note[:220]])
+    return assessment
 
 def trade_levels(rows,signal):
     volatility=atr(rows)
@@ -280,7 +351,7 @@ class handler(BaseHTTPRequestHandler):
               "order_type":"NONE","entry":"","stop_loss":"","take_profit_1":"","take_profit_2":"",
               "warning":"News-related market analysis is uncertain. This is not a guaranteed prediction or financial advice."}
             if stage=="PRE_NEWS":
-                if outlook["signal"] in ("BUY","SELL") and outlook["confidence"]>=65:
+                if outlook["setup_qualified"]:
                     levels=trade_levels(rows,outlook["signal"])
                     if levels:
                         # These are conditional planning levels, not an instruction to enter
@@ -298,7 +369,7 @@ class handler(BaseHTTPRequestHandler):
                     out["signal"]="WAIT"
                     out["setup_status"]="PRE_NEWS_OUTLOOK"
                     out["order_type"]="NONE"
-            elif outlook["signal"] in ("BUY","SELL") and outlook["confidence"]>=65:
+            elif outlook["setup_qualified"]:
                 levels=trade_levels(rows,outlook["signal"])
                 if levels:
                     reached=levels.pop("entry_reached")
