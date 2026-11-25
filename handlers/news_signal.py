@@ -116,10 +116,17 @@ def ai_assess(event,symbol,stage,rows):
         raise RuntimeError("The AI news-analysis service is not configured.")
     prompt = (
       "You are LM Analyzer's high-impact Forex news analyst. Analyse only the verified event and supplied real 1-minute OHLC candles. "
-      "Do not assume textbook currency reaction determines direction. Assess actual recent price response, momentum, volatility and swing structure. "
+      "Do not assume textbook currency reaction determines direction. Assess actual price response, momentum, volatility and swing structure. "
       "Return JSON only: signal (BUY, SELL, WAIT), confidence (integer 0-100 evidence-strength score, NOT win probability), "
-      "trend_structure, event_bias, reasons (2-4 short strings), invalidation. Use WAIT for contradictory, unstable or weak evidence. "
-      "PRE_NEWS is a conditional outlook, never a claim to know the future. LIVE_REACTION must be conservative. POST_NEWS judges observed reaction."
+      "trend_structure, event_bias, reasons (2-4 short strings), invalidation. "
+      "DISPLAY RULES: event_bias must explain the directional bias plainly; WAIT means there is no reliable directional edge, not a hidden BUY or SELL. "
+      "trend_structure must describe observed structure, not predict the event result. "
+      "invalidation must state an observable price/structure condition and, when candles support it, the exact price boundary and direction. "
+      "For a ranging market, identify both range boundaries if they are clear. Do not use the vague word 'Invalid' as the whole condition. "
+      "Do not invent levels: if no reliable numeric boundary exists in the supplied candles, say so plainly. "
+      "For PRE_NEWS, clearly separate directional bias from a conditional setup. A BUY/SELL bias is not permission to enter before the release. "
+      "Use WAIT for contradictory, unstable or weak evidence. Confidence is evidence strength, never a win probability. "
+      "LIVE_REACTION must be conservative. POST_NEWS judges observed reaction rather than forecast."
     )
     data={"event":{k:event.get(k,"") for k in ("currency","title","date","time","actual","forecast","previous","impact")},
           "instrument":symbol,"stage":stage,"latest_price":rows[-1]["close"],"atr_14_1m":atr(rows),
@@ -154,11 +161,40 @@ def ai_assess(event,symbol,stage,rows):
     except (ValueError,TypeError):
         confidence=0
     reasons=result.get("reasons") if isinstance(result.get("reasons"),list) else []
+    reasons=[str(x).strip()[:180] for x in reasons if str(x).strip()]
+    bias_text=str(result.get("event_bias","The event reaction is not yet clear.")).strip()[:200]
+    if not bias_text.lower().startswith("directional bias"):
+        bias_text=("Directional bias — " + signal + ": " + bias_text)[:240]
+    invalidation_text=str(result.get("invalidation","")).strip()
+    # Normalize ambiguous model wording such as "Invalid, ..." into an explicit
+    # condition label, and require a candle-close trigger rather than a wick.
+    for prefix in ("invalidation condition:", "invalidation:", "invalid,",
+                   "invalid:", "invalid -", "invalid —"):
+        if invalidation_text.lower().startswith(prefix):
+            invalidation_text=invalidation_text[len(prefix):].strip(" :-—,")
+            break
+    if not any(ch.isdigit() for ch in invalidation_text):
+        invalidation_text=("No reliable numeric invalidation level is visible in the supplied candles. "
+                           "Reassess with fresh 1-minute candles; do not guess a boundary.")
+    elif "1-minute" not in invalidation_text.lower() and "1 min" not in invalidation_text.lower():
+        invalidation_text += (" Treat a break as confirmed only after a completed 1-minute candle close; "
+                              "a wick alone does not count.")
+    invalidation_text=("Invalidation condition: " + invalidation_text)[:320]
+    if stage == "PRE_NEWS":
+        # Always make the post-release confirmation rule visible, even for WAIT
+        # outlooks; never promote a neutral bias into a forced trade.
+        reasons=reasons[:3]
+        reasons.append(
+            "Post-release confirmation: Wait until the release and the initial five-minute reaction have passed. "
+            "Then reassess fresh 1-minute candles. If conditional levels are shown, require a completed 1-minute "
+            "close through the entry level and a hold/retest; a wick or first spike is not confirmation. "
+            "If the outlook is WAIT or levels are absent, remain WAIT."
+        )
     return {"signal":signal,"confidence":confidence,
       "trend_structure":str(result.get("trend_structure","Insufficient structure evidence."))[:240],
-      "event_bias":str(result.get("event_bias","The event reaction is not yet clear."))[:240],
-      "reasons":[str(x).strip()[:180] for x in reasons if str(x).strip()][:4],
-      "invalidation":str(result.get("invalidation","Reassess if market structure changes."))[:240]}
+      "event_bias":bias_text,
+      "reasons":reasons[:4],
+      "invalidation":invalidation_text}
 
 def trade_levels(rows,signal):
     volatility=atr(rows)
