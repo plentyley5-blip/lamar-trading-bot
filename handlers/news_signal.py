@@ -220,18 +220,20 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
           "instrument":symbol,"stage":stage,"latest_price":rows[-1]["close"],"atr_14_1m":atr(rows),
           "candles_1m":[{"time":x["time"].isoformat(),"open":x["open"],"high":x["high"],"low":x["low"],"close":x["close"]} for x in rows[-60:]]}
     factor_enum=["PRICE_STRUCTURE","MOMENTUM","EVENT_REACTION","TREND_ALIGNMENT","VOLATILITY_QUALITY","SUPPORT_RESISTANCE","GEOPOLITICAL_CONTEXT"]
+    # Keep the Gemini structured-output contract deliberately small and simple.
+    # Direction, relevance and confidence are validated and normalised server-side.
     schema={"type":"object","properties":{
       "signal":{"type":"string","enum":["BUY","SELL","WAIT"]},
-      "confidence":{"type":"integer","minimum":0,"maximum":100},
+      "confidence":{"type":"integer"},
       "trend_structure":{"type":"string"},"event_bias":{"type":"string"},
-      "confirmed_factors":{"type":"array","items":{"type":"string","enum":factor_enum}},
-      "conflicting_factors":{"type":"array","items":{"type":"string","enum":factor_enum}},
+      "confirmed_factors":{"type":"array","items":{"type":"string"}},
+      "conflicting_factors":{"type":"array","items":{"type":"string"}},
       "severe_conflict":{"type":"boolean"},"severe_conflict_reason":{"type":"string"},
-      "geopolitical_relevance":{"type":"string","enum":["DIRECT","MATERIAL","WEAK","NONE","UNKNOWN"]},
-      "geopolitical_direction":{"type":"string","enum":["SUPPORTS_BUY","SUPPORTS_SELL","NEUTRAL","CONFLICTING"]},
-      "geopolitical_confidence":{"type":"integer","minimum":0,"maximum":100},
+      "geopolitical_relevance":{"type":"string"},
+      "geopolitical_direction":{"type":"string"},
+      "geopolitical_confidence":{"type":"integer"},
       "geopolitical_summary":{"type":"string"},"geopolitical_channel":{"type":"string"},
-      "geopolitical_priced_in":{"type":"string","enum":["NEW_INFORMATION","ONGOING_OR_ALREADY_REPORTED","UNCERTAIN","NOT_APPLICABLE"]},
+      "geopolitical_priced_in":{"type":"string"},
       "reasons":{"type":"array","items":{"type":"string"}},"invalidation":{"type":"string"}},
       "required":["signal","confidence","trend_structure","event_bias","confirmed_factors","conflicting_factors","severe_conflict","severe_conflict_reason",
         "geopolitical_relevance","geopolitical_direction","geopolitical_confidence","geopolitical_summary","geopolitical_channel","geopolitical_priced_in","reasons","invalidation"]}
@@ -242,9 +244,19 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
         with urllib.request.urlopen(req,timeout=25) as response:
             raw=json.loads(response.read().decode())
     except urllib.error.HTTPError as exc:
+        try:
+            provider_detail=exc.read().decode("utf-8",errors="replace")[:700]
+        except Exception:
+            provider_detail=""
+        # The detail contains only Gemini's error response, never the API key.
+        print("Gemini news-analysis HTTP {}: {}".format(exc.code,provider_detail))
         if exc.code==429:
             raise RuntimeError("The AI news-analysis rate limit has been reached. Retry shortly.") from exc
-        raise RuntimeError("The AI news-analysis service could not complete the assessment.") from exc
+        if exc.code==400:
+            raise RuntimeError("The AI provider rejected the news-analysis request. The request format is being checked.") from exc
+        if exc.code in (401,403):
+            raise RuntimeError("The Gemini AI service credentials or model permissions need attention.") from exc
+        raise RuntimeError("The AI news-analysis service could not complete the assessment (provider HTTP {}).".format(exc.code)) from exc
     except (urllib.error.URLError,TimeoutError,json.JSONDecodeError) as exc:
         raise RuntimeError("The AI news-analysis service is temporarily unavailable.") from exc
     try:
