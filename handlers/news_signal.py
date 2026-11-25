@@ -244,8 +244,24 @@ class handler(BaseHTTPRequestHandler):
               "order_type":"NONE","entry":"","stop_loss":"","take_profit_1":"","take_profit_2":"",
               "warning":"News-related market analysis is uncertain. This is not a guaranteed prediction or financial advice."}
             if stage=="PRE_NEWS":
-                if outlook["signal"] in ("BUY","SELL"):
-                    out["setup_status"]="PRE_NEWS_POTENTIAL_"+outlook["signal"]
+                if outlook["signal"] in ("BUY","SELL") and outlook["confidence"]>=65:
+                    levels=trade_levels(rows,outlook["signal"])
+                    if levels:
+                        # These are conditional planning levels, not an instruction to enter
+                        # before the event reaction confirms the setup.
+                        levels.pop("entry_reached",None)
+                        levels.pop("late_entry",None)
+                        out.update(levels)
+                        out["setup_status"]="PRE_NEWS_POTENTIAL_"+outlook["signal"]
+                        out["warning"]="Conditional pre-news outlook only. These levels are for planning; do not enter before the event reaction confirms the setup."
+                    else:
+                        out["signal"]="WAIT"; out["confidence"]=min(outlook["confidence"],50)
+                        out["setup_status"]="NO_SETUP"; out["order_type"]="NONE"
+                        out["reasons"].append("A safe conditional entry and stop-loss could not be calculated from recent candles.")
+                else:
+                    out["signal"]="WAIT"
+                    out["setup_status"]="PRE_NEWS_OUTLOOK"
+                    out["order_type"]="NONE"
             elif outlook["signal"] in ("BUY","SELL") and outlook["confidence"]>=65:
                 levels=trade_levels(rows,outlook["signal"])
                 if levels:
