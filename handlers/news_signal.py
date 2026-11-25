@@ -239,46 +239,64 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
         "geopolitical_relevance","geopolitical_direction","geopolitical_confidence","geopolitical_summary","geopolitical_channel","geopolitical_priced_in","reasons","invalidation"]}
     request_payload={"contents":[{"role":"user","parts":[{"text":prompt+"\n\nINPUT:\n"+json.dumps(data,separators=(",",":"))}]}],
       "generationConfig":{"responseMimeType":"application/json","responseJsonSchema":schema,"maxOutputTokens":1300,"thinkingConfig":{"thinkingLevel":"low"}}}
-    body=json.dumps(request_payload,separators=(",",":")).encode()
-    req=urllib.request.Request(GEMINI_URL,data=body,headers={"x-goog-api-key":key,"Content-Type":"application/json"},method="POST")
-    try:
-        with urllib.request.urlopen(req,timeout=25) as response:
-            raw=json.loads(response.read().decode())
-    except urllib.error.HTTPError as exc:
+    def send_gemini(url, payload):
+        body=json.dumps(payload,separators=(",",":")).encode()
+        req=urllib.request.Request(url,data=body,
+            headers={"x-goog-api-key":key,"Content-Type":"application/json"},method="POST")
         try:
-            provider_detail=exc.read().decode("utf-8",errors="replace")[:700]
-        except Exception:
-            provider_detail=""
-        # The detail contains only Gemini's error response, never the API key.
-        print("Gemini news-analysis HTTP {}: {}".format(exc.code,provider_detail))
-        if exc.code==429:
-            raise RuntimeError("The AI news-analysis rate limit has been reached. Retry shortly.") from exc
-        if exc.code==400:
-            # A complex/unsupported structured schema can be rejected even when
-            # the model and API key are valid. Retry once as JSON mode; the
-            # server still validates and normalises every field before use.
-            fallback_payload=json.loads(json.dumps(request_payload))
+            with urllib.request.urlopen(req,timeout=25) as response:
+                return json.loads(response.read().decode())
+        except urllib.error.HTTPError as exc:
+            if exc.code != 400:
+                raise
+            # Retry schema rejection once in JSON mode; server-side validation
+            # remains authoritative for every field and trading safeguard.
+            fallback_payload=json.loads(json.dumps(payload))
             fallback_payload["generationConfig"].pop("responseJsonSchema",None)
             fallback_body=json.dumps(fallback_payload,separators=(",",":")).encode()
-            fallback_req=urllib.request.Request(
-                GEMINI_URL,data=fallback_body,
-                headers={"x-goog-api-key":key,"Content-Type":"application/json"},
-                method="POST"
-            )
+            fallback_req=urllib.request.Request(url,data=fallback_body,
+                headers={"x-goog-api-key":key,"Content-Type":"application/json"},method="POST")
             try:
                 with urllib.request.urlopen(fallback_req,timeout=25) as response:
-                    raw=json.loads(response.read().decode())
+                    return json.loads(response.read().decode())
+            except urllib.error.HTTPError as fallback_exc:
+                try:
+                    detail=fallback_exc.read().decode("utf-8",errors="replace")[:500]
+                except Exception:
+                    detail=""
+                print("Gemini JSON-mode fallback HTTP {}: {}".format(fallback_exc.code,detail))
+                raise
+
+    try:
+        raw=send_gemini(GEMINI_URL,request_payload)
+    except urllib.error.HTTPError as exc:
+        try:
+            detail=exc.read().decode("utf-8",errors="replace")[:700]
+        except Exception:
+            detail=""
+        print("Gemini primary news-analysis HTTP {}: {}".format(exc.code,detail))
+        if exc.code == 503:
+            # Gemini 3.5 Flash-Lite can be capacity-constrained. Retry once on
+            # Google's current general-purpose Flash model; never change the
+            # prompt, source evidence, confluence rules or server validation.
+            fallback_model="gemini-3.8-flash"
+            fallback_url="https://generativelanguage.googleapis.com/v1beta/models/"+fallback_model+":generateContent"
+            try:
+                raw=send_gemini(fallback_url,request_payload)
+                print("Gemini news-analysis completed using capacity fallback model "+fallback_model)
             except urllib.error.HTTPError as fallback_exc:
                 try:
                     fallback_detail=fallback_exc.read().decode("utf-8",errors="replace")[:500]
                 except Exception:
                     fallback_detail=""
-                print("Gemini JSON-mode fallback HTTP {}: {}".format(fallback_exc.code,fallback_detail))
+                print("Gemini capacity fallback HTTP {}: {}".format(fallback_exc.code,fallback_detail))
                 if fallback_exc.code==429:
                     raise RuntimeError("The AI news-analysis rate limit has been reached. Retry shortly.") from fallback_exc
                 if fallback_exc.code in (401,403):
                     raise RuntimeError("The Gemini AI service credentials or model permissions need attention.") from fallback_exc
-                raise RuntimeError("The AI provider rejected both structured and fallback JSON requests.") from fallback_exc
+                raise RuntimeError("Gemini's primary and fallback models are temporarily unavailable (HTTP {}).".format(fallback_exc.code)) from fallback_exc
+        elif exc.code==429:
+            raise RuntimeError("The AI news-analysis rate limit has been reached. Retry shortly.") from exc
         elif exc.code in (401,403):
             raise RuntimeError("The Gemini AI service credentials or model permissions need attention.") from exc
         else:
