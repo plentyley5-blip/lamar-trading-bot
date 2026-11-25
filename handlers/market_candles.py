@@ -29,7 +29,7 @@ def _candles(symbol, interval, api_key):
     if not provider_symbol:
         raise ValueError("No verified provider symbol is configured for this market.")
     if not api_key: raise RuntimeError("Live market data is not configured.")
-    query=urllib.parse.urlencode({"symbol":provider_symbol,"interval":interval,"outputsize":"100","apikey":api_key},safe="/")
+    query=urllib.parse.urlencode({"symbol":provider_symbol,"interval":interval,"outputsize":"100","timezone":"UTC","apikey":api_key},safe="/")
     req=urllib.request.Request("https://api.twelvedata.com/time_series?"+query,headers={"Accept":"application/json","User-Agent":"LMAnalyzer/1.0"})
     try:
         with urllib.request.urlopen(req,timeout=12) as response: data=json.loads(response.read().decode("utf-8",errors="replace"))
