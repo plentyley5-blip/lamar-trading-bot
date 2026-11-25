@@ -236,7 +236,7 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
       "required":["signal","confidence","trend_structure","event_bias","confirmed_factors","conflicting_factors","severe_conflict","severe_conflict_reason",
         "geopolitical_relevance","geopolitical_direction","geopolitical_confidence","geopolitical_summary","geopolitical_channel","geopolitical_priced_in","reasons","invalidation"]}
     body=json.dumps({"contents":[{"role":"user","parts":[{"text":prompt+"\n\nINPUT:\n"+json.dumps(data,separators=(",",":"))}]}],
-      "generationConfig":{"responseMimeType":"application/json","responseJsonSchema":schema,"maxOutputTokens":900,"thinkingConfig":{"thinkingLevel":"low"}}},separators=(",",":")).encode()
+      "generationConfig":{"responseMimeType":"application/json","responseJsonSchema":schema,"maxOutputTokens":1300,"thinkingConfig":{"thinkingLevel":"low"}}},separators=(",",":")).encode()
     req=urllib.request.Request(GEMINI_URL,data=body,headers={"x-goog-api-key":key,"Content-Type":"application/json"},method="POST")
     try:
         with urllib.request.urlopen(req,timeout=25) as response:
