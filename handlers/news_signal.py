@@ -237,8 +237,9 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
       "reasons":{"type":"array","items":{"type":"string"}},"invalidation":{"type":"string"}},
       "required":["signal","confidence","trend_structure","event_bias","confirmed_factors","conflicting_factors","severe_conflict","severe_conflict_reason",
         "geopolitical_relevance","geopolitical_direction","geopolitical_confidence","geopolitical_summary","geopolitical_channel","geopolitical_priced_in","reasons","invalidation"]}
-    body=json.dumps({"contents":[{"role":"user","parts":[{"text":prompt+"\n\nINPUT:\n"+json.dumps(data,separators=(",",":"))}]}],
-      "generationConfig":{"responseMimeType":"application/json","responseJsonSchema":schema,"maxOutputTokens":1300,"thinkingConfig":{"thinkingLevel":"low"}}},separators=(",",":")).encode()
+    request_payload={"contents":[{"role":"user","parts":[{"text":prompt+"\n\nINPUT:\n"+json.dumps(data,separators=(",",":"))}]}],
+      "generationConfig":{"responseMimeType":"application/json","responseJsonSchema":schema,"maxOutputTokens":1300,"thinkingConfig":{"thinkingLevel":"low"}}}
+    body=json.dumps(request_payload,separators=(",",":")).encode()
     req=urllib.request.Request(GEMINI_URL,data=body,headers={"x-goog-api-key":key,"Content-Type":"application/json"},method="POST")
     try:
         with urllib.request.urlopen(req,timeout=25) as response:
@@ -253,10 +254,35 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
         if exc.code==429:
             raise RuntimeError("The AI news-analysis rate limit has been reached. Retry shortly.") from exc
         if exc.code==400:
-            raise RuntimeError("The AI provider rejected the news-analysis request. The request format is being checked.") from exc
-        if exc.code in (401,403):
+            # A complex/unsupported structured schema can be rejected even when
+            # the model and API key are valid. Retry once as JSON mode; the
+            # server still validates and normalises every field before use.
+            fallback_payload=json.loads(json.dumps(request_payload))
+            fallback_payload["generationConfig"].pop("responseJsonSchema",None)
+            fallback_body=json.dumps(fallback_payload,separators=(",",":")).encode()
+            fallback_req=urllib.request.Request(
+                GEMINI_URL,data=fallback_body,
+                headers={"x-goog-api-key":key,"Content-Type":"application/json"},
+                method="POST"
+            )
+            try:
+                with urllib.request.urlopen(fallback_req,timeout=25) as response:
+                    raw=json.loads(response.read().decode())
+            except urllib.error.HTTPError as fallback_exc:
+                try:
+                    fallback_detail=fallback_exc.read().decode("utf-8",errors="replace")[:500]
+                except Exception:
+                    fallback_detail=""
+                print("Gemini JSON-mode fallback HTTP {}: {}".format(fallback_exc.code,fallback_detail))
+                if fallback_exc.code==429:
+                    raise RuntimeError("The AI news-analysis rate limit has been reached. Retry shortly.") from fallback_exc
+                if fallback_exc.code in (401,403):
+                    raise RuntimeError("The Gemini AI service credentials or model permissions need attention.") from fallback_exc
+                raise RuntimeError("The AI provider rejected both structured and fallback JSON requests.") from fallback_exc
+        elif exc.code in (401,403):
             raise RuntimeError("The Gemini AI service credentials or model permissions need attention.") from exc
-        raise RuntimeError("The AI news-analysis service could not complete the assessment (provider HTTP {}).".format(exc.code)) from exc
+        else:
+            raise RuntimeError("The AI news-analysis service could not complete the assessment (provider HTTP {}).".format(exc.code)) from exc
     except (urllib.error.URLError,TimeoutError,json.JSONDecodeError) as exc:
         raise RuntimeError("The AI news-analysis service is temporarily unavailable.") from exc
     try:
