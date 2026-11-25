@@ -81,12 +81,7 @@ def notify_user_ids(user_ids, title, body, data=None):
         token = str(row.get("device_token", "")).strip()
         if not token:
             continue
-        message = messaging.Message(
-            token=token,
-            notification=messaging.Notification(title=str(title)[:100], body=str(body)[:240]),
-            data=extra_data,
-            android=messaging.AndroidConfig(priority="high"),
-        )
+        # Android notification messages are displayed by the OS while the app is\n        # backgrounded, so set the channel on the FCM payload itself.\n        # Keep Live Market on its dedicated channel; all other push messages\n        # use the new high-importance general channel.\n        notification_type = extra_data.get("type", "")\n        channel_id = (\n            "lm_live_market_alerts"\n            if notification_type == "live_market_alert"\n            else "lm_analyzer_updates_v2"\n        )\n        message = messaging.Message(\n            token=token,\n            notification=messaging.Notification(title=str(title)[:100], body=str(body)[:240]),\n            data=extra_data,\n            android=messaging.AndroidConfig(\n                priority="high",\n                notification=messaging.AndroidNotification(channel_id=channel_id),\n            ),\n        )
         try:
             messaging.send(message)
             sent += 1
