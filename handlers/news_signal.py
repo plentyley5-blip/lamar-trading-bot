@@ -2,6 +2,8 @@
 import json
 import math
 import os
+import random
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -239,13 +241,32 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
         "geopolitical_relevance","geopolitical_direction","geopolitical_confidence","geopolitical_summary","geopolitical_channel","geopolitical_priced_in","reasons","invalidation"]}
     request_payload={"contents":[{"role":"user","parts":[{"text":prompt+"\n\nINPUT:\n"+json.dumps(data,separators=(",",":"))}]}],
       "generationConfig":{"responseMimeType":"application/json","responseJsonSchema":schema,"maxOutputTokens":1300,"thinkingConfig":{"thinkingLevel":"low"}}}
-    def send_gemini(url, payload):
+    def post_with_retry(url, payload, model_label):
         body=json.dumps(payload,separators=(",",":")).encode()
         req=urllib.request.Request(url,data=body,
             headers={"x-goog-api-key":key,"Content-Type":"application/json"},method="POST")
+        for attempt in range(2):
+            try:
+                with urllib.request.urlopen(req,timeout=25) as response:
+                    return json.loads(response.read().decode())
+            except urllib.error.HTTPError as exc:
+                if exc.code != 503 or attempt == 1:
+                    raise
+                # Google documents 503 as temporary capacity overload. Honour a
+                # short Retry-After when present; otherwise use bounded backoff.
+                retry_after=(exc.headers.get("Retry-After") if exc.headers else None)
+                try:
+                    delay=max(0.5,min(float(retry_after),4.0)) if retry_after else 1.5
+                except (TypeError,ValueError):
+                    delay=1.5
+                delay=min(4.5,delay+random.uniform(0.1,0.4))
+                print("Gemini model {} returned HTTP 503; retrying once after {:.1f}s".format(model_label,delay))
+                time.sleep(delay)
+        raise RuntimeError("Gemini request retry loop ended unexpectedly.")
+
+    def send_gemini(url, payload, model_label):
         try:
-            with urllib.request.urlopen(req,timeout=25) as response:
-                return json.loads(response.read().decode())
+            return post_with_retry(url,payload,model_label)
         except urllib.error.HTTPError as exc:
             if exc.code != 400:
                 raise
@@ -253,22 +274,10 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
             # remains authoritative for every field and trading safeguard.
             fallback_payload=json.loads(json.dumps(payload))
             fallback_payload["generationConfig"].pop("responseJsonSchema",None)
-            fallback_body=json.dumps(fallback_payload,separators=(",",":")).encode()
-            fallback_req=urllib.request.Request(url,data=fallback_body,
-                headers={"x-goog-api-key":key,"Content-Type":"application/json"},method="POST")
-            try:
-                with urllib.request.urlopen(fallback_req,timeout=25) as response:
-                    return json.loads(response.read().decode())
-            except urllib.error.HTTPError as fallback_exc:
-                try:
-                    detail=fallback_exc.read().decode("utf-8",errors="replace")[:500]
-                except Exception:
-                    detail=""
-                print("Gemini JSON-mode fallback HTTP {}: {}".format(fallback_exc.code,detail))
-                raise
+            return post_with_retry(url,fallback_payload,model_label+" JSON-mode")
 
     try:
-        raw=send_gemini(GEMINI_URL,request_payload)
+        raw=send_gemini(GEMINI_URL,request_payload,MODEL)
     except urllib.error.HTTPError as exc:
         try:
             detail=exc.read().decode("utf-8",errors="replace")[:700]
@@ -276,13 +285,13 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
             detail=""
         print("Gemini primary news-analysis HTTP {}: {}".format(exc.code,detail))
         if exc.code == 503:
-            # Gemini 3.5 Flash-Lite can be capacity-constrained. Retry once on
-            # Google's current general-purpose Flash model; never change the
-            # prompt, source evidence, confluence rules or server validation.
+            # A separate model is attempted only after the primary model has
+            # had one bounded retry. Keep the prompt, evidence and validation
+            # unchanged; model switching must never bypass risk safeguards.
             fallback_model="gemini-3.8-flash"
             fallback_url="https://generativelanguage.googleapis.com/v1beta/models/"+fallback_model+":generateContent"
             try:
-                raw=send_gemini(fallback_url,request_payload)
+                raw=send_gemini(fallback_url,request_payload,fallback_model)
                 print("Gemini news-analysis completed using capacity fallback model "+fallback_model)
             except urllib.error.HTTPError as fallback_exc:
                 try:
@@ -294,11 +303,15 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
                     raise RuntimeError("The AI news-analysis rate limit has been reached. Retry shortly.") from fallback_exc
                 if fallback_exc.code in (401,403):
                     raise RuntimeError("The Gemini AI service credentials or model permissions need attention.") from fallback_exc
-                raise RuntimeError("Gemini's primary and fallback models are temporarily unavailable (HTTP {}).".format(fallback_exc.code)) from fallback_exc
+                if fallback_exc.code==503:
+                    raise RuntimeError("Google Gemini is temporarily overloaded on both analysis models. No news assessment was generated; retry shortly.") from fallback_exc
+                raise RuntimeError("Gemini's primary and fallback models could not complete the assessment (HTTP {}).".format(fallback_exc.code)) from fallback_exc
         elif exc.code==429:
             raise RuntimeError("The AI news-analysis rate limit has been reached. Retry shortly.") from exc
         elif exc.code in (401,403):
             raise RuntimeError("The Gemini AI service credentials or model permissions need attention.") from exc
+        elif exc.code==503:
+            raise RuntimeError("Google Gemini is temporarily overloaded. No news assessment was generated; retry shortly.") from exc
         else:
             raise RuntimeError("The AI news-analysis service could not complete the assessment (provider HTTP {}).".format(exc.code)) from exc
     except (urllib.error.URLError,TimeoutError,json.JSONDecodeError) as exc:
