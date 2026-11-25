@@ -17,6 +17,7 @@ from handlers.news import fetch as fetch_calendar
 from handlers.news_signal import (
     RELATED, TZ, parse_event_dt, validate_candles, ai_assess, trade_levels, fmt
 )
+from handlers.geopolitical_context import get_geopolitical_context
 from handlers.market_candles import _candles
 from service_cache import claim_provider_credits
 
@@ -129,7 +130,8 @@ def _assess(job):
     rows, age = validate_candles(
         candles.get("candles"), candles.get("updated_at"), False
     )
-    assessment = ai_assess(event, symbol, stage, rows)
+    geopolitical_context = get_geopolitical_context(event.get("currency"))
+    assessment = ai_assess(event, symbol, stage, rows, geopolitical_context)
     result = {
         "event_key": job.get("event_key"), "instrument": symbol,
         "event_title": event.get("title", ""),
@@ -234,6 +236,9 @@ def _process_one():
                 + " | SL " + result["stop_loss"] + " | TP1 " + result["take_profit_1"]
                 + " | TP2 " + result["take_profit_2"]
             )
+            geo = result.get("geopolitical_intelligence") or {}
+            if geo.get("used_as_confirmation") and geo.get("summary"):
+                body += " | Geo context: " + str(geo["summary"])[:110]
             user_ids = _active_subscriber_ids()
             push_result = notify_user_ids(
                 user_ids,
@@ -248,7 +253,9 @@ def _process_one():
                       "signal": signal, "entry": str(result.get("entry", "")),
                       "stop_loss": str(result.get("stop_loss", "")),
                       "take_profit_1": str(result.get("take_profit_1", "")),
-                      "take_profit_2": str(result.get("take_profit_2", ""))},
+                      "take_profit_2": str(result.get("take_profit_2", "")),
+                      "geopolitical_used_as_confirmation": bool((result.get("geopolitical_intelligence") or {}).get("used_as_confirmation")),
+                      "geopolitical_direction": str((result.get("geopolitical_intelligence") or {}).get("instrument_direction", "NEUTRAL"))},
             ) if user_ids else {"sent": 0, "failed": 0}
             _patch_job(job["id"], {
                 "notification_sent": int(push_result.get("sent", 0)) > 0,
