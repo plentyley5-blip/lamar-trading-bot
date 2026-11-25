@@ -313,10 +313,18 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
         (signal=="BUY" and geo_direction=="SUPPORTS_BUY")
         or (signal=="SELL" and geo_direction=="SUPPORTS_SELL")
     )
-    geo_used=bool(
-        geo_is_current and geo_matches_signal
+    geo_material=(
+        geo_is_current
         and geo_relevance in ("DIRECT","MATERIAL")
-        and geo_confidence>=60 and signal in ("BUY","SELL")
+        and geo_confidence>=60
+    )
+    geo_opposes_signal=bool(
+        geo_material and signal in ("BUY","SELL")
+        and geo_direction in ("SUPPORTS_BUY","SUPPORTS_SELL")
+        and not geo_matches_signal
+    )
+    geo_used=bool(
+        geo_material and geo_matches_signal and signal in ("BUY","SELL")
     )
     # The model cannot self-certify this factor. The backend applies source,
     # freshness, corroboration and direction checks before adding it.
@@ -357,8 +365,12 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
       "event_bias":bias_text,
       "confirmed_factors":confirmed,
       "conflicting_factors":conflicting,
-      "severe_conflict":bool(result.get("severe_conflict",False)),
-      "severe_conflict_reason":str(result.get("severe_conflict_reason","")).strip()[:200],
+      "severe_conflict":bool(result.get("severe_conflict",False)) or geo_opposes_signal,
+      "severe_conflict_reason":(
+          "Fresh, corroborated geopolitical context materially supports the opposite instrument direction."
+          if geo_opposes_signal else
+          str(result.get("severe_conflict_reason","")).strip()[:200]
+      ),
       "geopolitical_intelligence":geo_display,
       "reasons":reasons[:4],
       "invalidation":invalidation_text}
