@@ -84,7 +84,10 @@ def _enqueue_upcoming_events():
                     "expires_at": (event_dt + timedelta(hours=POST_WINDOW_HOURS)).isoformat(),
                 })
     if jobs:
-        _request("POST", "/rest/v1/lm_news_signal_jobs",
+        conflict_query = urllib.parse.urlencode({
+            "on_conflict": "event_key,instrument,stage",
+        })
+        _request("POST", "/rest/v1/lm_news_signal_jobs?" + conflict_query,
                  jobs, prefer="resolution=ignore-duplicates,return=minimal")
     return len(jobs)
 
