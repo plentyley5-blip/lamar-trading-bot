@@ -274,7 +274,7 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
             fallback_payload["generationConfig"].pop("responseJsonSchema",None)
             return post_gemini(url,fallback_payload,model_label+" JSON-mode",retries=0)
 
-    def request_openai(model):
+    def request_openai(model, timeout=13):
         openai_key=os.environ.get("OPENAI_API_KEY","").strip()
         if not openai_key:
             raise RuntimeError("OPENAI_API_KEY is not configured for the independent AI backup.")
@@ -309,7 +309,7 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req,timeout=16) as response:
+            with urllib.request.urlopen(req,timeout=timeout) as response:
                 return json.loads(response.read().decode())
         except urllib.error.HTTPError as exc:
             try:
@@ -341,9 +341,9 @@ def ai_assess(event,symbol,stage,rows,geopolitical_context=None):
                 print("Gemini alternate model failed ({}); switching to OpenAI backup.".format(fallback_code))
         if raw is None:
             openai_errors=[]
-            for openai_model in ("gpt-6-luna","gpt-5-mini"):
+            for openai_model,openai_timeout in (("gpt-6-luna",13),("gpt-5-mini",9)):
                 try:
-                    raw=request_openai(openai_model)
+                    raw=request_openai(openai_model,timeout=openai_timeout)
                     analysis_provider="openai:"+openai_model
                     print("News assessment completed using independent provider "+analysis_provider)
                     break
