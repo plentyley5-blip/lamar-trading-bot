@@ -134,7 +134,7 @@ def _read_device(handler):
         "GET",
         _query(
             "lm_mt5_devices",
-            select="id,user_id,account_login,broker_server,account_mode,auto_trade_enabled,risk_per_trade,max_daily_loss_percent,max_open_positions,max_trades_per_day,max_lot,min_confidence,max_signal_age_minutes,max_entry_deviation_points,max_spread_points,revoked_at",
+            select="id,user_id,account_login,broker_server,account_mode,auto_trade_enabled,risk_per_trade,max_daily_loss_percent,max_open_positions,max_trades_per_day,max_lot,min_confidence,max_signal_age_minutes,max_entry_deviation_points,max_spread_points,revoked_at,last_seen_at",
             token_hash="eq." + token_hash,
             revoked_at="is.null",
             limit="1",
@@ -143,12 +143,24 @@ def _read_device(handler):
     if not isinstance(rows, list) or not rows:
         raise RequestError("MT5 link is invalid or has been revoked. Link the account again.")
     device = rows[0]
-    _db_request(
-        "PATCH",
-        _query("lm_mt5_devices", id="eq." + str(device["id"])),
-        {"last_seen_at": _now_iso()},
-        prefer="return=minimal",
-    )
+    # Avoid writing the device row on every terminal poll; one-minute heartbeat is enough.
+    last_seen = device.get("last_seen_at")
+    should_touch = True
+    if last_seen:
+        try:
+            last_seen_dt = datetime.fromisoformat(str(last_seen).replace("Z", "+00:00"))
+            if last_seen_dt.tzinfo is None:
+                last_seen_dt = last_seen_dt.replace(tzinfo=timezone.utc)
+            should_touch = (datetime.now(timezone.utc) - last_seen_dt).total_seconds() >= 60
+        except (TypeError, ValueError):
+            should_touch = True
+    if should_touch:
+        _db_request(
+            "PATCH",
+            _query("lm_mt5_devices", id="eq." + str(device["id"])),
+            {"last_seen_at": _now_iso()},
+            prefer="return=minimal",
+        )
     return device
 
 
@@ -569,6 +581,28 @@ def _record_deal(device, body):
         deal_time = datetime.fromtimestamp(int(body.get("deal_time_epoch", 0)), timezone.utc)
     except (TypeError, ValueError, OverflowError, OSError) as exc:
         raise RequestError("Invalid MT5 deal time.") from exc
+    symbol = str(body.get("symbol", "")).strip()[:32]
+    if not symbol:
+        raise RequestError("MT5 deal symbol is missing.")
+    # A client-supplied magic number alone is not proof; require a recorded
+    # executed signal position on this linked device before storing any deal.
+    execution_rows = _db_request(
+        "GET",
+        _query(
+            "lm_mt5_execution_records",
+            select="id,signal_id,symbol,status",
+            device_id="eq." + str(device["id"]),
+            position_id="eq." + str(position_id),
+            status="eq.executed",
+            limit="1",
+        ),
+    )
+    if not isinstance(execution_rows, list) or not execution_rows:
+        raise RequestError("This MT5 position is not linked to a verified LM Analyzer execution.")
+    stored_symbol = re.sub(r"[^A-Z0-9]", "", str(execution_rows[0].get("symbol", "")).upper())
+    actual_symbol = re.sub(r"[^A-Z0-9]", "", symbol.upper())
+    if not stored_symbol or not actual_symbol.startswith(stored_symbol):
+        raise RequestError("MT5 deal symbol does not match the linked LM Analyzer signal.")
     payload = {
         "device_id": str(device["id"]),
         "user_id": str(device["user_id"]),
@@ -576,7 +610,7 @@ def _record_deal(device, body):
         "broker_server": str(device["broker_server"]),
         "deal_ticket": deal_ticket,
         "position_id": position_id,
-        "symbol": str(body.get("symbol", ""))[:32],
+        "symbol": symbol,
         "deal_entry": str(body.get("deal_entry", ""))[:16],
         "deal_type": str(body.get("deal_type", ""))[:16],
         "volume": _number(body.get("volume", 0), "volume", 0, 1000),
