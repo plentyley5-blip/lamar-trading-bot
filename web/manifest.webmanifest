@@ -1,0 +1,9 @@
+{
+  "name": "LM Analyzer",
+  "short_name": "LM Analyzer",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#030B18",
+  "theme_color": "#030B18",
+  "description": "LM Analyzer by LAMAR Trading Bot"
+}
