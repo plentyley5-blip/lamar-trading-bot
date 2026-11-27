@@ -32,7 +32,7 @@ WAITING, LATE ENTRY, INVALID, NO_SETUP, LIMIT, STOP, WAIT, NO TRADE, ambiguous p
 
 The EA uses the broker's live symbol contract specification through OrderCalcProfit to estimate account-currency loss at the stop. It rounds volume down, applies an additional 15 percent size buffer, and rejects a trade if broker calculations, margin, symbol metadata, stop distance, spread, or price deviation cannot be checked. It also enforces user-configured limits for risk per trade, daily loss, open positions, daily entries, maximum lot, signal confidence, signal age, spread, and entry deviation.
 
-Each account is restricted to one LM Analyzer position per symbol at a time. The EA does not modify or close positions that do not carry its own magic number.
+Each account is restricted to one LM Analyzer position per symbol at a time. The EA does not modify or close positions that do not carry its own magic number. Deal uploads are accepted only when the position ID is already recorded as an executed LM Analyzer signal on that exact linked device. A failed deal-history upload is retried rather than skipped. The default terminal polling interval is 15 seconds.
 
 Risk controls cannot prevent losses from gaps, slippage, execution delays, broker outages, terminal/VPS outages, or other market events. A stop-loss is not a guaranteed maximum loss.
 
@@ -48,9 +48,11 @@ The endpoint reuses the existing SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABA
 
 Leave LM_MT5_LIVE_TRADING_ENABLED unset or false. The endpoint defaults to live trading disabled.
 
-### 3. Android link-code integration
+### 3. Android link-code screen
 
-The current repository does not contain the Android application source. Therefore this change does not overwrite or synthesize MainActivity.kt. The existing Android app needs an additive button or section that calls:
+A separate updated MainActivity.kt was prepared from the latest saved Android source snapshot available in this workspace (dated 2026-11-25). It adds an LM AUTO TRADER entry under Tools, a one-time code generator/copy screen, setup instructions and a revoke-all control while retaining the rest of that saved source. The full Android project is not in this backend repository, and this snapshot has not been verified against any newer local Android changes. Use the provided file only after confirming it is the same baseline as the MainActivity.kt currently in Android Studio; otherwise merge the small additive route, ToolsHub callback and composable into the newer file.
+
+The link-code screen calls:
 
 POST https://lamar-trading-bot.vercel.app/api/mt5_trader
 
@@ -60,7 +62,7 @@ Authorization: Bearer <current Supabase access token>
 JSON body:
 {"action":"create_link_code"}
 
-Show the returned one-time link_code in the signed-in user's app with a copy action and the 15-minute expiry. Never expose the Supabase service-role key to Android. The endpoint is ready for this app integration, but the Android UI is not included in this branch.
+It displays the returned one-time link_code with a copy action and 15-minute expiry. It also calls action=revoke_all. Never expose the Supabase service-role key to Android.
 
 ### 4. MetaTrader 5 installation
 
@@ -87,6 +89,6 @@ The server marks linked devices revoked and turns their server-side auto-trade f
 ## Not included yet
 
 - Automatic performance-fee settlement or broker-side commission splitting. MT5 deal history is captured for accounting, but an Expert Advisor cannot independently withdraw a user's funds. A broker/payment partner and compliant fee authorization are separate requirements.
-- The Android link-code screen. The Android source is not present in this repository.
+- The Android MainActivity screen is supplied as a separate file based on the saved 2026-11-25 snapshot; the full Android project/Gradle build is not in this repository, and the snapshot must be reconciled with any newer local MainActivity before replacing it.
 - MetaEditor compilation and a live broker demo. The Python endpoint unit tests are included; actual MT5 execution must be validated in MetaTrader 5 Strategy Tester/demo environment before wider testing.
 - Live-account execution. It remains blocked server-side by default.
