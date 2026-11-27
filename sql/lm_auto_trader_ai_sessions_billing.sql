@@ -37,6 +37,19 @@ create unique index if not exists lm_auto_trader_subscriptions_purchase_hash_uid
     on public.lm_auto_trader_subscriptions (purchase_token_hash)
     where purchase_token_hash is not null;
 
+
+create table if not exists public.lm_mt5_market_data (
+    device_id uuid primary key references public.lm_mt5_devices(id) on delete cascade,
+    user_id uuid not null references auth.users(id) on delete cascade,
+    account_login bigint not null,
+    broker_server text not null,
+    market_data jsonb not null check (jsonb_typeof(market_data) = 'object'),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists lm_mt5_market_data_user_updated_idx
+    on public.lm_mt5_market_data (user_id, updated_at desc);
+
 create table if not exists public.lm_mt5_trading_sessions (
     id uuid primary key default gen_random_uuid(),
     device_id uuid not null unique references public.lm_mt5_devices(id) on delete cascade,
@@ -130,21 +143,26 @@ on conflict (tier_key) do update set
     max_lot = excluded.max_lot,
     risk_per_trade_percent = excluded.risk_per_trade_percent;
 
+alter table public.lm_mt5_market_data enable row level security;
 alter table public.lm_mt5_trading_sessions enable row level security;
 alter table public.lm_mt5_ai_decisions enable row level security;
 alter table public.lm_mt5_daily_risk_state enable row level security;
 alter table public.lm_auto_trader_risk_tiers enable row level security;
 
+revoke all on public.lm_mt5_market_data from anon, authenticated, public;
 revoke all on public.lm_mt5_trading_sessions from anon, authenticated, public;
 revoke all on public.lm_mt5_ai_decisions from anon, authenticated, public;
 revoke all on public.lm_mt5_daily_risk_state from anon, authenticated, public;
 revoke all on public.lm_auto_trader_risk_tiers from anon, authenticated, public;
 
+grant select, insert, update, delete on public.lm_mt5_market_data to service_role;
 grant select, insert, update, delete on public.lm_mt5_trading_sessions to service_role;
 grant select, insert, update, delete on public.lm_mt5_ai_decisions to service_role;
 grant select, insert, update, delete on public.lm_mt5_daily_risk_state to service_role;
 grant select, insert, update, delete on public.lm_auto_trader_risk_tiers to service_role;
 
+comment on table public.lm_mt5_market_data is
+    'Fresh per-account broker M1/M5 OHLC bars uploaded by the linked MT5 terminal; the AI decision engine reads only this source.';
 comment on table public.lm_mt5_trading_sessions is
     'One backend-authoritative Start/Stop session per linked MT5 device. Linking never starts trading.';
 comment on table public.lm_mt5_ai_decisions is
