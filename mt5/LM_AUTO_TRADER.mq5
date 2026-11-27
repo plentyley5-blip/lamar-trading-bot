@@ -151,7 +151,7 @@ void SaveState()
    int handle = FileOpen(g_state_file, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);
    if(handle == INVALID_HANDLE)
    {
-      Print("LM AUTO TRADER: Could not save local link state. Error=", GetLastError());
+      Print("LM AUTO TRADER: Could not save local account state. Error=", GetLastError());
       return;
    }
    FileWriteString(handle, g_device_token + "\r\n");
