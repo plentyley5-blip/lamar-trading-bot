@@ -743,6 +743,11 @@ int OnInit()
    g_trade.SetDeviationInPoints(InpMaximumSlippagePoints);
    LoadState();
    if(g_device_token == "" && !LinkTerminal()) return INIT_FAILED;
+   if(InpProfitTargetUSD > 0.0 && AccountInfoString(ACCOUNT_CURRENCY) != "USD")
+   {
+      Print("LM AUTO TRADER: The persistent $50 profit target currently requires a USD-denominated account. Trading startup blocked.");
+      return INIT_FAILED;
+   }
    if(InpUseAutonomousScalper && !InitScalperIndicators())
       Print("LM AUTO TRADER: No scalping symbols are ready. Check broker symbols and M1/M5 history.");
    if(!ConfigureServer()) Print("LM AUTO TRADER: Risk settings could not be synchronized; no trades will be opened until sync succeeds.");
@@ -786,6 +791,7 @@ void OnTimer()
    if(profit_locked) CloseAllOurPositions("persistent profit target");
    else ScanScalpingSymbols();
    if(InpUseLMAnalyzerSignals) PollServer();
+   SyncOpenScalpTradeRecords();
    SyncAccountSnapshot();
    SyncRecentDeals();
 }
