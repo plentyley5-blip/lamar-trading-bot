@@ -69,3 +69,25 @@ This branch is the telemetry and schema foundation. It does **not** yet provisio
 ## Android source boundary
 
 The current Android `MainActivity.kt` is maintained separately from this backend repository. The saved Android source must be updated as a complete, additive replacement after the secure VPS provisioning contract and subscription prices are finalized. Do not replace the existing app with a reduced demo screen.
+## Autonomous scalping strategy port
+
+The EA now includes `mt5/LM_SCALPER_ENGINE.mqh`, which ports the previously agreed LM SCALPER v2.00 rules:
+
+- M1 EMA 9/21 fresh closed-bar crossover.
+- M5 EMA 9/21 directional confirmation.
+- M1 RSI(14): BUY at or above 52; SELL at or below 48.
+- M1 ATR(14): stop at 1.5 ATR; target at 1.5R.
+- Risk cap 0.50% per trade, with the existing volume/margin safety buffer and 0.10 lot cap.
+- Maximum two LM AUTO TRADER positions globally and one position per symbol.
+- FX spread ceiling 30 points; XAUUSD ceiling 100 points.
+- High-impact MT5 economic-calendar event block within 20 minutes before/after the event. Calendar times use broker trade-server time; if calendar lookup fails, new entries fail closed.
+- Break-even at 1R plus two points; ATR(14) trailing starts at 1.2R.
+- Maximum holding time 180 minutes.
+- 2% daily loss stop and the existing maximum-three-entries-per-day safety cap.
+- Persistent $50 equity target above the terminal's cycle baseline. On target, LM AUTO TRADER closes only positions with its own magic number and locks that cycle. Increment `InpProfitTargetCycle` to start a new cycle.
+
+Autonomous scalping is enabled as the EA strategy mode, but `InpEnableAutoTrading` remains false by default. The legacy LM Analyzer signal executor is retained behind `InpUseLMAnalyzerSignals=false` so it does not compete with the scalper.
+
+## Strategy verification still required
+
+The MQL5 source has not yet been compiled in MetaEditor in this workflow. Compile the EA and included `.mqh` on the target MT5 build, then test on demo across all eight symbols, including spread/news blocks, order rejections, stop modifications, max holding exit, daily loss stop, and the persistent profit lock. The $50 target is denominated in account currency in this initial EA implementation; only USD-denominated accounts should use the literal $50 setting until currency conversion is implemented.
