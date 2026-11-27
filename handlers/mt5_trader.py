@@ -218,12 +218,18 @@ def _eligible_signal(result, instrument, min_confidence):
         return None
     if str(result.get("order_type", "")).strip().upper() != "MARKET":
         return None
-    if str(result.get("chart_instrument_status", "")).strip().upper() != "MATCH":
-        return None
+    # Instrument identity is the authoritative fallback when older completed
+    # analysis records predate chart_instrument_status. Never override an
+    # explicit MISMATCH (or any other explicit non-MATCH value).
+    chart_status = str(result.get("chart_instrument_status", "")).strip().upper()
     result_instrument = re.sub(r"[^A-Z0-9]", "", str(result.get("instrument", "")).upper())
     row_instrument = re.sub(r"[^A-Z0-9]", "", str(instrument or "").upper())
-    if not row_instrument or result_instrument != row_instrument:
+    if not row_instrument or not result_instrument or result_instrument != row_instrument:
         return None
+    if chart_status and chart_status != "MATCH":
+        return None
+    # Missing status is accepted only after exact normalized instrument equality
+    # above, preserving the mismatch guard for legacy analysis payloads.
     try:
         confidence_value = float(result.get("confidence", 0))
         if not confidence_value.is_integer():
