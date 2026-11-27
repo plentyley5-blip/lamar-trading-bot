@@ -2,18 +2,6 @@
 -- These tables are server-managed only. The Android app and MT5 EA must never
 -- receive the Supabase service-role key.
 
-create table if not exists public.lm_mt5_link_codes (
-    id uuid primary key default gen_random_uuid(),
-    user_id uuid not null references auth.users(id) on delete cascade,
-    code_hash text not null unique,
-    expires_at timestamptz not null,
-    consumed_at timestamptz,
-    created_at timestamptz not null default now()
-);
-
-create index if not exists lm_mt5_link_codes_user_created_idx
-    on public.lm_mt5_link_codes (user_id, created_at desc);
-
 create table if not exists public.lm_mt5_devices (
     id uuid primary key default gen_random_uuid(),
     user_id uuid not null references auth.users(id) on delete cascade,
@@ -99,22 +87,18 @@ create index if not exists lm_mt5_trade_deals_user_time_idx
 create index if not exists lm_mt5_trade_deals_position_idx
     on public.lm_mt5_trade_deals (device_id, position_id, deal_time);
 
-alter table public.lm_mt5_link_codes enable row level security;
 alter table public.lm_mt5_devices enable row level security;
 alter table public.lm_mt5_execution_records enable row level security;
 alter table public.lm_mt5_trade_deals enable row level security;
 
-revoke all on table public.lm_mt5_link_codes from anon, authenticated, public;
 revoke all on table public.lm_mt5_devices from anon, authenticated, public;
 revoke all on table public.lm_mt5_execution_records from anon, authenticated, public;
 revoke all on table public.lm_mt5_trade_deals from anon, authenticated, public;
 
-grant select, insert, update, delete on table public.lm_mt5_link_codes to service_role;
 grant select, insert, update, delete on table public.lm_mt5_devices to service_role;
 grant select, insert, update, delete on table public.lm_mt5_execution_records to service_role;
 grant select, insert, update, delete on table public.lm_mt5_trade_deals to service_role;
 
-comment on table public.lm_mt5_link_codes is 'One-time, hashed linking codes for user-authorized MT5 terminals.';
 comment on table public.lm_mt5_devices is 'MT5 terminal links and bounded user-selected auto-trading risk settings.';
 comment on table public.lm_mt5_execution_records is 'Idempotent claims and execution outcomes for LM Analyzer signal jobs.';
 comment on table public.lm_mt5_trade_deals is 'Broker-reported MT5 deal ledger for verified performance accounting; not a payment or withdrawal ledger.';
