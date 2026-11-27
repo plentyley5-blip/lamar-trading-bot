@@ -12,7 +12,6 @@
 #include <Trade/Trade.mqh>
 
 input string InpApiBase = "https://lamar-trading-bot.vercel.app/api/mt5_trader";
-input string InpOneTimeLinkCode = "";
 input bool   InpEnableAutoTrading = false;
 input bool   InpAllowLiveTrading = false;
 input double InpRiskPercent = 0.50;
@@ -159,36 +158,6 @@ void SaveState()
    FileWriteString(handle, IntegerToString((long)g_last_deal_time) + "\r\n");
    FileWriteString(handle, IntegerToString((long)g_last_deal_ticket) + "\r\n");
    FileClose(handle);
-}
-
-bool LinkTerminal()
-{
-   if(StringLen(InpOneTimeLinkCode) < 40)
-   {
-      Print("LM AUTO TRADER: No valid one-time link code. Generate it from the signed-in LM Analyzer account first.");
-      return false;
-   }
-   string body = StringFormat(
-      "{\"action\":\"link\",\"link_code\":\"%s\",\"account_login\":%I64d,\"broker_server\":\"%s\",\"account_mode\":\"%s\"}",
-      JsonEscape(InpOneTimeLinkCode), AccountInfoInteger(ACCOUNT_LOGIN),
-      JsonEscape(AccountInfoString(ACCOUNT_SERVER)), AccountModeText());
-   string response;
-   int status = HttpRequest("POST", "", body, "", response);
-   if(status != 200)
-   {
-      Print("LM AUTO TRADER: Account linking failed. HTTP ", status, " ", response);
-      return false;
-   }
-   g_device_token = GetJsonString(response, "device_token");
-   if(StringLen(g_device_token) < 40)
-   {
-      Print("LM AUTO TRADER: The server did not return a valid device token.");
-      g_device_token = "";
-      return false;
-   }
-   SaveState();
-   Print("LM AUTO TRADER: MT5 account linked. Auto trading remains OFF until enabled in EA inputs.");
-   return true;
 }
 
 bool ConfigureServer()
@@ -742,7 +711,8 @@ int OnInit()
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(InpMaximumSlippagePoints);
    LoadState();
-   if(g_device_token == "" && !LinkTerminal()) return INIT_FAILED;
+   if(g_device_token == "")
+      Print("LM AUTO TRADER: Waiting for direct account authentication from LM Analyzer. Enter broker, server, login and MT5 password in the app; the connector will provision this terminal's token.");
    if(InpProfitTargetUSD > 0.0 && AccountInfoString(ACCOUNT_CURRENCY) != "USD")
    {
       Print("LM AUTO TRADER: The persistent $50 profit target currently requires a USD-denominated account. Trading startup blocked.");
@@ -750,12 +720,16 @@ int OnInit()
    }
    if(InpUseAutonomousScalper && !InitScalperIndicators())
       Print("LM AUTO TRADER: No scalping symbols are ready. Check broker symbols and M1/M5 history.");
-   if(!ConfigureServer()) Print("LM AUTO TRADER: Risk settings could not be synchronized; no trades will be opened until sync succeeds.");
+   if(g_device_token != "" && !ConfigureServer())
+      Print("LM AUTO TRADER: Risk settings could not be synchronized; no trades will be opened until sync succeeds.");
    ProfitTargetIsLocked();
    EventSetTimer(InpPollIntervalSeconds);
    Print("LM AUTO TRADER initialized. Auto trading: ", (InpEnableAutoTrading ? "ON" : "OFF"),
-         ". Account type: ", AccountModeText(), ". Live permission: server-gated and OFF by default.");
-   if(!InpEnableAutoTrading) Print("LM AUTO TRADER is linked but idle. Set InpEnableAutoTrading=true to enable demo execution.");
+         ". Account type: ", AccountModeText(), ". Waiting for app-authorized account token if not yet provisioned.");
+   if(g_device_token == "")
+      Print("LM AUTO TRADER is waiting for the password-authenticated account connector. No trades will be opened.");
+   else if(!InpEnableAutoTrading)
+      Print("LM AUTO TRADER account is provisioned but idle. Start trading from the app.");
    return INIT_SUCCEEDED;
 }
 
@@ -784,7 +758,20 @@ void OnDeinit(const int reason)
 
 void OnTimer()
 {
-   if(g_device_token == "") return;
+   if(g_device_token == "")
+   {
+      // The Windows connector writes the app-issued token to this account's
+      // terminal Common\\Files state file after MT5 password authentication.
+      LoadState();
+      if(g_device_token == "") return;
+      if(!ConfigureServer())
+      {
+         g_device_token = "";
+         Print("LM AUTO TRADER: Token was found but backend configuration failed. Waiting for connector retry.");
+         return;
+      }
+      Print("LM AUTO TRADER: Direct MT5 account authentication completed. Backend terminal sync is active.");
+   }
    if(TimeCurrent() - g_last_configure > 60) ConfigureServer();
    ManageOpenScalpPositions();
    bool profit_locked = ProfitTargetIsLocked();
