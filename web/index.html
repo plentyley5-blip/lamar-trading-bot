@@ -169,6 +169,18 @@
 .auto-bot-hero{overflow:hidden;position:relative;background:radial-gradient(ellipse at 50% 45%,rgba(22,119,255,.18),rgba(5,15,29,.3) 58%,transparent 78%)}.auto-bot-orb{width:156px;height:178px;margin:0 auto 7px;display:grid;place-items:center;position:relative}.auto-bot-orb:before{content:"";position:absolute;inset:13px 7px;border-radius:48%;background:radial-gradient(ellipse,rgba(23,120,255,.18),transparent 67%);filter:blur(9px);animation:botAura 3.2s ease-in-out infinite}.auto-bot-orb img{position:relative;z-index:1;width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 12px 18px rgba(0,0,0,.45));animation:botHover 4s ease-in-out infinite}@keyframes botHover{0%,100%{transform:translateY(1px) scale(1)}50%{transform:translateY(-4px) scale(1.012)}}@keyframes botAura{0%,100%{opacity:.6;transform:scale(.96)}50%{opacity:1;transform:scale(1.04)}}
 .auto-status-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.auto-code-card{padding:14px;border-radius:14px;background:rgba(3,11,24,.48);border:1px solid rgba(47,140,255,.24);margin-top:12px}.auto-code-value{font-size:16px;font-weight:950;letter-spacing:1.1px;color:#fff;word-break:break-all}.auto-risk-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.auto-risk-field{display:flex;flex-direction:column;gap:5px;min-width:0}.auto-risk-field label{font-size:9px;color:var(--muted);font-weight:850}.auto-risk-field input,.auto-risk-field select{width:100%;height:42px;padding:9px 10px;border-radius:10px;border:1px solid rgba(110,170,225,.2);background:rgba(3,11,24,.5);color:#fff}.auto-list-item{padding:11px 0;border-bottom:1px solid rgba(255,255,255,.07)}.auto-list-item:last-child{border-bottom:0}
 @media(max-width:540px){.iphone-preview-row{min-height:246px;gap:8px}.iphone-device{width:126px;height:234px;flex-basis:126px;border-radius:27px}.iphone-screen{border-radius:22px}.iphone-preview-copy h3{font-size:15px}.chat-box{height:38vh;min-height:210px}.auto-bot-orb{width:146px;height:166px}.auto-risk-grid{grid-template-columns:1fr 1fr}}
+
+/* Community feed sizing mirrors Android CommunityScreen: narrow left-aligned member bubbles. */
+.community-member-section{display:flex;flex-direction:column;align-items:stretch}
+.community-post-card{width:min(78%,560px);max-width:560px;margin:0 auto 10px 0;padding:13px;border-radius:6px 17px 17px 17px}
+.community-post-image{width:100%;max-height:260px;object-fit:contain}
+.community-post-actions{gap:5px}
+.community-post-actions .btn{padding:8px 9px;font-size:9px}
+@media(max-width:540px){
+ .community-post-card{width:78%;max-width:none;padding:13px}
+ .community-post-image{max-height:260px}
+}
+
 </style>
 </head>
 <body><div id="app"><div class="loading"><span class="spinner"></span>Loading LM Analyzer…</div></div>
