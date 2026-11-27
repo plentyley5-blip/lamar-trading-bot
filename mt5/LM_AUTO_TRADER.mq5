@@ -15,17 +15,26 @@ input string InpApiBase = "https://lamar-trading-bot.vercel.app/api/mt5_trader";
 input string InpOneTimeLinkCode = "";
 input bool   InpEnableAutoTrading = false;
 input bool   InpAllowLiveTrading = false;
-input double InpRiskPercent = 0.25;
+input double InpRiskPercent = 0.50;
 input double InpMaxDailyLossPercent = 2.0;
-input int    InpMaxOpenPositions = 1;
+input int    InpMaxOpenPositions = 2;
 input int    InpMaxTradesPerDay = 3;
 input double InpMaximumLot = 0.10;
 input int    InpMinimumConfidence = 75;
 input int    InpMaximumSignalAgeMinutes = 10;
 input int    InpMaxEntryDeviationPoints = 50;
-input int    InpMaxSpreadPoints = 50;
+input int    InpMaxSpreadPoints = 100;
 input int    InpMaximumSlippagePoints = 20;
 input int    InpPollIntervalSeconds = 15;
+input bool   InpUseAutonomousScalper = true;   // Original LM SCALPER M1/M5 strategy
+input bool   InpUseLMAnalyzerSignals = false;  // Optional legacy signal bridge
+input int    InpMaxSpreadFxPoints = 30;
+input int    InpMaxSpreadGoldPoints = 100;
+input int    InpMaxHoldingMinutes = 180;
+input int    InpNewsBlockMinutes = 20;
+input bool   InpUseEconomicCalendar = true;
+input double InpProfitTargetUSD = 50.0;
+input int    InpProfitTargetCycle = 1;
 input ulong  InpMagicNumber = 26112701;
 
 #define LM_API_TIMEOUT_MS 5000
@@ -597,6 +606,8 @@ void PollServer()
 }
 
 
+#include "LM_SCALPER_ENGINE.mqh"
+
 void SyncAccountSnapshot()
 {
    if(g_device_token == "") return;
@@ -726,7 +737,10 @@ int OnInit()
    g_trade.SetDeviationInPoints(InpMaximumSlippagePoints);
    LoadState();
    if(g_device_token == "" && !LinkTerminal()) return INIT_FAILED;
+   if(InpUseAutonomousScalper && !InitScalperIndicators())
+      Print("LM AUTO TRADER: No scalping symbols are ready. Check broker symbols and M1/M5 history.");
    if(!ConfigureServer()) Print("LM AUTO TRADER: Risk settings could not be synchronized; no trades will be opened until sync succeeds.");
+   ProfitTargetIsLocked();
    EventSetTimer(InpPollIntervalSeconds);
    Print("LM AUTO TRADER initialized. Auto trading: ", (InpEnableAutoTrading ? "ON" : "OFF"),
          ". Account type: ", AccountModeText(), ". Live permission: server-gated and OFF by default.");
@@ -737,6 +751,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   ReleaseScalperIndicators();
    if(g_device_token != "" && reason == REASON_REMOVE)
    {
       // Disable server execution only when the user deliberately removes the EA.
@@ -760,7 +775,11 @@ void OnTimer()
 {
    if(g_device_token == "") return;
    if(TimeCurrent() - g_last_configure > 60) ConfigureServer();
-   PollServer();
+   ManageOpenScalpPositions();
+   bool profit_locked = ProfitTargetIsLocked();
+   if(profit_locked) CloseAllOurPositions("persistent profit target");
+   else ScanScalpingSymbols();
+   if(InpUseLMAnalyzerSignals) PollServer();
    SyncAccountSnapshot();
    SyncRecentDeals();
 }
