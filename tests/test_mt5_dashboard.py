@@ -103,6 +103,9 @@ class MT5DashboardTelemetryTests(unittest.TestCase):
             [],
             [],
             [],
+            [],
+            [],
+            [],
         ]
         result = _dashboard_for_user({"id": "user-1"})
         self.assertTrue(result["connected"])
