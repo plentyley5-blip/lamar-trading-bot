@@ -6,26 +6,34 @@
 //| First validation must be performed on an MT5 DEMO account.       |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.00"
-#property description "Executes eligible LM Analyzer READY/MARKET signals with user-defined risk limits."
+#property version   "2.00"
+#property description "Autonomous LM SCALPER M1/M5 engine with MT5 telemetry and managed account bridge."
 
 #include <Trade/Trade.mqh>
 
 input string InpApiBase = "https://lamar-trading-bot.vercel.app/api/mt5_trader";
-input string InpOneTimeLinkCode = "";
 input bool   InpEnableAutoTrading = false;
 input bool   InpAllowLiveTrading = false;
-input double InpRiskPercent = 0.25;
+input double InpRiskPercent = 0.50;
 input double InpMaxDailyLossPercent = 2.0;
-input int    InpMaxOpenPositions = 1;
+input int    InpMaxOpenPositions = 2;
 input int    InpMaxTradesPerDay = 3;
 input double InpMaximumLot = 0.10;
 input int    InpMinimumConfidence = 75;
 input int    InpMaximumSignalAgeMinutes = 10;
 input int    InpMaxEntryDeviationPoints = 50;
-input int    InpMaxSpreadPoints = 50;
+input int    InpMaxSpreadPoints = 100;
 input int    InpMaximumSlippagePoints = 20;
 input int    InpPollIntervalSeconds = 15;
+input bool   InpUseAutonomousScalper = true;   // Original LM SCALPER M1/M5 strategy
+input bool   InpUseLMAnalyzerSignals = false;  // Optional legacy signal bridge
+input int    InpMaxSpreadFxPoints = 30;
+input int    InpMaxSpreadGoldPoints = 100;
+input int    InpMaxHoldingMinutes = 15;
+input int    InpNewsBlockMinutes = 20;
+input bool   InpUseEconomicCalendar = true;
+input double InpProfitTargetUSD = 50.0;
+input int    InpProfitTargetCycle = 1;
 input ulong  InpMagicNumber = 26112701;
 
 #define LM_API_TIMEOUT_MS 5000
@@ -143,43 +151,13 @@ void SaveState()
    int handle = FileOpen(g_state_file, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);
    if(handle == INVALID_HANDLE)
    {
-      Print("LM AUTO TRADER: Could not save local link state. Error=", GetLastError());
+      Print("LM AUTO TRADER: Could not save local account state. Error=", GetLastError());
       return;
    }
    FileWriteString(handle, g_device_token + "\r\n");
    FileWriteString(handle, IntegerToString((long)g_last_deal_time) + "\r\n");
    FileWriteString(handle, IntegerToString((long)g_last_deal_ticket) + "\r\n");
    FileClose(handle);
-}
-
-bool LinkTerminal()
-{
-   if(StringLen(InpOneTimeLinkCode) < 40)
-   {
-      Print("LM AUTO TRADER: No valid one-time link code. Generate it from the signed-in LM Analyzer account first.");
-      return false;
-   }
-   string body = StringFormat(
-      "{\"action\":\"link\",\"link_code\":\"%s\",\"account_login\":%I64d,\"broker_server\":\"%s\",\"account_mode\":\"%s\"}",
-      JsonEscape(InpOneTimeLinkCode), AccountInfoInteger(ACCOUNT_LOGIN),
-      JsonEscape(AccountInfoString(ACCOUNT_SERVER)), AccountModeText());
-   string response;
-   int status = HttpRequest("POST", "", body, "", response);
-   if(status != 200)
-   {
-      Print("LM AUTO TRADER: Account linking failed. HTTP ", status, " ", response);
-      return false;
-   }
-   g_device_token = GetJsonString(response, "device_token");
-   if(StringLen(g_device_token) < 40)
-   {
-      Print("LM AUTO TRADER: The server did not return a valid device token.");
-      g_device_token = "";
-      return false;
-   }
-   SaveState();
-   Print("LM AUTO TRADER: MT5 account linked. Auto trading remains OFF until enabled in EA inputs.");
-   return true;
 }
 
 bool ConfigureServer()
@@ -596,6 +574,65 @@ void PollServer()
    }
 }
 
+
+#include "LM_SCALPER_ENGINE.mqh"
+
+void SyncAccountSnapshot()
+{
+   if(g_device_token == "") return;
+
+   string positions_json = "";
+   int included = 0;
+   for(int i = PositionsTotal() - 1; i >= 0 && included < 50; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+      if(magic != InpMagicNumber) continue;
+
+      ulong position_id = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      ENUM_POSITION_TYPE position_type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      string direction = (position_type == POSITION_TYPE_BUY ? "BUY" : "SELL");
+      double volume = PositionGetDouble(POSITION_VOLUME);
+      double price_open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double stop_loss = PositionGetDouble(POSITION_SL);
+      double take_profit = PositionGetDouble(POSITION_TP);
+      double profit = PositionGetDouble(POSITION_PROFIT);
+      double swap = PositionGetDouble(POSITION_SWAP);
+      datetime opened_at = (datetime)PositionGetInteger(POSITION_TIME);
+
+      if(included > 0) positions_json += ",";
+      positions_json += StringFormat(
+         "{\"ticket\":%I64u,\"position_id\":%I64u,\"symbol\":\"%s\",\"direction\":\"%s\","
+         "\"volume\":%.8f,\"price_open\":%.10f,\"stop_loss\":%.10f,\"take_profit\":%.10f,"
+         "\"profit\":%.8f,\"swap\":%.8f,\"magic_number\":%I64u,\"opened_at_epoch\":%I64d}",
+         ticket, position_id, JsonEscape(symbol), direction, volume, price_open,
+         stop_loss, take_profit, profit, swap, magic, (long)opened_at);
+      included++;
+   }
+
+   string body = StringFormat(
+      "{\"action\":\"snapshot\",\"account_login\":%I64d,\"broker_server\":\"%s\","
+      "\"balance\":%.8f,\"equity\":%.8f,\"floating_profit\":%.8f,\"credit\":%.8f,"
+      "\"margin\":%.8f,\"free_margin\":%.8f,\"margin_level\":%.8f,"
+      "\"currency\":\"%s\",\"leverage\":%I64d,\"terminal_connected\":%s,"
+      "\"terminal_build\":%I64d,\"positions\":[%s]}",
+      AccountInfoInteger(ACCOUNT_LOGIN), JsonEscape(AccountInfoString(ACCOUNT_SERVER)),
+      AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY),
+      AccountInfoDouble(ACCOUNT_PROFIT), AccountInfoDouble(ACCOUNT_CREDIT),
+      AccountInfoDouble(ACCOUNT_MARGIN), AccountInfoDouble(ACCOUNT_MARGIN_FREE),
+      AccountInfoDouble(ACCOUNT_MARGIN_LEVEL), JsonEscape(AccountInfoString(ACCOUNT_CURRENCY)),
+      AccountInfoInteger(ACCOUNT_LEVERAGE),
+      (TerminalInfoInteger(TERMINAL_CONNECTED) ? "true" : "false"),
+      TerminalInfoInteger(TERMINAL_BUILD), positions_json);
+
+   string response;
+   int status = HttpRequest("POST", "", body, g_device_token, response);
+   if(status != 200)
+      Print("LM AUTO TRADER: Account telemetry sync failed. HTTP ", status, " ", response);
+}
+
 void SyncRecentDeals()
 {
    if(g_device_token == "") return;
@@ -659,6 +696,12 @@ int OnInit()
       InpMaximumSignalAgeMinutes < 1 || InpMaximumSignalAgeMinutes > 120 ||
       InpMaxEntryDeviationPoints < 1 || InpMaxEntryDeviationPoints > 2000 ||
       InpMaxSpreadPoints < 1 || InpMaxSpreadPoints > 2000 ||
+      InpMaxSpreadFxPoints < 1 || InpMaxSpreadFxPoints > 2000 ||
+      InpMaxSpreadGoldPoints < 1 || InpMaxSpreadGoldPoints > 2000 ||
+      InpMaxHoldingMinutes < 1 || InpMaxHoldingMinutes > 1440 ||
+      InpNewsBlockMinutes < 0 || InpNewsBlockMinutes > 240 ||
+      InpProfitTargetUSD < 0.0 || InpProfitTargetUSD > 1000000.0 ||
+      InpProfitTargetCycle < 1 ||
       InpMaximumSlippagePoints < 0 || InpMaximumSlippagePoints > 1000 ||
       InpPollIntervalSeconds < 5 || InpPollIntervalSeconds > 60)
    {
@@ -668,20 +711,35 @@ int OnInit()
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(InpMaximumSlippagePoints);
    LoadState();
-   if(g_device_token == "" && !LinkTerminal()) return INIT_FAILED;
-   if(!ConfigureServer()) Print("LM AUTO TRADER: Risk settings could not be synchronized; no trades will be opened until sync succeeds.");
+   if(g_device_token == "")
+      Print("LM AUTO TRADER: Waiting for direct account authentication from LM Analyzer. Enter broker, server, login and MT5 password in the app; the connector will provision this terminal's token.");
+   if(InpProfitTargetUSD > 0.0 && AccountInfoString(ACCOUNT_CURRENCY) != "USD")
+   {
+      Print("LM AUTO TRADER: The persistent $50 profit target currently requires a USD-denominated account. Trading startup blocked.");
+      return INIT_FAILED;
+   }
+   if(InpUseAutonomousScalper && !InitScalperIndicators())
+      Print("LM AUTO TRADER: No scalping symbols are ready. Check broker symbols and M1/M5 history.");
+   if(g_device_token != "" && !ConfigureServer())
+      Print("LM AUTO TRADER: Risk settings could not be synchronized; no trades will be opened until sync succeeds.");
+   ProfitTargetIsLocked();
    EventSetTimer(InpPollIntervalSeconds);
    Print("LM AUTO TRADER initialized. Auto trading: ", (InpEnableAutoTrading ? "ON" : "OFF"),
-         ". Account type: ", AccountModeText(), ". Live permission: server-gated and OFF by default.");
-   if(!InpEnableAutoTrading) Print("LM AUTO TRADER is linked but idle. Set InpEnableAutoTrading=true to enable demo execution.");
+         ". Account type: ", AccountModeText(), ". Waiting for app-authorized account token if not yet provisioned.");
+   if(g_device_token == "")
+      Print("LM AUTO TRADER is waiting for the password-authenticated account connector. No trades will be opened.");
+   else if(!InpEnableAutoTrading)
+      Print("LM AUTO TRADER account is provisioned but idle. Start trading from the app.");
    return INIT_SUCCEEDED;
 }
 
 void OnDeinit(const int reason)
 {
    EventKillTimer();
-   if(g_device_token != "")
+   ReleaseScalperIndicators();
+   if(g_device_token != "" && reason == REASON_REMOVE)
    {
+      // Disable server execution only when the user deliberately removes the EA.
       string body = StringFormat(
          "{\"action\":\"configure\",\"account_login\":%I64d,\"broker_server\":\"%s\","
          "\"auto_trade_enabled\":false,\"risk_per_trade\":%.4f,\"max_daily_loss_percent\":%.4f,"
@@ -700,9 +758,28 @@ void OnDeinit(const int reason)
 
 void OnTimer()
 {
-   if(g_device_token == "") return;
+   if(g_device_token == "")
+   {
+      // The Windows connector writes the app-issued token to this account's
+      // terminal Common\\Files state file after MT5 password authentication.
+      LoadState();
+      if(g_device_token == "") return;
+      if(!ConfigureServer())
+      {
+         g_device_token = "";
+         Print("LM AUTO TRADER: Token was found but backend configuration failed. Waiting for connector retry.");
+         return;
+      }
+      Print("LM AUTO TRADER: Direct MT5 account authentication completed. Backend terminal sync is active.");
+   }
    if(TimeCurrent() - g_last_configure > 60) ConfigureServer();
-   PollServer();
+   ManageOpenScalpPositions();
+   bool profit_locked = ProfitTargetIsLocked();
+   if(profit_locked) CloseAllOurPositions("persistent profit target");
+   else ScanScalpingSymbols();
+   if(InpUseLMAnalyzerSignals) PollServer();
+   SyncOpenScalpTradeRecords();
+   SyncAccountSnapshot();
    SyncRecentDeals();
 }
 

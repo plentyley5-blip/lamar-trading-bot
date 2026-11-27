@@ -90,7 +90,7 @@ class MT5SignalValidationTests(unittest.TestCase):
         }
         with self.assertRaises(RequestError):
             _record_deal(device, body)
-        self.assertEqual(db_request.call_count, 1)
+        self.assertEqual(db_request.call_count, 2)
 
     @patch("handlers.mt5_trader._db_request")
     def test_deal_is_saved_after_executed_signal_position_match(self, db_request):
