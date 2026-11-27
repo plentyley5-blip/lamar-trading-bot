@@ -10,6 +10,7 @@ from handlers.mt5_trader import (
     RequestError,
     _dashboard_for_user,
     _record_account_snapshot,
+    _record_scalp_trade,
     _snapshot_positions,
 )
 
@@ -101,6 +102,7 @@ class MT5DashboardTelemetryTests(unittest.TestCase):
             }],
             [],
             [],
+            [],
         ]
         result = _dashboard_for_user({"id": "user-1"})
         self.assertTrue(result["connected"])
@@ -115,6 +117,43 @@ class MT5DashboardTelemetryTests(unittest.TestCase):
         self.assertFalse(result["connected"])
         self.assertEqual(result["telemetry_status"], "not_connected")
         self.assertEqual(db_request.call_count, 1)
+
+
+    @patch("handlers.mt5_trader._db_request")
+    def test_scalp_trade_is_saved_to_separate_ledger(self, db_request):
+        body = {
+            "account_login": 123456,
+            "broker_server": "Exness-MT5Trial10",
+            "magic_number": 26112701,
+            "position_id": 200,
+            "order_ticket": 100,
+            "symbol": "XAUUSDm",
+            "direction": "BUY",
+            "requested_volume": 0.01,
+            "filled_volume": 0.01,
+            "entry_price": 2300.0,
+            "stop_loss": 2295.0,
+            "take_profit": 2307.5,
+            "initial_risk_distance": 5.0,
+        }
+        result = _record_scalp_trade(self.device, body)
+        self.assertEqual(result, {"saved": True, "position_id": 200})
+        args = db_request.call_args
+        self.assertEqual(args.args[0], "POST")
+        self.assertIn("lm_mt5_scalp_trades", args.args[1])
+        self.assertEqual(args.args[2]["magic_number"], 26112701)
+        self.assertEqual(args.args[2]["status"], "open")
+
+    @patch("handlers.mt5_trader._db_request")
+    def test_scalp_trade_rejects_wrong_magic_number(self, db_request):
+        body = {
+            "account_login": 123456,
+            "broker_server": "Exness-MT5Trial10",
+            "magic_number": 123,
+        }
+        with self.assertRaises(RequestError):
+            _record_scalp_trade(self.device, body)
+        db_request.assert_not_called()
 
 
 if __name__ == "__main__":
