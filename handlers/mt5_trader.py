@@ -723,8 +723,13 @@ def _session_stop(user, body):
     )
     _db_request(
         "PATCH",
-        _query("lm_mt5_ai_decisions", device_id="eq." + str(device["id"]), status="eq.pending"),
-        {"status": "cancelled", "completed_at": _now_iso()},
+        _query(
+            "lm_mt5_ai_decisions",
+            device_id="eq." + str(device["id"]),
+            status="in.(pending,claimed)",
+        ),
+        {"status": "cancelled", "completed_at": _now_iso(),
+         "execution_result": {"reason": "Trading session stopped by account owner."}},
         prefer="return=minimal",
     )
     return {"stopped": True, "status": "stopped", "message": "New entries are stopped. MT5 continues protective management of positions already open."}
@@ -835,6 +840,14 @@ def _validate_and_queue_ai_decisions(device, session, market_data, decisions, sn
         _db_request("PATCH", _query("lm_mt5_trading_sessions", device_id="eq." + str(device["id"])),
                     {"status": "risk_locked", "stop_reason": "Daily loss or equity drawdown limit reached", "updated_at": _now_iso()},
                     prefer="return=minimal")
+        _db_request("PATCH", _query(
+            "lm_mt5_ai_decisions",
+            device_id="eq." + str(device["id"]),
+            status="eq.pending",
+        ), {
+            "status": "cancelled", "completed_at": _now_iso(),
+            "execution_result": {"reason": "Daily risk lock activated."},
+        }, prefer="return=minimal")
         return 0, "RISK_LOCKED"
     positions = snapshot.get("positions") if isinstance(snapshot.get("positions"), list) else []
     open_positions = [p for p in positions if isinstance(p, dict) and int(p.get("magic_number", 0) or 0) == MT5_MAGIC_NUMBER]
@@ -964,6 +977,14 @@ def _poll_signal(device):
         _db_request("PATCH", _query("lm_mt5_trading_sessions", device_id="eq." + str(device["id"])),
                     {"status": "subscription_locked", "stop_reason": "LM AUTO TRADER subscription expired", "updated_at": _now_iso()},
                     prefer="return=minimal")
+        _db_request("PATCH", _query(
+            "lm_mt5_ai_decisions",
+            device_id="eq." + str(device["id"]),
+            status="in.(pending,claimed)",
+        ), {
+            "status": "cancelled", "completed_at": _now_iso(),
+            "execution_result": {"reason": "LM AUTO TRADER entitlement is no longer active."},
+        }, prefer="return=minimal")
         return "STATE|SUBSCRIPTION_LOCKED|SESSION=LOCKED|LIVE=0\n"
     snapshot = _latest_snapshot(device)
     market_row = _latest_market_data(device)
