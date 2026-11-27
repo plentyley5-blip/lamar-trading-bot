@@ -94,6 +94,10 @@
       "destination": "/api/router?route=support_chat"
     },
     {
+      "source": "/api/mt5_trader",
+      "destination": "/api/router?route=mt5_trader"
+    },
+    {
       "source": "/api/trader_stats",
       "destination": "/api/router?route=trader_stats"
     },
