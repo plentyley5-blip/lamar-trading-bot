@@ -653,8 +653,8 @@ class handler(BaseHTTPRequestHandler):
             parsed = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             _check_account_identity(
                 device,
-                parsed.get("account_login", [None])[0],
-                parsed.get("broker_server", [None])[0],
+                parsed.get("account_login", [None])[0] or self.headers.get("X-LM-Account-Login"),
+                parsed.get("broker_server", [None])[0] or self.headers.get("X-LM-Broker-Server"),
             )
             _text_response(self, 200, _poll_signal(device))
         except RequestError as exc:
