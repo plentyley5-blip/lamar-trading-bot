@@ -47,13 +47,15 @@ Android quota rules carried into the web UI:
 
 The first browser shell includes the six navigation tabs, current colour palette, home-screen order and rotating recommendation card, chart upload and analysis submission flow, analysis history filters, market quote categories, community feed with image posts/likes/comments, Tools hub, risk calculation, journal form, feedback form, Learning Hub lesson/quiz/progress flow, customer-side Support Bot chat with human-support request, plan display, and the three-stage High Impact News flow (events → related instruments → AI outlook).
 
-This is **not yet complete production parity**. Items that still require implementation or end-to-end verification include the full Android Google sign-in experience, all market chart/watchlist/live-alert interactions, community profile/avatar/follow/follower features, support agent inbox and owner-side monitoring, browser push registration, full MT5 Auto Trader controls, and the final responsive visual review against current Android screenshots.
+This is **not yet complete production parity**. Items that still require implementation or end-to-end verification include setting the browser Google OAuth client ID and authorizing the final pages.dev origin, remaining market watchlist/notification settings, native-equivalent push registration and delivery, support agent inbox actions, web purchase verification if browser checkout is desired, full MT5 Auto Trader controls, and the final responsive visual review against current Android screenshots.
 
 ## Payment and platform differences
 
+The web Google sign-in uses the existing server-side `/api/google_login` exchange. Set the public `googleClientId` value in `web/config.js` and add the final `https://<project>.pages.dev` hostname to the Google OAuth client's Authorized JavaScript origins before enabling it. Do not place an OAuth client secret in `config.js`.
+
 The Android app uses Google Play Billing. A normal website browser cannot launch Android's Play Billing flow. The web plans screen therefore shows the same price and allowance definitions but does not activate a subscription when a plan is selected. A web checkout needs an explicitly approved web-compatible payment provider, or users must complete the purchase in the Android app. The server must verify every purchase before granting paid access.
 
-Android Firebase push notifications are not automatically delivered to browsers. Browser push needs a separate web-push subscription and server delivery path.
+Android Firebase push notifications are not automatically delivered to browsers. Browser push needs a separate web-push subscription and server delivery path. The current web Settings screen only requests browser notification permission and can send a local test notification.
 
 ## MT5 backend contract mismatch to resolve
 
