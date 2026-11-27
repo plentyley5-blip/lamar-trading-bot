@@ -693,6 +693,24 @@ def _record_account_snapshot(device, body):
     return {"saved": True, "position_count": len(positions), "updated_at": payload["account_snapshot_at"]}
 
 
+def _ensure_session_start_allowed(device):
+    snapshot_at = device.get("account_snapshot_at")
+    try:
+        stamp = datetime.fromisoformat(str(snapshot_at).replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - stamp).total_seconds()
+    except (TypeError, ValueError):
+        age = float("inf")
+    if age > 90:
+        raise RequestError("The MT5 account feed is not live. Keep the terminal and LM AUTO TRADER EA running, then refresh.")
+    if device.get("account_ea_auto_trade_enabled") is not True:
+        raise RequestError("Enable InpEnableAutoTrading in the LM AUTO TRADER EA inputs, then start the session here.")
+    live_enabled = os.environ.get("LM_MT5_LIVE_TRADING_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+    if str(device.get("account_mode", "demo")).lower() == "real" and not live_enabled:
+        raise RequestError("Real-account execution is disabled by the server. Connect a demo account for validation.")
+
+
 def _set_user_session(user, body, enabled):
     """Start/stop new EA entries without resetting any stored risk settings."""
     params = {
@@ -714,21 +732,7 @@ def _set_user_session(user, body, enabled):
     device = devices[0]
 
     if enabled:
-        snapshot_at = device.get("account_snapshot_at")
-        try:
-            stamp = datetime.fromisoformat(str(snapshot_at).replace("Z", "+00:00"))
-            if stamp.tzinfo is None:
-                stamp = stamp.replace(tzinfo=timezone.utc)
-            age = (datetime.now(timezone.utc) - stamp).total_seconds()
-        except (TypeError, ValueError):
-            age = float("inf")
-        if age > 90:
-            raise RequestError("The MT5 account feed is not live. Keep the terminal and LM AUTO TRADER EA running, then refresh.")
-        if device.get("account_ea_auto_trade_enabled") is not True:
-            raise RequestError("Enable InpEnableAutoTrading in the LM AUTO TRADER EA inputs, then start the session here.")
-        live_enabled = os.environ.get("LM_MT5_LIVE_TRADING_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
-        if str(device.get("account_mode", "demo")).lower() == "real" and not live_enabled:
-            raise RequestError("Real-account execution is disabled by the server. Connect a demo account for validation.")
+        _ensure_session_start_allowed(device)
 
     settings = {key: device.get(key) for key in (
         "account_login", "broker_server", "risk_per_trade", "max_daily_loss_percent",
@@ -904,7 +908,7 @@ def _configure_user_device(user, body):
     user_id = str(user["id"])
     device_id = str(body.get("device_id", "")).strip()
     params = {
-        "select": "id,user_id,account_login,broker_server,account_mode,auto_trade_enabled,risk_per_trade,max_daily_loss_percent,max_open_positions,max_trades_per_day,max_lot,min_confidence,max_signal_age_minutes,max_entry_deviation_points,max_spread_points,revoked_at",
+        "select": "id,user_id,account_login,broker_server,account_mode,auto_trade_enabled,risk_per_trade,max_daily_loss_percent,max_open_positions,max_trades_per_day,max_lot,min_confidence,max_signal_age_minutes,max_entry_deviation_points,max_spread_points,account_snapshot_at,account_ea_auto_trade_enabled,revoked_at",
         "user_id": "eq." + user_id,
         "revoked_at": "is.null",
         "order": "created_at.desc",
@@ -916,6 +920,8 @@ def _configure_user_device(user, body):
     if not isinstance(devices, list) or not devices:
         raise RequestError("No active MT5 terminal is linked to this LM Analyzer account.")
     device = devices[0]
+    if body.get("auto_trade_enabled") is True:
+        _ensure_session_start_allowed(device)
     result = _configure_device(device, body)
     result["device_id"] = str(device["id"])
     return result
