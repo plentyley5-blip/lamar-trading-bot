@@ -81,6 +81,8 @@ int HttpRequest(const string method, const string path, const string body,
    string url = InpApiBase + path;
    string headers = "Content-Type: application/json\r\n";
    if(bearer != "") headers += "Authorization: Bearer " + bearer + "\r\n";
+   headers += "X-LM-Account-Login: " + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "\r\n";
+   headers += "X-LM-Broker-Server: " + AccountInfoString(ACCOUNT_SERVER) + "\r\n";
 
    char request_data[];
    ArrayResize(request_data, 0);
