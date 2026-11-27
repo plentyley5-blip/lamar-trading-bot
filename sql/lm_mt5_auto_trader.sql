@@ -35,6 +35,16 @@ create table if not exists public.lm_mt5_devices (
     updated_at timestamptz not null default now(),
     last_seen_at timestamptz,
     revoked_at timestamptz,
+    account_balance numeric(24,8),
+    account_equity numeric(24,8),
+    account_margin numeric(24,8),
+    account_free_margin numeric(24,8),
+    account_floating_profit numeric(24,8),
+    account_currency text,
+    account_positions jsonb not null default '[]'::jsonb
+        check (jsonb_typeof(account_positions) = 'array'),
+    account_snapshot_at timestamptz,
+    account_ea_auto_trade_enabled boolean not null default false,
     constraint lm_mt5_devices_account_unique unique (account_login, broker_server)
 );
 
@@ -115,6 +125,6 @@ grant select, insert, update, delete on table public.lm_mt5_execution_records to
 grant select, insert, update, delete on table public.lm_mt5_trade_deals to service_role;
 
 comment on table public.lm_mt5_link_codes is 'One-time, hashed linking codes for user-authorized MT5 terminals.';
-comment on table public.lm_mt5_devices is 'MT5 terminal links and bounded user-selected auto-trading risk settings.';
+comment on table public.lm_mt5_devices is 'MT5 terminal links, risk settings, and the latest account telemetry snapshot.';
 comment on table public.lm_mt5_execution_records is 'Idempotent claims and execution outcomes for LM Analyzer signal jobs.';
 comment on table public.lm_mt5_trade_deals is 'Broker-reported MT5 deal ledger for verified performance accounting; not a payment or withdrawal ledger.';
