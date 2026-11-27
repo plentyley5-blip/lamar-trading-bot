@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#030B18">
-<meta name="description" content="LM Analyzer by LAMAR Trading Bot. AI chart intelligence, live markets, high-impact news and trading tools.">
+<meta name="description" content="LM Analyzer — 4H + 15M chart intelligence, AI chart analysis, live markets, high-impact news and trading tools.">
 <link rel="manifest" href="./manifest.webmanifest">
-<title>LM Analyzer | LAMAR Trading Bot</title>
+<title>LM Analyzer</title>
 <style>
 :root{color-scheme:dark;--bg:#030B18;--card:rgba(11,32,56,.88);--glass:rgba(20,53,87,.72);--deep:rgba(16,31,52,.78);--blue:#1677FF;--bright:#2F8CFF;--white:#FFF;--muted:#AFC0D2;--border:#294768;--green:#36D399;--red:#FF6378;--gold:#F5C76A;--radius:24px}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--white);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{min-height:100vh;background:radial-gradient(circle at 88% 0%,rgba(22,119,255,.15),transparent 27rem),radial-gradient(circle at 0% 75%,rgba(47,140,255,.07),transparent 25rem),var(--bg)}button,input,select,textarea{font:inherit}button{cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}a{color:var(--bright)}.hidden{display:none!important}
@@ -16,6 +16,39 @@
 .page-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.list-card{padding:16px;margin-bottom:10px}.list-card h3{font-size:16px;margin:0 0 5px}.list-card p{font-size:11px;color:var(--muted);margin:0;line-height:1.45}.list-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.signal{font-size:13px;font-weight:950}.divider{height:1px;background:rgba(255,255,255,.08);margin:13px 0}.row-between{display:flex;justify-content:space-between;gap:12px;align-items:center}.option{width:100%;text-align:left;border:1px solid rgba(255,255,255,.07);background:var(--card);color:#fff;border-radius:15px;padding:14px 15px;margin:4px 0;display:flex;justify-content:space-between;align-items:center;gap:10px}.option strong{font-size:13px;display:block}.option small{font-size:10px;display:block;color:var(--muted);margin-top:4px;line-height:1.4}.option:hover,.list-card:hover{border-color:rgba(47,140,255,.4)}.plan{width:100%;text-align:left;border:1px solid var(--border);background:rgba(255,255,255,.025);border-radius:15px;color:#fff;padding:15px;margin:9px 0}.plan.selected{border-color:var(--bright);background:rgba(22,119,255,.15)}.plan-row{display:flex;justify-content:space-between;gap:12px;align-items:center}.plan strong{font-size:14px}.plan .price{font-weight:950;color:var(--bright)}.plan p{font-size:11px;color:var(--muted);margin:7px 0 0}.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}.tab{border:1px solid var(--border);background:rgba(255,255,255,.035);color:var(--muted);padding:8px 12px;border-radius:999px;font-size:10px;font-weight:900}.tab.active{background:rgba(22,119,255,.18);border-color:var(--bright);color:#fff}.upload-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.upload-box{min-height:180px;border:1px dashed rgba(47,140,255,.55);border-radius:16px;background:rgba(3,11,24,.35);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;text-align:center;padding:12px;cursor:pointer;overflow:hidden}.upload-box img{width:100%;height:155px;object-fit:contain}.upload-box .plus{font-size:28px;color:var(--bright)}.upload-box strong{font-size:12px}.upload-box small{color:var(--muted);font-size:10px}.instrument-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.instrument{padding:10px 7px;border:1px solid var(--border);border-radius:11px;background:rgba(255,255,255,.025);color:#fff;font-weight:850;font-size:11px}.instrument.selected{border-color:var(--bright);background:rgba(22,119,255,.18)}.market-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.market-mini{padding:13px;border-radius:15px;background:rgba(11,32,56,.88);border:1px solid rgba(255,255,255,.08);min-width:0}.market-mini .sym{font-size:11px;font-weight:950;color:var(--bright)}.market-mini .price{font-size:18px;font-weight:950;margin-top:6px;overflow-wrap:anywhere}.market-mini .chg{font-size:10px;margin-top:3px}.news-row{display:flex;gap:10px;align-items:center;padding:14px;border-radius:15px;background:rgba(3,11,24,.36);border:1px solid rgba(255,255,255,.06);margin-bottom:9px}.currency{color:var(--gold);font-size:11px;font-weight:950;width:44px;flex-shrink:0}.news-title{font-size:13px;font-weight:800;line-height:1.3}.news-meta{font-size:10px;color:var(--muted);margin-top:4px}.signal-result{padding:18px;margin-bottom:11px}.metric-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:11px;background:rgba(3,11,24,.34);border-radius:12px}.metric label{font-size:9px;color:var(--muted);display:block}.metric strong{font-size:13px;display:block;margin-top:5px;overflow-wrap:anywhere}.profile-card{padding:18px;margin-bottom:14px}.profile-row{display:flex;gap:13px;align-items:center}.profile-name{font-size:18px;font-weight:950;overflow-wrap:anywhere}.profile-email{font-size:11px;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}.info-line{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid rgba(255,255,255,.06);font-size:11px}.info-line span:first-child{color:var(--muted)}.info-line span:last-child{text-align:right;font-weight:800}.auth-wrap{width:min(100%,470px);margin:3vh auto}.auth-brand{text-align:center;padding:32px 0 24px}.auth-brand .lamar{font-size:38px;font-weight:1000;letter-spacing:1px}.auth-brand .trade{font-size:11px;color:var(--bright);font-weight:950;letter-spacing:2px}.auth-brand .product{font-size:23px;font-weight:900;margin-top:14px}.auth-card{padding:22px}.chat-box{max-height:44vh;overflow:auto;display:flex;flex-direction:column;gap:9px;padding:12px 0}.bubble{max-width:88%;padding:11px 13px;border-radius:14px;font-size:12px;line-height:1.5;white-space:pre-wrap}.bubble.user{align-self:flex-end;background:var(--blue)}.bubble.bot{align-self:flex-start;background:var(--deep);border:1px solid var(--border)}.caption{font-size:10px;color:var(--muted);margin-top:7px;line-height:1.4}
 @media(max-width:800px){.shell{width:min(100% - 22px,640px);padding-top:15px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.tool-grid{grid-template-columns:1fr}.tool-card{min-height:150px}.market-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bottom-nav{width:100%;border-radius:20px 20px 0 0}.nav-item{font-size:8px}.nav-icon{font-size:17px}.brandbar{margin-bottom:18px}}
 @media(max-width:540px){.shell{width:min(100% - 18px,470px);padding-top:11px}.brand-name{font-size:15px}.brand-mark{width:40px;height:40px}.user-name{max-width:110px}.page-grid{grid-template-columns:1fr}.upload-grid{grid-template-columns:1fr}.instrument-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.market-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.news-teaser{align-items:flex-start}.news-teaser .btn{padding:10px;font-size:10px}.welcome h1{font-size:24px}.bottom-nav{padding-left:5px;padding-right:5px}.nav-item{padding-left:1px;padding-right:1px}.nav-item.active{background:rgba(22,119,255,.13)}}
+
+/* Native LM Analyzer authentication parity */
+.auth-screen{position:relative;isolation:isolate;width:min(100%,720px);min-height:100svh;margin:0 auto;padding:45px 24px 34px;display:flex;flex-direction:column;align-items:stretch}
+.auth-screen:before,.auth-screen:after{content:"";position:fixed;z-index:-1;pointer-events:none;border-radius:50%;filter:blur(.2px)}
+.auth-screen:before{width:330px;height:330px;right:-115px;top:-70px;background:rgba(22,119,255,.13)}
+.auth-screen:after{width:290px;height:290px;left:-155px;bottom:-115px;background:rgba(47,140,255,.08)}
+.auth-brand-native{text-align:center;margin:0 0 28px}
+.auth-brand-native h1{margin:0;color:#fff;font-size:30px;line-height:1.2;font-weight:950;letter-spacing:-.6px}
+.auth-brand-native p{margin:6px 0 0;color:var(--muted);font-size:13px;letter-spacing:.15px}
+.auth-card-native{width:100%;max-width:640px;margin:0 auto;padding:20px;background:rgba(11,32,56,.82);border:1px solid rgba(255,255,255,.035);border-radius:24px;box-shadow:0 18px 45px rgba(0,0,0,.12);position:relative;z-index:1}
+.auth-card-native h2{margin:0;color:#fff;font-size:22px;line-height:1.25;font-weight:800}
+.auth-card-native .auth-subtitle{margin:7px 0 18px;color:var(--muted);font-size:13px}
+.auth-form-native{display:flex;flex-direction:column;gap:10px}
+.auth-input-wrap{position:relative;z-index:2;width:100%;margin:0;pointer-events:auto}
+.auth-input-native{display:block;position:relative;z-index:2;width:100%;height:56px;padding:0 20px;border:1.5px solid #294768;border-radius:7px;background:rgba(3,11,24,.18);color:#fff;font-size:18px;line-height:1.25;outline:none;opacity:1;pointer-events:auto;touch-action:manipulation;-webkit-user-select:text;user-select:text;-webkit-appearance:none;appearance:none}
+.auth-input-native::placeholder{color:#AFC0D2;opacity:1}
+.auth-input-native:focus{border-color:#2F8CFF;box-shadow:0 0 0 3px rgba(47,140,255,.12)}
+.auth-password-wrap{position:relative}
+.auth-password-wrap .auth-input-native{padding-right:58px}
+.auth-eye{position:absolute;z-index:3;right:12px;top:50%;transform:translateY(-50%);width:34px;height:38px;border:0;background:transparent;color:#2F8CFF;display:grid;place-items:center;padding:0}
+.auth-eye svg{width:23px;height:23px;display:block}
+.auth-submit-native{width:100%;height:54px;margin-top:8px;border:0;border-radius:999px;background:#1677FF;color:white;font-size:16px;font-weight:900;letter-spacing:.1px;box-shadow:none}
+.auth-submit-native:disabled{opacity:.7}
+.auth-divider-native{display:flex;align-items:center;gap:12px;margin:20px 0 18px;color:var(--muted);font-size:14px;justify-content:center}
+.auth-divider-native:before,.auth-divider-native:after{content:"";height:1px;flex:1;background:#294768}
+.google-signin-native{width:100%;min-height:52px;display:flex;align-items:center;justify-content:center}
+.google-fallback-native{width:100%;height:52px;border:1px solid #DADCE0;border-radius:13px;background:#fff;color:#202124;font-size:16px;font-weight:650;display:flex;align-items:center;justify-content:center;gap:12px}
+.google-fallback-native svg{width:27px;height:27px;flex:0 0 27px}
+.google-signin-native iframe{max-width:100%}
+.auth-toggle-native{display:block;width:100%;margin:30px 0 0;padding:6px 4px;border:0;background:transparent;color:#2F8CFF;font-size:16px;font-weight:700;text-align:center}
+.auth-screen .error,.auth-screen .success,.auth-screen .notice{margin-top:10px}
+@media(max-width:540px){.auth-screen{padding:45px 24px 28px}.auth-brand-native{margin-bottom:28px}.auth-card-native{padding:20px;border-radius:24px}.auth-input-native{height:56px;font-size:18px}.auth-submit-native{height:54px}.auth-toggle-native{margin-top:27px}}
+@media(max-height:760px){.auth-screen{padding-top:24px}.auth-brand-native{margin-bottom:18px}.auth-toggle-native{margin-top:20px}}
 </style>
 </head>
 <body><div id="app"><div class="loading"><span class="spinner"></span>Loading LM Analyzer…</div></div>
@@ -48,7 +81,7 @@ const RELATED={
 const MARKET_CATEGORIES=["Forex","Metals","Indices","Energy","Crypto","Stocks"];
 const state={
  token:localStorage.getItem("lm_access_token")||"",refresh:localStorage.getItem("lm_refresh_token")||"",
- profile:null,page:"HOME",toolIndex:0,sub:"",authMode:"login",busy:false,message:"",error:"",
+ profile:null,page:"HOME",toolIndex:0,sub:"",authMode:"login",authEmail:"",authPassword:"",authFullName:"",authConfirm:"",busy:false,message:"",error:"",
  history:[],historyFilter:"ALL",selectedHistoryId:"",quotes:[],marketCategory:"Forex",marketBusy:false,marketError:"",
  news:[],newsBusy:false,newsError:"",selectedEvent:null,selectedNewsInstrument:"",
  newsSignal:null,newsSignalBusy:false,newsSignalError:"",
@@ -76,14 +109,51 @@ function quotaType(){return String(profile().quota_type||"blocked")}
 function canAnalyze(){const p=profile();return isOwner()||((p.quota_type==="free_lifetime"||(p.quota_type==="paid_daily"&&p.subscription_active))&&p.analysis_allowed!==false&&Number(p.remaining||0)>0)}
 function canNews(){return isOwner()||(quotaType()==="paid_daily"&&!!profile().subscription_active)}
 function allowanceText(){const p=profile();if(isOwner())return "Founder · Unlimited";if(p.quota_type==="free_lifetime")return Number(p.used||0)+" / "+Number(p.lifetime_limit||4)+" lifetime";if(p.quota_type==="paid_daily")return Number(p.used||0)+" / "+Number(p.daily_limit||0)+" today";return "Access paused"}
-function head(){const p=profile(),initial=(p.full_name||p.email||"L").trim().charAt(0).toUpperCase();return '<header class="brandbar"><div class="brand-lockup"><div class="brand-mark">LM</div><div><div class="brand-name">LM ANALYZER</div><div class="brand-sub">LAMAR TRADING BOT</div></div></div><div class="user-chip"><div class="avatar">'+safe(initial)+'</div><div><div class="user-name">'+safe(p.full_name||"Trader")+'</div><div class="user-state">'+safe(allowanceText())+'</div></div></div></header>'}
+function head(){const p=profile(),initial=(p.full_name||p.email||"L").trim().charAt(0).toUpperCase();return '<header class="brandbar"><div class="brand-lockup"><div class="brand-mark">LM</div><div><div class="brand-name">LM ANALYZER</div><div class="brand-sub">4H + 15M CHART INTELLIGENCE</div></div></div><div class="user-chip"><div class="avatar">'+safe(initial)+'</div><div><div class="user-name">'+safe(p.full_name||"Trader")+'</div><div class="user-state">'+safe(allowanceText())+'</div></div></div></header>'}
 function nav(){const items=["HOME","TRADE","COMMUNITY","MARKETS","TOOLS","PROFILE"];return '<nav class="bottom-nav">'+items.map(x=>'<button class="nav-item '+(state.page===x?"active":"")+'" data-page="'+x+'">'+x+'</button>').join("")+'</nav>'}
 function pageHead(title,sub){return '<div class="page-head"><h1>'+safe(title)+'</h1><p>'+safe(sub)+'</p></div>'}
 function showMsg(message,type){state.message=message;state.msgType=type||"notice";render()}
 function msgBox(){return state.message?'<div class="'+(state.msgType==="error"?"error":state.msgType==="success"?"success":"notice")+'">'+safe(state.message)+'</div>':""}
-function authView(){const googleReady=!!(window.LM_ANALYZER_CONFIG&&String(window.LM_ANALYZER_CONFIG.googleClientId||"").trim());return '<div class="shell"><div class="auth-wrap"><div class="auth-brand"><div class="lamar">LAMAR</div><div class="trade">TRADING BOT</div><div class="product">LM ANALYZER</div><div class="muted small" style="margin-top:5px">4H + 15M chart intelligence</div></div><section class="glass auth-card"><h2 style="margin:0;font-size:22px;font-weight:950">'+(state.authMode==="signup"?"Create account":"Welcome back")+'</h2><p class="muted small">'+(state.authMode==="signup"?"Register to start analysing charts.":"Sign in to continue.")+'</p>'+(googleReady?'<div id="google-signin" style="display:flex;justify-content:center;margin:16px 0"></div><div class="row-between" style="gap:10px;color:var(--muted);font-size:10px"><span style="flex:1;height:1px;background:var(--border)"></span>OR CONTINUE WITH EMAIL<span style="flex:1;height:1px;background:var(--border)"></span></div>':'<div class="notice">Google sign-in will appear after the web OAuth client ID and approved site origin are configured.</div>')+(state.authMode==="signup"?'<div class="field-wrap"><label class="field-label">Full name</label><input class="field" id="auth-name" autocomplete="name" placeholder="Your full name"></div>':"")+'<div class="field-wrap"><label class="field-label">Email</label><input class="field" id="auth-email" type="email" autocomplete="email" placeholder="you@example.com"></div><div class="field-wrap"><label class="field-label">Password</label><input class="field" id="auth-password" type="password" autocomplete="'+(state.authMode==="signup"?"new-password":"current-password")+'" placeholder="Password"></div>'+(state.authMode==="signup"?'<div class="field-wrap"><label class="field-label">Confirm password</label><input class="field" id="auth-confirm" type="password" autocomplete="new-password" placeholder="Confirm password"></div>':"")+'<div id="auth-msg">'+msgBox()+'</div><button class="btn full" id="auth-submit" style="margin-top:15px" '+(state.busy?"disabled":"")+'>'+(state.busy?"PLEASE WAIT…":state.authMode==="signup"?"CREATE ACCOUNT":"SIGN IN")+'</button><button class="btn outline full" id="auth-toggle" style="margin-top:10px">'+(state.authMode==="signup"?"Already have an account? Sign in":"Need an account? Create one")+'</button></section><p class="muted small" style="text-align:center;line-height:1.5;margin:15px">Sign in to access your analyses, subscription status, live markets and saved history. <a href="/about/" style="color:var(--bright);font-weight:800">Explore LM Analyzer features and plans</a>.</p></div></div>'}
+function authView(){
+ const input=(id,type,placeholder,value,autocomplete)=>'<div class="auth-input-wrap"><input class="auth-input-native" id="'+id+'" name="'+id+'" type="'+type+'" placeholder="'+placeholder+'" value="'+safe(value||"")+'" autocomplete="'+autocomplete+'" autocapitalize="off" spellcheck="false" '+(type==="email"?'inputmode="email"':'')+' /></div>';
+ const emailField=input("auth-email","email","Email",state.authEmail,"email");
+ const passwordField='<div class="auth-input-wrap auth-password-wrap"><input class="auth-input-native" id="auth-password" name="password" type="password" placeholder="Password" value="'+safe(state.authPassword||"")+'" autocomplete="'+(state.authMode==="signup"?"new-password":"current-password")+'" autocapitalize="off" spellcheck="false" /><button type="button" class="auth-eye" id="auth-eye" aria-label="Show password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.7-7 10-7 10 7 10 7-3.7 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path d="M3 21 21 3"/></svg></button></div>';
+ const googleButton='<div class="google-signin-native" id="google-signin"><button type="button" class="google-fallback-native" id="google-fallback"><svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M43.6 24.5c0-1.4-.1-2.8-.4-4.1H24v7.8h11c-.5 2.5-1.9 4.6-4.1 6v5h6.6c3.9-3.6 6.1-8.8 6.1-14.7Z"/><path fill="#34A853" d="M24 44c5.5 0 10.1-1.8 13.5-4.8l-6.6-5c-1.8 1.2-4 1.9-6.9 1.9-5.3 0-9.8-3.6-11.4-8.4H5.8v5.2C9.2 39.5 16 44 24 44Z"/><path fill="#FBBC05" d="M12.6 27.7a12 12 0 0 1 0-7.4v-5.2H5.8a20 20 0 0 0 0 17.8l6.8-5.2Z"/><path fill="#EA4335" d="M24 11.9c3 0 5.7 1 7.8 3.1l5.8-5.8C34.1 6 29.5 4 24 4 16 4 9.2 8.5 5.8 15.1l6.8 5.2c1.6-4.8 6.1-8.4 11.4-8.4Z"/></svg>Continue with Google</button></div>';
+ return '<main class="auth-screen"><header class="auth-brand-native"><h1>LM Analyzer</h1><p>4H + 15M chart intelligence</p></header><section class="auth-card-native"><h2>'+(state.authMode==="signup"?"Create account":"Welcome back")+'</h2><p class="auth-subtitle">'+(state.authMode==="signup"?"Register to start analysing charts.":"Sign in to continue.")+'</p><form class="auth-form-native" id="auth-form" novalidate>'+(state.authMode==="signup"?input("auth-name","text","Full name",state.authFullName,"name"):"")+emailField+passwordField+(state.authMode==="signup"?input("auth-confirm","password","Confirm password",state.authConfirm,"new-password"):"")+'<div id="auth-msg">'+msgBox()+'</div><button class="auth-submit-native" id="auth-submit" type="submit" '+(state.busy?"disabled":"")+'>'+(state.busy?(state.authMode==="signup"?"CREATING ACCOUNT…":"LOGGING IN…"):(state.authMode==="signup"?"CREATE ACCOUNT":"LOGIN"))+'</button></form><div class="auth-divider-native">OR</div>'+googleButton+'<button type="button" class="auth-toggle-native" id="auth-toggle">'+(state.authMode==="signup"?"Already have an account? Login":"Need an account? Create one")+'</button></section></main>';
+}
 
-async function submitAuth(){if(state.busy)return;const email=$("auth-email")?.value.trim()||"",password=$("auth-password")?.value||"";const payload={action:state.authMode,email,password};if(state.authMode==="signup"){payload.full_name=$("auth-name")?.value.trim()||"";payload.confirm_password=$("auth-confirm")?.value||""}state.busy=true;state.message="";render();try{const r=await api("/auth",{method:"POST",body:payload,auth:false});if(!r.access_token){state.message="Account created. Check your email if confirmation is required, then sign in.";state.msgType="success";state.authMode="login"}else{state.token=r.access_token;state.refresh=r.refresh_token||"";localStorage.setItem("lm_access_token",state.token);localStorage.setItem("lm_refresh_token",state.refresh);await loadProfile();state.page="HOME";state.sub="";state.message=""}}catch(e){state.message=e.message;state.msgType="error"}finally{state.busy=false;render()}}
+function captureAuthDraft(){
+ state.authEmail=$("auth-email")?.value||state.authEmail||"";
+ state.authPassword=$("auth-password")?.value||state.authPassword||"";
+ state.authFullName=$("auth-name")?.value||state.authFullName||"";
+ state.authConfirm=$("auth-confirm")?.value||state.authConfirm||"";
+}
+async function submitAuth(){
+ if(state.busy)return;
+ captureAuthDraft();
+ const email=state.authEmail.trim(),password=state.authPassword;
+ const payload={action:state.authMode,email,password};
+ if(!email||!password){state.message="Email and password are required.";state.msgType="error";render();return}
+ if(state.authMode==="signup"){
+  payload.full_name=state.authFullName.trim();
+  payload.confirm_password=state.authConfirm;
+  if(!payload.full_name||!state.authConfirm){state.message="Please complete all fields.";state.msgType="error";render();return}
+  if(password!==state.authConfirm){state.message="Passwords do not match.";state.msgType="error";render();return}
+ }
+ state.busy=true;state.message="";render();
+ try{
+  const r=await api("/auth",{method:"POST",body:payload,auth:false});
+  if(!r.access_token){
+   state.message="Account created. Check your email if confirmation is required, then sign in.";
+   state.msgType="success";state.authMode="login";state.authConfirm="";
+  }else{
+   state.token=r.access_token;state.refresh=r.refresh_token||"";
+   localStorage.setItem("lm_access_token",state.token);localStorage.setItem("lm_refresh_token",state.refresh);
+   state.authPassword="";state.authConfirm="";await loadProfile();state.page="HOME";state.sub="";state.message="";
+  }
+ }catch(e){state.message=e.message;state.msgType="error"}
+ finally{state.busy=false;render()}
+}
 async function loadProfile(){const r=await api("/auth",{method:"POST",body:{action:"profile"}});state.profile={...(r.profile||{}),...(r.user||{}),is_owner:!!r.is_owner,quota_type:r.quota_type||"blocked",used:Number(r.used||r.daily_analysis_count||0),daily_limit:Number(r.daily_limit||0),lifetime_limit:Number(r.lifetime_limit||4),remaining:Number(r.remaining||0),analysis_allowed:!!r.analysis_allowed,subscription_active:!!r.subscription_active,subscription_plan:r.subscription_plan||"",subscription_expires_at:r.subscription_expires_at||""};}
 async function refreshSession(){if(!state.refresh)throw new Error("Your session has expired. Please sign in again.");const r=await api("/auth",{method:"POST",body:{action:"refresh",refresh_token:state.refresh},auth:false});state.token=r.access_token;state.refresh=r.refresh_token||state.refresh;localStorage.setItem("lm_access_token",state.token);localStorage.setItem("lm_refresh_token",state.refresh)}
 async function logout(){state.token="";state.refresh="";state.profile=null;localStorage.removeItem("lm_access_token");localStorage.removeItem("lm_refresh_token");state.sub="";state.page="HOME";render()}
@@ -160,8 +230,38 @@ function subView(){switch(state.sub){case"TRADER_STATS":return traderStatsView()
 
 function newGoogleNonce(){const bytes=new Uint8Array(32);crypto.getRandomValues(bytes);return btoa(String.fromCharCode(...bytes)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"")}
 async function handleGoogleCredential(response){if(!response||!response.credential||!state.googleNonce){state.message="Google did not return a valid sign-in credential.";state.msgType="error";render();return}state.busy=true;state.message="";render();try{const r=await api("/google_login",{method:"POST",body:{id_token:response.credential,nonce:state.googleNonce},auth:false});if(!r.access_token||!r.refresh_token)throw new Error(r.error||"Google sign-in did not return a renewable account session.");state.token=r.access_token;state.refresh=r.refresh_token;localStorage.setItem("lm_access_token",state.token);localStorage.setItem("lm_refresh_token",state.refresh);await loadProfile();state.page="HOME";state.sub="";state.message="";render();loadDashboardStats();if(canNews())loadNews()}catch(e){state.message=e.message;state.msgType="error"}finally{state.busy=false;render()}}
-function initializeGoogleSignIn(){const clientId=String(window.LM_ANALYZER_CONFIG?.googleClientId||"").trim(),mount=$("google-signin");if(!clientId||!mount)return;state.googleNonce=newGoogleNonce();const init=()=>{if(!window.google?.accounts?.id||!$("google-signin"))return;window.google.accounts.id.initialize({client_id:clientId,nonce:state.googleNonce,callback:handleGoogleCredential,auto_select:false,cancel_on_tap_outside:true});window.google.accounts.id.renderButton($("google-signin"),{theme:"outline",size:"large",shape:"pill",text:"continue_with",width:Math.min(360,Math.max(220,$("google-signin").clientWidth||300))})};if(window.google?.accounts?.id){init();return}if(document.getElementById("lm-gsi-script"))return;const script=document.createElement("script");script.id="lm-gsi-script";script.src="https://accounts.google.com/gsi/client";script.async=true;script.defer=true;script.onload=init;script.onerror=()=>{if($("auth-msg"))$("auth-msg").innerHTML='<div class="error">Google sign-in could not load. Use email sign-in or refresh this page.</div>'};document.head.appendChild(script)}
-function render(){const root=$("app");if(!state.token||!state.profile){root.innerHTML=authView();initializeGoogleSignIn();$("auth-toggle")?.addEventListener("click",()=>{state.authMode=state.authMode==="login"?"signup":"login";state.message="";render()});$("auth-submit")?.addEventListener("click",submitAuth);return}let body=state.sub?subView():({HOME:homeView,TRADE:tradeView,COMMUNITY:communityView,MARKETS:marketsView,TOOLS:toolsView,PROFILE:profileView}[state.page]||homeView)();root.innerHTML='<div class="shell"><main class="content">'+body+'</main></div>'+(!state.sub?nav():"");}
+function initializeGoogleSignIn(){const clientId=String(window.LM_ANALYZER_CONFIG?.googleClientId||"").trim(),mount=$("google-signin");if(!clientId||!mount)return;state.googleNonce=newGoogleNonce();const init=()=>{if(!window.google?.accounts?.id||!$("google-signin"))return;$("google-signin").innerHTML="";window.google.accounts.id.initialize({client_id:clientId,nonce:state.googleNonce,callback:handleGoogleCredential,auto_select:false,cancel_on_tap_outside:true});window.google.accounts.id.renderButton($("google-signin"),{theme:"outline",size:"large",shape:"pill",text:"continue_with",width:Math.min(360,Math.max(220,$("google-signin").clientWidth||300))})};if(window.google?.accounts?.id){init();return}if(document.getElementById("lm-gsi-script"))return;const script=document.createElement("script");script.id="lm-gsi-script";script.src="https://accounts.google.com/gsi/client";script.async=true;script.defer=true;script.onload=init;script.onerror=()=>{if($("auth-msg"))$("auth-msg").innerHTML='<div class="error">Google sign-in could not load. Use email sign-in or refresh this page.</div>'};document.head.appendChild(script)}
+function render(){
+ const root=$("app");
+ if(!state.token||!state.profile){
+  root.innerHTML=authView();
+  initializeGoogleSignIn();
+  $("auth-form")?.addEventListener("submit",e=>{e.preventDefault();captureAuthDraft();submitAuth()});
+  ["auth-email","auth-password","auth-name","auth-confirm"].forEach(id=>$(id)?.addEventListener("input",e=>{
+   if(id==="auth-email")state.authEmail=e.target.value;
+   if(id==="auth-password")state.authPassword=e.target.value;
+   if(id==="auth-name")state.authFullName=e.target.value;
+   if(id==="auth-confirm")state.authConfirm=e.target.value;
+  }));
+  $("auth-toggle")?.addEventListener("click",()=>{
+   captureAuthDraft();state.authMode=state.authMode==="login"?"signup":"login";
+   state.message="";state.msgType="notice";render();
+  });
+  $("auth-eye")?.addEventListener("click",()=>{
+   const field=$("auth-password"),button=$("auth-eye");if(!field||!button)return;
+   const reveal=field.type==="password";field.type=reveal?"text":"password";
+   button.setAttribute("aria-label",reveal?"Hide password":"Show password");
+   button.innerHTML=reveal?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.7-7 10-7 10 7 10 7-3.7 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.7-7 10-7 10 7 10 7-3.7 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path d="M3 21 21 3"/></svg>';
+  });
+  $("google-fallback")?.addEventListener("click",()=>{
+   state.message="Google sign-in is not configured for this website yet. Email sign-in remains available.";
+   state.msgType="error";render();
+  });
+  return;
+ }
+ let body=state.sub?subView():({HOME:homeView,TRADE:tradeView,COMMUNITY:communityView,MARKETS:marketsView,TOOLS:toolsView,PROFILE:profileView}[state.page]||homeView)();
+ root.innerHTML='<div class="shell"><main class="content">'+body+'</main></div>'+(!state.sub?nav():"");
+}
 function go(page){state.sub="";state.page=page;state.message="";if(page==="TRADE")loadHistory().then(render);if(page==="PROFILE"){loadCommunityProfileWeb();loadHistory().then(render)}if(page==="COMMUNITY")loadCommunity();if(page==="MARKETS")loadMarkets();render()}
 function openSub(s){state.sub=s;state.message="";if(s==="HIGH_IMPACT_NEWS"){if(!canNews()){state.sub="PLANS"}else loadNews()}if(s==="LIVE_CHAT")loadSupportChat();if(s==="ADMIN_MONITORING")loadAdminMonitorWeb();if(s==="FOLLOWERS"||s==="FOLLOWING"){state.communityMemberDirection=s.toLowerCase();loadCommunityMembersWeb()}if(s==="LEARNING")loadLessons();if(s==="JOURNAL")loadJournal();if(s==="MT5_AUTO_TRADER")loadAutoTrader();render()}
 function back(){if(state.sub==="NEWS_SIGNAL"){state.sub="NEWS_INSTRUMENTS"}else if(state.sub==="NEWS_INSTRUMENTS"){state.sub="HIGH_IMPACT_NEWS"}else{state.sub=""}render()}
@@ -211,7 +311,7 @@ document.addEventListener("change",async e=>{
 });
 document.addEventListener("keydown",e=>{if(e.target.id==="auth-password"&&e.key==="Enter")submitAuth()});
 startup();
-setInterval(()=>{state.toolIndex=(state.toolIndex+1)%3;if(state.page==="HOME"&&!state.sub)render()},10000);
+setInterval(()=>{if(state.token&&state.profile&&state.page==="HOME"&&!state.sub){state.toolIndex=(state.toolIndex+1)%3;render()}},10000);
 setInterval(()=>{if(state.token)loadDashboardStats()},60000);
 setInterval(()=>{if(state.token&&canNews())loadNews()},600000);
 setInterval(()=>{if(state.token&&state.page==="MARKETS"&&!state.sub){if(state.marketSelectedSymbol)loadMarketCandles();else loadMarkets()}},60000);
