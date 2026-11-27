@@ -12,7 +12,7 @@ from handlers import (
     analysis_history, analysis_submit, analysis_status, analysis_worker, market_candles,
     analyze, auth, community, delete_account, health, market_quotes,
     news, news_signal, news_worker, live_market, live_market_worker, payment, pesapal, register_device, send_notification,
-    subscription_access, subscription_status, support_chat,
+    subscription_access, subscription_status, support_chat, mt5_trader,
     trader_stats, trader_tools,
 )
 
@@ -41,6 +41,7 @@ HANDLERS = {
         "subscription_access": subscription_access,
         "subscription_status": subscription_status,
         "support_chat": support_chat,
+        "mt5_trader": mt5_trader,
         "trader_stats": trader_stats,
         "trader_tools": trader_tools,
     }.items()
