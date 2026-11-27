@@ -608,13 +608,35 @@ def _record_scalp_trade(device, body):
         "status": "open",
         "updated_at": _now_iso(),
     }
+    existing = _db_request(
+        "GET",
+        _query(
+            "lm_mt5_scalp_trades",
+            select="id,status",
+            device_id="eq." + str(device["id"]),
+            position_id="eq." + str(position_id),
+            limit="1",
+        ),
+    )
+    if isinstance(existing, list) and existing:
+        _db_request(
+            "PATCH",
+            _query(
+                "lm_mt5_scalp_trades",
+                device_id="eq." + str(device["id"]),
+                position_id="eq." + str(position_id),
+            ),
+            {"status": "open", "updated_at": _now_iso()},
+            prefer="return=minimal",
+        )
+        return {"saved": True, "position_id": position_id, "existing": True}
     _db_request(
         "POST",
-        "/rest/v1/lm_mt5_scalp_trades?on_conflict=device_id,position_id",
+        "/rest/v1/lm_mt5_scalp_trades",
         payload,
-        prefer="resolution=merge-duplicates,return=minimal",
+        prefer="return=minimal",
     )
-    return {"saved": True, "position_id": position_id}
+    return {"saved": True, "position_id": position_id, "existing": False}
 
 
 
@@ -634,8 +656,8 @@ def _record_deal(device, body):
     symbol = str(body.get("symbol", "")).strip()[:32]
     if not symbol:
         raise RequestError("MT5 deal symbol is missing.")
-    # A client-supplied magic number alone is not proof; require a recorded
-    # executed signal position on this linked device before storing any deal.
+    # Require a recorded LM Analyzer execution or an LM SCALPER trade on this
+    # linked device before accepting broker deal history.
     execution_rows = _db_request(
         "GET",
         _query(
@@ -685,6 +707,17 @@ def _record_deal(device, body):
     }
     try:
         _db_request("POST", "/rest/v1/lm_mt5_trade_deals", payload, prefer="return=minimal")
+        if isinstance(scalp_rows, list) and scalp_rows and payload["deal_entry"] in ("DEAL_ENTRY_OUT", "DEAL_ENTRY_OUT_BY", "DEAL_ENTRY_INOUT"):
+            _db_request(
+                "PATCH",
+                _query(
+                    "lm_mt5_scalp_trades",
+                    device_id="eq." + str(device["id"]),
+                    position_id="eq." + str(position_id),
+                ),
+                {"status": "closed", "updated_at": _now_iso()},
+                prefer="return=minimal",
+            )
         return {"saved": True, "duplicate": False}
     except RequestError as exc:
         if "already been recorded" in str(exc):
