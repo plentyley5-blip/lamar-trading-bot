@@ -645,6 +645,143 @@ def _revoke_user_devices(user):
     return {"revoked": True}
 
 
+
+def _user_dashboard(user):
+    """Return the account owner's MT5 device and verified execution ledger."""
+    user_id = str(user["id"])
+    devices = _db_request(
+        "GET",
+        _query(
+            "lm_mt5_devices",
+            select="id,user_id,account_login,broker_server,account_mode,auto_trade_enabled,risk_per_trade,max_daily_loss_percent,max_open_positions,max_trades_per_day,max_lot,min_confidence,max_signal_age_minutes,max_entry_deviation_points,max_spread_points,created_at,updated_at,last_seen_at,revoked_at",
+            user_id="eq." + user_id,
+            revoked_at="is.null",
+            order="created_at.desc",
+            limit="5",
+        ),
+    )
+    device = devices[0] if isinstance(devices, list) and devices else None
+    if not device:
+        return {
+            "connected": False,
+            "device": None,
+            "telemetry_status": "not_connected",
+            "session": {"status": "stopped"},
+            "risk_config": None,
+            "executions": [],
+            "recent_deals": [],
+            "ai_decisions": [],
+        }
+
+    last_seen = device.get("last_seen_at")
+    telemetry_status = "not_connected"
+    if last_seen:
+        try:
+            stamp = datetime.fromisoformat(str(last_seen).replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - stamp).total_seconds()
+            telemetry_status = "live" if age <= 90 else "stale"
+        except (TypeError, ValueError, OverflowError):
+            telemetry_status = "unknown"
+
+    executions = _db_request(
+        "GET",
+        _query(
+            "lm_mt5_execution_records",
+            select="id,signal_id,symbol,direction,status,order_ticket,position_id,requested_volume,filled_volume,fill_price,reason,created_at,updated_at",
+            device_id="eq." + str(device["id"]),
+            order="created_at.desc",
+            limit="30",
+        ),
+    )
+    deals = _db_request(
+        "GET",
+        _query(
+            "lm_mt5_trade_deals",
+            select="deal_ticket,position_id,symbol,deal_entry,deal_type,volume,price,profit,commission,swap,deal_time,created_at",
+            device_id="eq." + str(device["id"]),
+            order="deal_time.desc",
+            limit="30",
+        ),
+    )
+    jobs = _db_request(
+        "GET",
+        _query(
+            "analysis_jobs",
+            select="id,instrument,trade_focus,status,created_at,openai_response_id",
+            user_id="eq." + user_id,
+            status="eq.completed",
+            order="created_at.desc",
+            limit="20",
+        ),
+    )
+    decisions = []
+    for job in jobs if isinstance(jobs, list) else []:
+        if not isinstance(job, dict):
+            continue
+        result = _decode_job_result(job.get("openai_response_id")) or {}
+        signal = str(result.get("signal") or result.get("direction") or "WAIT").upper()
+        decisions.append({
+            "id": str(job.get("id") or ""),
+            "instrument": str(job.get("instrument") or result.get("instrument") or "—"),
+            "signal": signal if signal in ("BUY", "SELL", "NO TRADE", "WAIT") else "WAIT",
+            "confidence": result.get("confidence"),
+            "reasoning": str(result.get("reasoning") or result.get("market_analysis") or result.get("explanation") or "")[:1200],
+            "created_at": job.get("created_at"),
+            "execution_status": "Recorded in MT5 ledger" if any(
+                str(row.get("signal_id")) == str(job.get("id")) for row in (executions or []) if isinstance(row, dict)
+            ) else "Not executed",
+        })
+
+    safe_device = {k: device.get(k) for k in (
+        "id", "account_login", "broker_server", "account_mode", "auto_trade_enabled",
+        "risk_per_trade", "max_daily_loss_percent", "max_open_positions",
+        "max_trades_per_day", "max_lot", "min_confidence",
+        "max_signal_age_minutes", "max_entry_deviation_points",
+        "max_spread_points", "created_at", "updated_at", "last_seen_at",
+    )}
+    return {
+        "connected": True,
+        "device": safe_device,
+        "telemetry_status": telemetry_status,
+        "session": {"status": "active" if device.get("auto_trade_enabled") else "stopped"},
+        "risk_config": {k: device.get(k) for k in (
+            "risk_per_trade", "max_daily_loss_percent", "max_open_positions",
+            "max_trades_per_day", "max_lot", "min_confidence",
+            "max_signal_age_minutes", "max_entry_deviation_points", "max_spread_points",
+        )},
+        "account": None,
+        "open_positions": [],
+        "executions": executions if isinstance(executions, list) else [],
+        "recent_deals": deals if isinstance(deals, list) else [],
+        "ai_decisions": decisions,
+        "message": "Account identity and MT5 execution telemetry are available. Live equity and open-position snapshots are not currently sent by the EA.",
+    }
+
+
+def _configure_user_device(user, body):
+    user_id = str(user["id"])
+    device_id = str(body.get("device_id", "")).strip()
+    params = {
+        "select": "id,user_id,account_login,broker_server,account_mode,auto_trade_enabled,risk_per_trade,max_daily_loss_percent,max_open_positions,max_trades_per_day,max_lot,min_confidence,max_signal_age_minutes,max_entry_deviation_points,max_spread_points,revoked_at",
+        "user_id": "eq." + user_id,
+        "revoked_at": "is.null",
+        "order": "created_at.desc",
+        "limit": "5",
+    }
+    if device_id:
+        params["id"] = "eq." + device_id
+    devices = _db_request("GET", _query("lm_mt5_devices", **params))
+    if not isinstance(devices, list) or not devices:
+        raise RequestError("No active MT5 terminal is linked to this LM Analyzer account.")
+    device = devices[0]
+    result = _configure_device(device, body)
+    result["device_id"] = str(device["id"])
+    return result
+
+
+
 class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         _text_response(self, 204, "")
@@ -684,6 +821,14 @@ class handler(BaseHTTPRequestHandler):
             if action == "revoke_all":
                 user = verify_access_token(extract_bearer_token(self))
                 json_response(self, 200, _revoke_user_devices(user))
+                return
+            if action == "dashboard":
+                user = verify_access_token(extract_bearer_token(self))
+                json_response(self, 200, _user_dashboard(user))
+                return
+            if action == "configure_user_device":
+                user = verify_access_token(extract_bearer_token(self))
+                json_response(self, 200, _configure_user_device(user, body))
                 return
 
             device = _read_device(self)
