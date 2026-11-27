@@ -82,7 +82,7 @@ The EA now includes `mt5/LM_SCALPER_ENGINE.mqh`, which ports the previously agre
 - FX spread ceiling 30 points; XAUUSD ceiling 100 points.
 - High-impact MT5 economic-calendar event block within 20 minutes before/after the event. Calendar times use broker trade-server time; if calendar lookup fails, new entries fail closed.
 - Break-even at 1R plus two points; ATR(14) trailing starts at 1.2R.
-- Maximum holding time 180 minutes.
+- Maximum holding time 15 minutes (hard time-based exit for multi-scalping).
 - 2% daily loss stop and the existing maximum-three-entries-per-day safety cap.
 - Persistent $50 equity target above the terminal's cycle baseline. On target, LM AUTO TRADER closes only positions with its own magic number and locks that cycle. Increment `InpProfitTargetCycle` to start a new cycle.
 
