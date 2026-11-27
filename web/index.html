@@ -390,6 +390,8 @@ function supportMessagesHtml(){
  const rows=Array.isArray(state.chatMessages)?state.chatMessages:[];
  return (rows.length?rows.map(m=>'<div class="bubble '+(m.role==="user"?"user":"bot")+'">'+(m.sender_name?'<span class="sender">'+safe(m.sender_name)+'</span>':"")+safe(m.content||"")+(m.attachment_data_url?'<img alt="Chat attachment" src="'+safe(m.attachment_data_url)+'">':"")+'</div>').join(""):'<div class="bubble bot"><span class="sender">LM SUPPORT BOT</span>Hello! I’m the LM Support Bot. Tell me what you need help with. You can also attach a chart or screenshot.</div>')+(state.chatBusy?'<div class="bubble bot"><span class="chat-typing"><i></i><i></i><i></i> LM Support Bot is typing…</span></div>':"");
 }
+let chatSnapshotRequestId=0;
+let chatSnapshotInFlight=false;
 function refreshLiveChatDom(){
  if(state.sub!=="LIVE_CHAT")return;
  const box=$("chat-box");
@@ -403,9 +405,21 @@ function refreshLiveChatDom(){
 }
 async function loadSupportSnapshotWeb(redraw){
  if(!state.chatConversationId)return;
- try{const r=await api("/support_chat?conversation_id="+encodeURIComponent(state.chatConversationId));state.chatMessages=Array.isArray(r.messages)?r.messages:[];state.chatSupportStatus=r.support_status||"bot";state.chatAssignedAgent=r.assigned_agent_name||"";state.chatError=""}
- catch(e){state.chatError=e.message}
- if(state.sub==="LIVE_CHAT")refreshLiveChatDom();else if(redraw!==false)render();
+ const requestId=++chatSnapshotRequestId;
+ try{
+  const r=await api("/support_chat?conversation_id="+encodeURIComponent(state.chatConversationId));
+  // A poll that began before a send/handoff must never overwrite the newer chat response.
+  if(requestId!==chatSnapshotRequestId||state.sub!=="LIVE_CHAT")return;
+  state.chatMessages=Array.isArray(r.messages)?r.messages:[];
+  state.chatSupportStatus=r.support_status||"bot";
+  state.chatAssignedAgent=r.assigned_agent_name||"";
+  state.chatError="";
+ }catch(e){
+  if(requestId!==chatSnapshotRequestId||state.sub!=="LIVE_CHAT")return;
+  state.chatError=e.message;
+ }
+ if(requestId===chatSnapshotRequestId&&state.sub==="LIVE_CHAT")refreshLiveChatDom();
+ else if(requestId===chatSnapshotRequestId&&redraw!==false)render();
 }
 async function loadSupportChat(){
  state.chatLoading=true;state.chatError="";render();
@@ -445,6 +459,8 @@ function startSupportVoiceInput(){
 async function sendSupportMessageWeb(){
  const field=$("chat-draft"),draft=(field?.value??state.chatDraft??"").trim(),attachment=state.chatAttachment||"";
  if((!draft&&!attachment)||state.chatBusy)return;
+ // Invalidate an outstanding 4-second poll before submitting a newer message.
+ chatSnapshotRequestId++;
  const submittedDraft=draft;state.chatDraft="";state.chatAttachment="";state.chatBusy=true;state.chatError="";
  if(field)field.value="";
  const send=$("chat-send");if(send){send.disabled=true;send.textContent="SENDING…"}
@@ -457,12 +473,27 @@ async function sendSupportMessageWeb(){
 }
 async function requestHumanSupportWeb(){
  if(!state.chatConversationId)return showMsg("Send a support message first to create a conversation.","error");
+ chatSnapshotRequestId++;
  state.chatBusy=true;state.chatError="";
  try{const r=await api("/support_chat",{method:"POST",body:{action:"request_human",conversation_id:state.chatConversationId}});state.chatSupportStatus=r.support_status||"waiting";state.chatAssignedAgent=r.assigned_agent_name||"";await loadSupportSnapshotWeb(false)}
  catch(e){state.chatError=e.message}
  finally{state.chatBusy=false;render()}
 }
-async function loadAutoTrader(silent=false){if(state.autoTraderBusy)return;state.autoTraderBusy=true;state.autoTraderError="";if(!silent)render();try{state.autoTrader=await api("/mt5_trader",{method:"POST",body:{action:"dashboard"}})}catch(e){state.autoTraderError=e.message}finally{state.autoTraderBusy=false;if(state.sub==="MT5_AUTO_TRADER"&&!silent)render();else if(state.sub==="MT5_AUTO_TRADER")updateAutoTraderStatusDom()}}
+async function loadAutoTrader(silent=false){
+ if(state.autoTraderBusy)return;
+ state.autoTraderBusy=true;state.autoTraderError="";
+ if(!silent)render();
+ try{state.autoTrader=await api("/mt5_trader",{method:"POST",body:{action:"dashboard"}})}
+ catch(e){state.autoTraderError=e.message}
+ finally{
+  state.autoTraderBusy=false;
+  if(state.sub==="MT5_AUTO_TRADER"){
+   // Refresh dashboard data panels in read-only tabs. Never redraw editable risk fields mid-entry.
+   if(!silent||["OVERVIEW","POSITIONS","AI ACTIVITY"].includes(state.autoTraderTab||"OVERVIEW"))render();
+   else updateAutoTraderStatusDom();
+  }
+ }
+}
 async function createAutoTraderLinkCode(){state.autoTraderBusy=true;state.autoTraderError="";render();try{const r=await api("/mt5_trader",{method:"POST",body:{action:"create_link_code"}});state.autoTraderLinkCode=r.link_code||"";state.autoTraderLinkExpires=r.expires_at||"";if(!state.autoTraderLinkCode)throw new Error("The MT5 service did not return a one-time link code.");state.autoTraderNotice=r.instructions||"Enter this one-time code in the LM AUTO TRADER EA inside MT5."}catch(e){state.autoTraderError=e.message}finally{state.autoTraderBusy=false;render()}}
 async function revokeAutoTraderLinks(){if(!window.confirm("Revoke all LM AUTO TRADER terminal links for this account? Existing MT5 connections will stop receiving signals."))return;state.autoTraderBusy=true;state.autoTraderError="";render();try{const r=await api("/mt5_trader",{method:"POST",body:{action:"revoke_all"}});state.autoTraderLinkCode="";state.autoTraderNotice=r.message||"All MT5 terminal links have been revoked.";state.autoTrader=await api("/mt5_trader",{method:"POST",body:{action:"dashboard"}})}catch(e){state.autoTraderError=e.message}finally{state.autoTraderBusy=false;render()}}
 async function saveAutoTraderRisk(){const d=state.autoTrader||{},device=d.device||{},v={action:"configure_user_device",auto_trade_enabled:$("auto-enabled")?.checked===true,risk_per_trade:$("auto-risk")?.value??device.risk_per_trade??.25,max_daily_loss_percent:$("auto-daily-loss")?.value??device.max_daily_loss_percent??2,max_open_positions:$("auto-max-open")?.value??device.max_open_positions??1,max_trades_per_day:$("auto-max-trades")?.value??device.max_trades_per_day??3,max_lot:$("auto-max-lot")?.value??device.max_lot??.1,min_confidence:$("auto-confidence")?.value??device.min_confidence??75,max_signal_age_minutes:$("auto-max-age")?.value??device.max_signal_age_minutes??10,max_entry_deviation_points:$("auto-entry-deviation")?.value??device.max_entry_deviation_points??50,max_spread_points:$("auto-max-spread")?.value??device.max_spread_points??50};state.autoTraderBusy=true;state.autoTraderError="";render();try{const r=await api("/mt5_trader",{method:"POST",body:v});state.autoTraderNotice=r.message||"Risk settings saved. Server-side limits remain authoritative.";state.autoTrader=await api("/mt5_trader",{method:"POST",body:{action:"dashboard"}})}catch(e){state.autoTraderError=e.message}finally{state.autoTraderBusy=false;render()}}
@@ -600,13 +631,21 @@ document.addEventListener("change",async e=>{if(e.target.id==="chat-image"){cons
  if(e.target.matches("[data-file]")){const key=e.target.dataset.file,file=e.target.files&&e.target.files[0];if(!file)return;try{state.images[key]=await compressFile(file);render()}catch(err){showMsg(err.message,"error")}}if(e.target.id==="profile-avatar"){const file=e.target.files&&e.target.files[0];if(file){try{const image_data_url=await compressFile(file);await api("/community",{method:"POST",body:{action:"profile_avatar",image_data_url}});await loadCommunityProfileWeb()}catch(err){showMsg(err.message,"error")}}}if(e.target.id==="community-image"){const file=e.target.files&&e.target.files[0];if(file){try{state.communityImage=await compressFile(file);render()}catch(err){showMsg(err.message,"error")}}}
  if(e.target.id==="notifications-toggle"){state.notifications=e.target.checked;localStorage.setItem("lm_web_notifications",String(state.notifications));if(state.notifications&&"Notification"in window){const p=await Notification.requestPermission();if(p!=="granted"){state.notifications=false;localStorage.setItem("lm_web_notifications","false");render()}}}
 });
-document.addEventListener("keydown",e=>{if(e.target.id==="auth-password"&&e.key==="Enter")submitAuth()});
+document.addEventListener("keydown",e=>{
+ if(e.target.id==="auth-password"&&e.key==="Enter"){e.preventDefault();submitAuth();return}
+ if(e.target.id==="chat-draft"&&e.key==="Enter"&&!e.shiftKey&&!e.isComposing){e.preventDefault();sendSupportMessageWeb()}
+});
 startup();
 setInterval(()=>{if(state.token&&state.profile&&state.page==="HOME"&&!state.sub){state.toolIndex=(state.toolIndex+1)%3;render()}},10000);
 setInterval(()=>{if(state.token)loadDashboardStats()},60000);
 setInterval(()=>{if(state.token&&canNews())loadNews()},600000);
 setInterval(()=>{if(state.token&&state.page==="MARKETS"&&!state.sub){if(state.marketSelectedSymbol)loadMarketCandles();else loadMarkets()}},60000);
-setInterval(()=>{if(state.token&&state.sub==="LIVE_CHAT"&&state.chatConversationId&&!state.chatBusy)loadSupportSnapshotWeb(false)},4000);
+setInterval(()=>{
+ if(state.token&&state.sub==="LIVE_CHAT"&&state.chatConversationId&&!state.chatBusy&&!chatSnapshotInFlight){
+  chatSnapshotInFlight=true;
+  loadSupportSnapshotWeb(false).finally(()=>{chatSnapshotInFlight=false});
+ }
+},5000);
 setInterval(()=>{if(state.token&&state.sub==="MT5_AUTO_TRADER"&&!state.autoTraderBusy)loadAutoTrader(true)},15000);
 if("serviceWorker" in navigator && location.protocol.startsWith("http"))navigator.serviceWorker.register("./sw.js").catch(()=>{});
 })();
