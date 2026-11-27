@@ -51,7 +51,7 @@ const state={
  history:[],historyFilter:"ALL",quotes:[],marketCategory:"Forex",marketBusy:false,marketError:"",
  news:[],newsBusy:false,newsError:"",selectedEvent:null,selectedNewsInstrument:"",
  newsSignal:null,newsSignalBusy:false,newsSignalError:"",
- selectedInstrument:"EURUSD",focus:"DAY TRADE",optionalTimeframes:[],images:{H4:"",M15:"",D1:"",H1:"M5","M1":""},analysisBusy:false,analysisError:"",analysisResult:null,
+ selectedInstrument:"EURUSD",focus:"DAY TRADE",optionalTimeframes:[],images:{H4:"",M15:"",D1:"",H1:"",M5:"",M1:""},analysisBusy:false,analysisError:"",analysisResult:null,
  communityPosts:[],communityBusy:false,communityError:"",communityCanPost:false,
  toolsTab:"TOOLS",selectedPlan:"monthly",lessons:[],journal:[],toolError:"",toolNotice:"",
  autoTrader:null,autoTraderError:"",autoTraderBusy:false,chatMessages:[],chatConversationId:"",chatBusy:false,chatError:"",
@@ -75,7 +75,7 @@ function canAnalyze(){const p=profile();return isOwner()||((p.quota_type==="free
 function canNews(){return isOwner()||(quotaType()==="paid_daily"&&!!profile().subscription_active)}
 function allowanceText(){const p=profile();if(isOwner())return "Founder · Unlimited";if(p.quota_type==="free_lifetime")return Number(p.used||0)+" / "+Number(p.lifetime_limit||4)+" lifetime";if(p.quota_type==="paid_daily")return Number(p.used||0)+" / "+Number(p.daily_limit||0)+" today";return "Access paused"}
 function head(){const p=profile(),initial=(p.full_name||p.email||"L").trim().charAt(0).toUpperCase();return '<header class="brandbar"><div class="brand-lockup"><div class="brand-mark">LM</div><div><div class="brand-name">LM ANALYZER</div><div class="brand-sub">LAMAR TRADING BOT</div></div></div><div class="user-chip"><div class="avatar">'+safe(initial)+'</div><div><div class="user-name">'+safe(p.full_name||"Trader")+'</div><div class="user-state">'+safe(allowanceText())+'</div></div></div></header>'}
-function nav(){const items=[["HOME","⌂"],["TRADE","↗"],["COMMUNITY","◎"],["MARKETS","◈"],["TOOLS","▦"],["PROFILE","♙"]];return '<nav class="bottom-nav">'+items.map(x=>'<button class="nav-item '+(state.page===x[0]?'active':'')+'" data-page="'+x[0]+'"><span class="nav-icon">'+x[1]+'</span>'+x[0]+'</button>').join("")+'</nav>'}
+function nav(){const items=["HOME","TRADE","COMMUNITY","MARKETS","TOOLS","PROFILE"];return '<nav class="bottom-nav">'+items.map(x=>'<button class="nav-item '+(state.page===x?"active":"")+'" data-page="'+x+'">'+x+'</button>').join("")+'</nav>'}
 function pageHead(title,sub){return '<div class="page-head"><h1>'+safe(title)+'</h1><p>'+safe(sub)+'</p></div>'}
 function showMsg(message,type){state.message=message;state.msgType=type||"notice";render()}
 function msgBox(){return state.message?'<div class="'+(state.msgType==="error"?"error":state.msgType==="success"?"success":"notice")+'">'+safe(state.message)+'</div>':""}
