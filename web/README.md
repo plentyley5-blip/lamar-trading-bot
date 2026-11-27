@@ -45,9 +45,9 @@ Android quota rules carried into the web UI:
 
 ## Current implementation status
 
-The first browser shell includes the six navigation tabs, current colour palette, home-screen order and rotating recommendation card, chart upload and analysis submission flow, analysis history filters, market quote categories, community text feed, Tools hub, risk calculation, journal form, feedback form, plan display, and the three-stage High Impact News flow (events → related instruments → AI outlook).
+The first browser shell includes the six navigation tabs, current colour palette, home-screen order and rotating recommendation card, chart upload and analysis submission flow, analysis history filters, market quote categories, community feed with image posts/likes/comments, Tools hub, risk calculation, journal form, feedback form, Learning Hub lesson/quiz/progress flow, customer-side Support Bot chat with human-support request, plan display, and the three-stage High Impact News flow (events → related instruments → AI outlook).
 
-This is **not yet complete production parity**. Items that still require implementation or end-to-end verification include the full Android Google sign-in experience, all market chart/watchlist/live-alert interactions, community media/avatar/comment/follow functions, the complete in-app support bot and human-agent handoff, learning quizzes/progress, browser push registration, owner-only admin monitoring, full MT5 Auto Trader controls, and the final responsive visual review against current Android screenshots.
+This is **not yet complete production parity**. Items that still require implementation or end-to-end verification include the full Android Google sign-in experience, all market chart/watchlist/live-alert interactions, community profile/avatar/follow/follower features, support agent inbox and owner-side monitoring, browser push registration, full MT5 Auto Trader controls, and the final responsive visual review against current Android screenshots.
 
 ## Payment and platform differences
 
