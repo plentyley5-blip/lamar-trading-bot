@@ -4,7 +4,7 @@ This is the isolated browser client for the 27 November 2026 Android UI snapshot
 
 ## Cloudflare Pages deployment
 
-Create the Cloudflare Pages project only after confirming that the project name `lmanalyzer` is available. The desired hostname is `lmanalyzer.pages.dev`; Cloudflare may add a suffix if that name is already taken. Cloudflare documents that the `pages.dev` subdomain cannot be changed after the project is created, so choose the name carefully.
+Create the Cloudflare Pages project only after confirming that the project name `lmanalyzer` is available. The desired hostname is `lmanalyzer.pages.dev`. During project creation, verify that Cloudflare assigns exactly `lmanalyzer.pages.dev` before completing setup. Cloudflare documents that a project's `pages.dev` subdomain cannot be changed after the project is created, so do not proceed with a different slug by mistake.
 
 Connect this GitHub repository:
 
@@ -45,9 +45,9 @@ Android quota rules carried into the web UI:
 
 ## Current implementation status
 
-The first browser shell includes the six navigation tabs, current colour palette, home-screen order and rotating recommendation card, chart upload and analysis submission flow, analysis history filters, market quote categories, community feed with image posts/likes/comments, Tools hub, risk calculation, journal form, feedback form, Learning Hub lesson/quiz/progress flow, customer-side Support Bot chat with human-support request, plan display, and the three-stage High Impact News flow (events → related instruments → AI outlook).
+The browser build includes the six navigation tabs, Blue Glass theme, Android-style home order and rotating recommendation card with current High Impact News events, chart upload and AI analysis submission, detailed Trade history, live market quotes/alerts/candlestick charts, community image posts/likes/comments/followers, profile avatars and verified status, grouped Profile and Tools menus, Learning Hub quizzes/progress, Smart Risk Manager, Journal, Feedback, customer Support Bot with human escalation, owner support monitoring, account deletion, exact target plan list, and the three-stage High Impact News flow (events → related instruments → AI outlook).
 
-This is **not yet complete production parity**. Items that still require implementation or end-to-end verification include setting the browser Google OAuth client ID and authorizing the final pages.dev origin, remaining market watchlist/notification settings, native-equivalent push registration and delivery, support agent inbox actions, web purchase verification if browser checkout is desired, full MT5 Auto Trader controls, and the final responsive visual review against current Android screenshots.
+This is **not yet complete production parity**. Items that still require implementation or end-to-end verification include setting the browser Google OAuth client ID and authorizing the final pages.dev origin, market watchlist management and notification preferences, native-equivalent push registration and delivery, support agent inbox actions, browser payment/verification if web checkout is desired, full MT5 Auto Trader controls, and the final responsive visual review against current Android screenshots.
 
 ## Payment and platform differences
 
