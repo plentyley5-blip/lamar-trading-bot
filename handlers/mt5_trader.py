@@ -900,7 +900,7 @@ def _user_dashboard(user):
         "executions": executions if isinstance(executions, list) else [],
         "recent_deals": deals if isinstance(deals, list) else [],
         "ai_decisions": decisions,
-        "message": "Account identity and MT5 execution telemetry are available. Live equity and open-position snapshots are not currently sent by the EA.",
+        "message": "Dashboard values reflect the latest validated snapshot from the linked MT5 terminal. Check the snapshot timestamp before relying on live account figures.",
     }
 
 
