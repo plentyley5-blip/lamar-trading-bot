@@ -574,6 +574,50 @@ def _report_execution(device, body):
     return {"saved": True, "status": status}
 
 
+
+def _record_scalp_trade(device, body):
+    _check_account_identity(device, body.get("account_login"), body.get("broker_server"))
+    try:
+        magic = int(body.get("magic_number", 0))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RequestError("Invalid LM SCALPER magic number.") from exc
+    if magic != MT5_MAGIC_NUMBER:
+        raise RequestError("This position is not an LM AUTO TRADER scalping trade.")
+    position_id = int(_number(body.get("position_id"), "position_id", 1, 9223372036854775807, integer=True))
+    order_ticket = int(_number(body.get("order_ticket"), "order_ticket", 1, 9223372036854775807, integer=True))
+    symbol = str(body.get("symbol", "")).strip()[:32]
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,32}", symbol):
+        raise RequestError("Invalid scalping symbol.")
+    direction = str(body.get("direction", "")).strip().upper()
+    if direction not in ("BUY", "SELL"):
+        raise RequestError("Invalid scalping direction.")
+    payload = {
+        "device_id": str(device["id"]),
+        "user_id": str(device["user_id"]),
+        "position_id": position_id,
+        "order_ticket": order_ticket,
+        "symbol": symbol,
+        "direction": direction,
+        "requested_volume": _number(body.get("requested_volume"), "requested_volume", 0.001, 1000),
+        "filled_volume": _number(body.get("filled_volume"), "filled_volume", 0.001, 1000),
+        "entry_price": _number(body.get("entry_price"), "entry_price", 0.00000001, 100000000),
+        "stop_loss": _number(body.get("stop_loss"), "stop_loss", 0.00000001, 100000000),
+        "take_profit": _number(body.get("take_profit"), "take_profit", 0.00000001, 100000000),
+        "initial_risk_distance": _number(body.get("initial_risk_distance"), "initial_risk_distance", 0.00000001, 100000000),
+        "magic_number": magic,
+        "status": "open",
+        "updated_at": _now_iso(),
+    }
+    _db_request(
+        "POST",
+        "/rest/v1/lm_mt5_scalp_trades?on_conflict=device_id,position_id",
+        payload,
+        prefer="resolution=merge-duplicates,return=minimal",
+    )
+    return {"saved": True, "position_id": position_id}
+
+
+
 def _record_deal(device, body):
     try:
         magic = int(body.get("magic_number", 0))
@@ -603,9 +647,22 @@ def _record_deal(device, body):
             limit="1",
         ),
     )
+    scalp_rows = []
     if not isinstance(execution_rows, list) or not execution_rows:
-        raise RequestError("This MT5 position is not linked to a verified LM Analyzer execution.")
-    stored_symbol = re.sub(r"[^A-Z0-9]", "", str(execution_rows[0].get("symbol", "")).upper())
+        scalp_rows = _db_request(
+            "GET",
+            _query(
+                "lm_mt5_scalp_trades",
+                select="id,symbol,status",
+                device_id="eq." + str(device["id"]),
+                position_id="eq." + str(position_id),
+                limit="1",
+            ),
+        )
+    if (not isinstance(execution_rows, list) or not execution_rows) and (not isinstance(scalp_rows, list) or not scalp_rows):
+        raise RequestError("This MT5 position is not linked to a verified LM AUTO TRADER execution.")
+    matched_row = execution_rows[0] if isinstance(execution_rows, list) and execution_rows else scalp_rows[0]
+    stored_symbol = re.sub(r"[^A-Z0-9]", "", str(matched_row.get("symbol", "")).upper())
     actual_symbol = re.sub(r"[^A-Z0-9]", "", symbol.upper())
     if not stored_symbol or not actual_symbol.startswith(stored_symbol):
         raise RequestError("MT5 deal symbol does not match the linked LM Analyzer signal.")
@@ -766,6 +823,16 @@ def _dashboard_for_user(user):
             limit="30",
         ),
     )
+    scalp_trades = _db_request(
+        "GET",
+        _query(
+            "lm_mt5_scalp_trades",
+            select="position_id,order_ticket,symbol,direction,requested_volume,filled_volume,entry_price,stop_loss,take_profit,initial_risk_distance,status,created_at,updated_at",
+            device_id="eq." + str(device["id"]),
+            order="created_at.desc",
+            limit="20",
+        ),
+    )
     return {
         "connected": True,
         "telemetry_status": telemetry_status,
@@ -774,6 +841,7 @@ def _dashboard_for_user(user):
         "open_positions": (snapshot or {}).get("positions") or [],
         "executions": executions if isinstance(executions, list) else [],
         "recent_deals": deals if isinstance(deals, list) else [],
+        "scalp_trades": scalp_trades if isinstance(scalp_trades, list) else [],
     }
 
 def _revoke_user_devices(user):
@@ -843,6 +911,8 @@ class handler(BaseHTTPRequestHandler):
                 json_response(self, 200, _record_deal(device, body))
             elif action == "snapshot":
                 json_response(self, 200, _record_account_snapshot(device, body))
+            elif action == "scalp_trade":
+                json_response(self, 200, _record_scalp_trade(device, body))
             else:
                 json_response(self, 400, {"error": "Unknown MT5 action."})
         except RequestError as exc:
