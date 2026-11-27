@@ -137,7 +137,7 @@ class MT5DashboardTelemetryTests(unittest.TestCase):
             "initial_risk_distance": 5.0,
         }
         result = _record_scalp_trade(self.device, body)
-        self.assertEqual(result, {"saved": True, "position_id": 200})
+        self.assertEqual(result, {"saved": True, "position_id": 200, "existing": False})
         args = db_request.call_args
         self.assertEqual(args.args[0], "POST")
         self.assertIn("lm_mt5_scalp_trades", args.args[1])
