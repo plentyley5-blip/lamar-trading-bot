@@ -13,9 +13,7 @@ security.verify_access_token = lambda token: {"id": "test-user"}
 sys.modules["api"] = api
 sys.modules["api.user_security"] = security
 
-backend_path = Path(__file__).resolve().parent.parent / "api" / "support_chat.py"
-if not backend_path.exists():
-    backend_path = Path(__file__).resolve().parent / "api" / "support_chat.py"
+backend_path = Path(__file__).resolve().parent.parent / "handlers" / "support_chat.py"
 spec = importlib.util.spec_from_file_location("support_chat_under_test", backend_path)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
