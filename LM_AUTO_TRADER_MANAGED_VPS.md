@@ -5,8 +5,9 @@
 - Integrated into LM Analyzer as a separate paid product.
 - Managed Windows VPS hosting is included in the LM AUTO TRADER subscription.
 - Initial instruments: XAUUSD and major forex pairs.
-- Billing periods: monthly, 3 months, and 6 months.
-- Demo and live account modes are supported in the product design. Demo is the validation default; live requires separate user authorization and a server-side feature gate.
+- Billing periods and approved USD pricing: monthly $49.99; 3 months $125.99 (16% off); 6 months $249.99 (17% off).
+- Google Play Billing is the intended provider. Purchase verification and plan activation remain paused until the Google Play developer account is available.
+- Demo and live account modes are supported. Linking an account never starts trading; only the signed-in account owner pressing Start may activate that account's session.
 
 ## Implemented in this branch
 
@@ -16,7 +17,12 @@
 4. The backend retains only positions whose magic number equals `26112701`, so unrelated/manual positions are not presented as LM AUTO TRADER positions.
 5. `mt5/LM_AUTO_TRADER.mq5` sends account telemetry every EA timer cycle and syncs deal history as before.
 6. EA removal disables server-side execution; ordinary terminal reinitialization no longer sends a false OFF command.
-7. `sql/lm_auto_trader_managed_vps.sql` adds account snapshots, VPS assignment metadata, a separate subscription catalog, and independent LM AUTO TRADER entitlements. Prices are deliberately NULL and plans disabled until commercial prices are approved.
+7. `sql/lm_auto_trader_managed_vps.sql` adds account snapshots, VPS assignment metadata, and independent AUTO TRADER entitlements.
+8. `handlers/lm_auto_trader_ai.py` is a separate Gemini market-decision module. It receives numerical broker M1/M5 OHLC data, not uploaded screenshots or `analysis_jobs`.
+9. `sql/lm_auto_trader_ai_sessions_billing.sql` adds per-device market data, trading sessions, AI command queue, daily risk state, equity risk tiers, purchase-token metadata, and the approved plan catalog.
+10. `handlers/mt5_trader.py` now exposes authenticated Start/Stop/status actions, receives broker-market data, runs a per-account AI cycle when MT5 polls, validates risk conditions, queues approved commands, and records command execution reports.
+11. The dashboard API response includes session state, AI decision history, and broker market-data freshness.
+12. Prices are saved in code, but plans remain disabled. Google Play verification is intentionally not active yet.
 
 ## API contract
 
@@ -57,38 +63,43 @@ This branch is the telemetry and schema foundation. It does **not** yet provisio
 6. Add server-side subscription entitlement checks to link, enable, and provision actions. The new plans are inactive until prices and payment flow are approved.
 7. Add a per-account kill switch, disconnect/revoke workflow, stale-heartbeat alerts, and safe behavior when the VPS is offline.
 
+## Independent AI pipeline — current boundary
+
+The backend path is independent from LM Analyzer chart analysis:
+
+1. The linked MT5 terminal uploads broker M1/M5 candles and quotes to `market_data`.
+2. The MT5 poll endpoint checks the linked device's own active session and entitlement.
+3. Gemini analyses those broker candles per linked account and returns BUY, SELL, or WAIT with two separate confirmations.
+4. The backend checks account equity tier, spread, entry deviation, stop/target geometry, minimum reward/risk, daily loss, drawdown, open positions, and trade count.
+5. Valid decisions are written to that account's expiring AI command queue. The dashboard API can show those decisions.
+6. The intended terminal adapter must consume AI commands, size against broker tick value/volume/margin, execute, and report fills. That terminal adapter is not complete in this branch.
+
+**Critical:** The existing `mt5/LM_AUTO_TRADER.mq5` has not yet been converted to upload M1/M5 data or consume the new `AI_CMD` protocol. It still contains the previous local EMA/RSI scalping engine and optional legacy chart-signal client. Therefore the branch is a backend foundation, not a complete or testable live-trading chain. Do not attach this version and expect it to execute the new backend AI decisions.
+
 ## Safety gates
 
-- Demo is the default account mode.
-- `LM_MT5_LIVE_TRADING_ENABLED` remains unset/false.
-- EA `InpAllowLiveTrading` remains false by default.
-- No automatic live activation or risk-limit bypass is permitted.
+- Account linking leaves the session stopped.
+- Start requires fresh terminal telemetry and fresh per-account broker candles.
+- Start is account-specific and is authorized by an authenticated LM Analyzer session.
+- Stop cancels queued commands and disables new entries; the terminal must continue protective management of open positions.
+- Live mode is not globally disabled by the backend design; the explicit Start action is the user's authorization. MT5 terminal trade permissions and broker checks still apply.
+- Risk settings are server-owned, but broker-side volume, margin, stop-distance, and quote validation must also run inside MT5.
+- Never claim a trade was executed until a broker fill is confirmed and reported.
 - A position's broker-side SL must be in place before considering the trade protected against VPS/network outages.
 - Validate terminal reconnect, duplicate execution prevention, order rejection, VPS restart, internet outage, daily-loss stop, and user cancellation before launch.
 
 ## Android source boundary
 
 The current Android `MainActivity.kt` is maintained separately from this backend repository. The saved Android source must be updated as a complete, additive replacement after the secure VPS provisioning contract and subscription prices are finalized. Do not replace the existing app with a reduced demo screen.
-## Autonomous scalping strategy port
+## Legacy EA logic — not the new AI execution client
 
-The EA now includes `mt5/LM_SCALPER_ENGINE.mqh`, which ports the previously agreed LM SCALPER v2.00 rules:
+The branch still contains the prior local LM SCALPER M1/M5 code and its existing break-even / trailing / 15-minute time-exit manager. Those local entry rules are not the new backend AI engine. Do not rely on them as the implementation of this new pipeline.
 
-- M1 EMA 9/21 fresh closed-bar crossover.
-- M5 EMA 9/21 directional confirmation.
-- M1 RSI(14): BUY at or above 52; SELL at or below 48.
-- M1 ATR(14): stop at 1.5 ATR; target at 1.5R.
-- Risk cap 0.50% per trade, with the existing volume/margin safety buffer and 0.10 lot cap.
-- Maximum two LM AUTO TRADER positions globally and one position per symbol.
-- FX spread ceiling 30 points; XAUUSD ceiling 100 points.
-- High-impact MT5 economic-calendar event block within 20 minutes before/after the event. Calendar times use broker trade-server time; if calendar lookup fails, new entries fail closed.
-- Cost-aware profit protection: once a position reaches +0.25R, move its stop beyond entry by the current spread plus two points where broker stop-distance rules permit; tighten the ATR(14) trail from +0.50R.
-- If a position has at least +0.10R open profit but a protective stop cannot be placed, close it on a confirmed M1 candle close across EMA 9 against the position. This is a momentum-protection exit; a fresh opposite entry still requires a new M1 crossover, M5 confirmation, RSI confirmation, and all risk/news checks.
-- Maximum holding time 15 minutes (hard time-based exit for multi-scalping).
-- 2% daily loss stop and the existing maximum-three-entries-per-day safety cap.
-- Persistent $50 equity target above the terminal's cycle baseline. On target, LM AUTO TRADER closes only positions with its own magic number and locks that cycle. Increment `InpProfitTargetCycle` to start a new cycle.
+## Test and activation boundary
 
-Autonomous scalping is enabled as the EA strategy mode, but `InpEnableAutoTrading` remains false by default. The legacy LM Analyzer signal executor is retained behind `InpUseLMAnalyzerSignals=false` so it does not compete with the scalper.
-
-## Strategy verification still required
-
-The MQL5 source has not yet been compiled in MetaEditor in this workflow. Compile the EA and included `.mqh` on the target MT5 build, then test on demo across all eight symbols, including spread/news blocks, order rejections, stop modifications, max holding exit, daily loss stop, and the persistent profit lock. The $50 target is denominated in account currency in this initial EA implementation; only USD-denominated accounts should use the literal $50 setting until currency conversion is implemented.
+- The Supabase migration is committed in the feature branch but has not been applied to the live project.
+- Google Play product verification is paused; the plans remain disabled. The owner test bypass is the only intended path for internal backend testing.
+- The MQL5 adapter that sends broker candles, parses AI commands, places approved trades and reports broker fills has not been delivered or compiled.
+- No end-to-end MT5 test has passed. No demo or live order should be attempted with this branch as the new AI system.
+- Managed Windows VPS provisioning is also not implemented.
+- Before any release, compile the MQL5 EA in MetaEditor, run unit/integration tests against a non-production database, then complete a controlled demo test covering account isolation, duplicate prevention, Start/Stop, stale data, risk locks, spread/news blocks, broker rejection, fill reporting, break-even, trailing, terminal restart and network loss.
