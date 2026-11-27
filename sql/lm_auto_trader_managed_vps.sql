@@ -138,6 +138,6 @@ comment on table public.lm_mt5_account_snapshots is
 comment on table public.lm_mt5_vps_instances is
     'Managed Windows VPS assignment metadata. Credentials and plaintext agent secrets must never be stored here.';
 comment on table public.lm_auto_trader_plans is
-    'Separate LM AUTO TRADER subscription catalog. Prices and activation remain disabled until commercial pricing is approved.';
+    'Separate LM AUTO TRADER subscription catalog. Final USD prices are set in the follow-up billing migration; plan activation waits for Google Play product verification.';
 comment on table public.lm_auto_trader_subscriptions is
     'Independent LM AUTO TRADER subscription entitlement; separate from ordinary LM Analyzer subscriptions.';
