@@ -81,7 +81,8 @@ The EA now includes `mt5/LM_SCALPER_ENGINE.mqh`, which ports the previously agre
 - Maximum two LM AUTO TRADER positions globally and one position per symbol.
 - FX spread ceiling 30 points; XAUUSD ceiling 100 points.
 - High-impact MT5 economic-calendar event block within 20 minutes before/after the event. Calendar times use broker trade-server time; if calendar lookup fails, new entries fail closed.
-- Break-even at 1R plus two points; ATR(14) trailing starts at 1.2R.
+- Cost-aware profit protection: once a position reaches +0.25R, move its stop beyond entry by the current spread plus two points where broker stop-distance rules permit; tighten the ATR(14) trail from +0.50R.
+- If a position has at least +0.10R open profit but a protective stop cannot be placed, close it on a confirmed M1 candle close across EMA 9 against the position. This is a momentum-protection exit; a fresh opposite entry still requires a new M1 crossover, M5 confirmation, RSI confirmation, and all risk/news checks.
 - Maximum holding time 15 minutes (hard time-based exit for multi-scalping).
 - 2% daily loss stop and the existing maximum-three-entries-per-day safety cap.
 - Persistent $50 equity target above the terminal's cycle baseline. On target, LM AUTO TRADER closes only positions with its own magic number and locks that cycle. Increment `InpProfitTargetCycle` to start a new cycle.
