@@ -596,6 +596,63 @@ void PollServer()
    }
 }
 
+
+void SyncAccountSnapshot()
+{
+   if(g_device_token == "") return;
+
+   string positions_json = "";
+   int included = 0;
+   for(int i = PositionsTotal() - 1; i >= 0 && included < 50; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+      if(magic != InpMagicNumber) continue;
+
+      ulong position_id = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      ENUM_POSITION_TYPE position_type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      string direction = (position_type == POSITION_TYPE_BUY ? "BUY" : "SELL");
+      double volume = PositionGetDouble(POSITION_VOLUME);
+      double price_open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double stop_loss = PositionGetDouble(POSITION_SL);
+      double take_profit = PositionGetDouble(POSITION_TP);
+      double profit = PositionGetDouble(POSITION_PROFIT);
+      double swap = PositionGetDouble(POSITION_SWAP);
+      datetime opened_at = (datetime)PositionGetInteger(POSITION_TIME);
+
+      if(included > 0) positions_json += ",";
+      positions_json += StringFormat(
+         "{\"ticket\":%I64u,\"position_id\":%I64u,\"symbol\":\"%s\",\"direction\":\"%s\","
+         "\"volume\":%.8f,\"price_open\":%.10f,\"stop_loss\":%.10f,\"take_profit\":%.10f,"
+         "\"profit\":%.8f,\"swap\":%.8f,\"magic_number\":%I64u,\"opened_at_epoch\":%I64d}",
+         ticket, position_id, JsonEscape(symbol), direction, volume, price_open,
+         stop_loss, take_profit, profit, swap, magic, (long)opened_at);
+      included++;
+   }
+
+   string body = StringFormat(
+      "{\"action\":\"snapshot\",\"account_login\":%I64d,\"broker_server\":\"%s\","
+      "\"balance\":%.8f,\"equity\":%.8f,\"floating_profit\":%.8f,\"credit\":%.8f,"
+      "\"margin\":%.8f,\"free_margin\":%.8f,\"margin_level\":%.8f,"
+      "\"currency\":\"%s\",\"leverage\":%I64d,\"terminal_connected\":%s,"
+      "\"terminal_build\":%I64d,\"positions\":[%s]}",
+      AccountInfoInteger(ACCOUNT_LOGIN), JsonEscape(AccountInfoString(ACCOUNT_SERVER)),
+      AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY),
+      AccountInfoDouble(ACCOUNT_PROFIT), AccountInfoDouble(ACCOUNT_CREDIT),
+      AccountInfoDouble(ACCOUNT_MARGIN), AccountInfoDouble(ACCOUNT_MARGIN_FREE),
+      AccountInfoDouble(ACCOUNT_MARGIN_LEVEL), JsonEscape(AccountInfoString(ACCOUNT_CURRENCY)),
+      AccountInfoInteger(ACCOUNT_LEVERAGE),
+      (TerminalInfoInteger(TERMINAL_CONNECTED) ? "true" : "false"),
+      TerminalInfoInteger(TERMINAL_BUILD), positions_json);
+
+   string response;
+   int status = HttpRequest("POST", "", body, g_device_token, response);
+   if(status != 200)
+      Print("LM AUTO TRADER: Account telemetry sync failed. HTTP ", status, " ", response);
+}
+
 void SyncRecentDeals()
 {
    if(g_device_token == "") return;
@@ -680,8 +737,9 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
-   if(g_device_token != "")
+   if(g_device_token != "" && reason == REASON_REMOVE)
    {
+      // Disable server execution only when the user deliberately removes the EA.
       string body = StringFormat(
          "{\"action\":\"configure\",\"account_login\":%I64d,\"broker_server\":\"%s\","
          "\"auto_trade_enabled\":false,\"risk_per_trade\":%.4f,\"max_daily_loss_percent\":%.4f,"
@@ -703,6 +761,7 @@ void OnTimer()
    if(g_device_token == "") return;
    if(TimeCurrent() - g_last_configure > 60) ConfigureServer();
    PollServer();
+   SyncAccountSnapshot();
    SyncRecentDeals();
 }
 
