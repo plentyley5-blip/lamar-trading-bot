@@ -1463,6 +1463,27 @@ def _dashboard_for_user(user):
             limit="20",
         ),
     )
+    sessions = _db_request(
+        "GET",
+        _query(
+            "lm_mt5_trading_sessions",
+            select="id,status,account_mode,started_at,stopped_at,last_decision_at,last_heartbeat_at,stop_reason,risk_config,updated_at",
+            device_id="eq." + str(device["id"]),
+            user_id="eq." + str(user["id"]),
+            limit="1",
+        ),
+    )
+    ai_decisions = _db_request(
+        "GET",
+        _query(
+            "lm_mt5_ai_decisions",
+            select="id,symbol,decision,confidence,entry_price,stop_loss,take_profit,rationale,status,created_at,completed_at,execution_result",
+            device_id="eq." + str(device["id"]),
+            order="created_at.desc",
+            limit="20",
+        ),
+    )
+    market = _latest_market_data(device)
     return {
         "connected": True,
         "telemetry_status": telemetry_status,
@@ -1472,6 +1493,9 @@ def _dashboard_for_user(user):
         "executions": executions if isinstance(executions, list) else [],
         "recent_deals": deals if isinstance(deals, list) else [],
         "scalp_trades": scalp_trades if isinstance(scalp_trades, list) else [],
+        "session": sessions[0] if isinstance(sessions, list) and sessions else None,
+        "ai_decisions": ai_decisions if isinstance(ai_decisions, list) else [],
+        "market_data_updated_at": market.get("updated_at") if market else None,
     }
 
 def _revoke_user_devices(user):
