@@ -10,7 +10,9 @@ from handlers.mt5_trader import (
     RequestError,
     _eligible_signal,
     _number,
+    _record_account_snapshot,
     _record_deal,
+    _set_user_session,
     _single_price,
 )
 
@@ -75,6 +77,79 @@ class MT5SignalValidationTests(unittest.TestCase):
     def test_integer_settings_reject_fractional_values(self):
         with self.assertRaises(RequestError):
             _number(1.5, "max_open_positions", 1, 3, integer=True)
+
+    @patch("handlers.mt5_trader._db_request")
+    def test_account_snapshot_saves_validated_live_metrics_and_positions(self, db_request):
+        db_request.return_value = [{"id": "device-1"}]
+        device = {
+            "id": "device-1", "user_id": "user-1",
+            "account_login": 123456, "broker_server": "Demo-Server",
+        }
+        body = {
+            "currency": "USD", "balance": 1000, "equity": 1012.5,
+            "margin": 30, "free_margin": 982.5, "floating_profit": 12.5,
+            "ea_auto_trade_enabled": True,
+            "positions": [{
+                "ticket": 123, "symbol": "XAUUSDm", "side": "BUY",
+                "volume": 0.01, "open_price": 2300.0, "stop_loss": 2290.0,
+                "take_profit": 2320.0, "profit": 12.5, "swap": 0,
+                "magic_number": 26112701, "opened_at_epoch": 1790000000,
+            }],
+        }
+        result = _record_account_snapshot(device, body)
+        self.assertTrue(result["saved"])
+        self.assertEqual(result["position_count"], 1)
+        payload = db_request.call_args.args[2]
+        self.assertEqual(payload["account_balance"], 1000)
+        self.assertEqual(payload["account_positions"][0]["symbol"], "XAUUSDm")
+        self.assertTrue(payload["account_ea_auto_trade_enabled"])
+
+    @patch("handlers.mt5_trader._db_request")
+    def test_account_snapshot_rejects_invalid_position_direction(self, db_request):
+        device = {"id": "device-1", "user_id": "user-1"}
+        body = {
+            "currency": "USD", "balance": 1000, "equity": 1000,
+            "positions": [{
+                "ticket": 123, "symbol": "EURUSD", "side": "UNKNOWN",
+                "volume": 0.01, "open_price": 1.1,
+            }],
+        }
+        with self.assertRaises(RequestError):
+            _record_account_snapshot(device, body)
+        db_request.assert_not_called()
+
+    @patch("handlers.mt5_trader._db_request")
+    def test_session_start_preserves_saved_risk_settings(self, db_request):
+        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        db_request.side_effect = [
+            [{
+                "id": "device-1", "account_login": 123456, "broker_server": "Demo-Server",
+                "account_mode": "demo", "risk_per_trade": 0.4,
+                "max_daily_loss_percent": 3.0, "max_open_positions": 2,
+                "max_trades_per_day": 5, "max_lot": 0.2, "min_confidence": 82,
+                "max_signal_age_minutes": 12, "max_entry_deviation_points": 60,
+                "max_spread_points": 80, "account_snapshot_at": now,
+                "account_ea_auto_trade_enabled": True,
+            }],
+            None,
+        ]
+        result = _set_user_session({"id": "user-1"}, {"device_id": "device-1"}, True)
+        self.assertEqual(result["session"]["status"], "active")
+        update = db_request.call_args_list[1].args[2]
+        self.assertTrue(update["auto_trade_enabled"])
+        self.assertEqual(update["risk_per_trade"], 0.4)
+        self.assertEqual(update["max_open_positions"], 2)
+
+    @patch("handlers.mt5_trader._db_request")
+    def test_session_start_rejects_stale_account_snapshot(self, db_request):
+        db_request.return_value = [{
+            "id": "device-1", "account_login": 123456, "broker_server": "Demo-Server",
+            "account_mode": "demo", "account_snapshot_at": "2000-01-01T00:00:00Z",
+            "account_ea_auto_trade_enabled": True,
+        }]
+        with self.assertRaises(RequestError):
+            _set_user_session({"id": "user-1"}, {}, True)
+        self.assertEqual(db_request.call_count, 1)
 
     @patch("handlers.mt5_trader._db_request")
     def test_deal_without_executed_signal_position_is_rejected(self, db_request):

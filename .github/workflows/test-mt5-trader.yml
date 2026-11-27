@@ -1,0 +1,22 @@
+name: MT5 trader unit tests
+
+on:
+  push:
+    branches:
+      - lm-auto-trader-telemetry-release
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  mt5-trader-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run MT5 trader safety tests
+        run: python -m unittest discover -s tests -p "test_mt5_trader.py" -v

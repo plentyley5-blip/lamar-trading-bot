@@ -38,6 +38,7 @@ datetime g_last_deal_time = 0;
 ulong g_last_deal_ticket = 0;
 bool g_server_live_enabled = false;
 datetime g_last_configure = 0;
+datetime g_last_snapshot = 0;
 
 string JsonEscape(string value)
 {
@@ -187,12 +188,12 @@ bool ConfigureServer()
    if(g_device_token == "") return false;
    string body = StringFormat(
       "{\"action\":\"configure\",\"account_login\":%I64d,\"broker_server\":\"%s\","
-      "\"auto_trade_enabled\":%s,\"risk_per_trade\":%.4f,\"max_daily_loss_percent\":%.4f,"
+      "\"risk_per_trade\":%.4f,\"max_daily_loss_percent\":%.4f,"
       "\"max_open_positions\":%d,\"max_trades_per_day\":%d,\"max_lot\":%.4f,"
       "\"min_confidence\":%d,\"max_signal_age_minutes\":%d,"
       "\"max_entry_deviation_points\":%d,\"max_spread_points\":%d}",
       AccountInfoInteger(ACCOUNT_LOGIN), JsonEscape(AccountInfoString(ACCOUNT_SERVER)),
-      (InpEnableAutoTrading ? "true" : "false"), InpRiskPercent, InpMaxDailyLossPercent,
+      InpRiskPercent, InpMaxDailyLossPercent,
       InpMaxOpenPositions, InpMaxTradesPerDay, InpMaximumLot, InpMinimumConfidence,
       InpMaximumSignalAgeMinutes, InpMaxEntryDeviationPoints, InpMaxSpreadPoints);
    string response;
@@ -648,6 +649,70 @@ void SyncRecentDeals()
    if(changed) SaveState();
 }
 
+void SyncAccountSnapshot()
+{
+   if(g_device_token == "") return;
+
+   string positions_json = "[";
+   int included = 0;
+   for(int i = PositionsTotal() - 1; i >= 0 && included < 60; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      long position_type = PositionGetInteger(POSITION_TYPE);
+      string side = (position_type == POSITION_TYPE_BUY ? "BUY" : "SELL");
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      double volume = PositionGetDouble(POSITION_VOLUME);
+      double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
+      double stop_loss = PositionGetDouble(POSITION_SL);
+      double take_profit = PositionGetDouble(POSITION_TP);
+      double profit = PositionGetDouble(POSITION_PROFIT);
+      double swap = PositionGetDouble(POSITION_SWAP);
+      ulong magic_number = (ulong)PositionGetInteger(POSITION_MAGIC);
+      datetime opened_at = (datetime)PositionGetInteger(POSITION_TIME);
+
+      if(included > 0) positions_json += ",";
+      positions_json += StringFormat(
+         "{\"ticket\":%I64u,\"symbol\":\"%s\",\"side\":\"%s\","
+         "\"volume\":%.8f,\"open_price\":%.10f,\"stop_loss\":%.10f,"
+         "\"take_profit\":%.10f,\"profit\":%.8f,\"swap\":%.8f,"
+         "\"magic_number\":%I64u,\"opened_at_epoch\":%I64d}",
+         ticket, JsonEscape(symbol), side, volume, open_price, stop_loss,
+         take_profit, profit, swap, magic_number, (long)opened_at);
+      included++;
+   }
+   positions_json += "]";
+
+   string body = StringFormat(
+      "{\"action\":\"account_snapshot\",\"account_login\":%I64d,"
+      "\"broker_server\":\"%s\",\"currency\":\"%s\","
+      "\"balance\":%.8f,\"equity\":%.8f,\"margin\":%.8f,"
+      "\"free_margin\":%.8f,\"floating_profit\":%.8f,"
+      "\"ea_auto_trade_enabled\":%s,\"positions\":%s}",
+      AccountInfoInteger(ACCOUNT_LOGIN),
+      JsonEscape(AccountInfoString(ACCOUNT_SERVER)),
+      JsonEscape(AccountInfoString(ACCOUNT_CURRENCY)),
+      AccountInfoDouble(ACCOUNT_BALANCE),
+      AccountInfoDouble(ACCOUNT_EQUITY),
+      AccountInfoDouble(ACCOUNT_MARGIN),
+      AccountInfoDouble(ACCOUNT_MARGIN_FREE),
+      AccountInfoDouble(ACCOUNT_PROFIT),
+      (InpEnableAutoTrading ? "true" : "false"),
+      positions_json);
+
+   string response;
+   int status = HttpRequest("POST", "", body, g_device_token, response);
+   if(status == 200)
+   {
+      g_last_snapshot = TimeCurrent();
+   }
+   else
+   {
+      Print("LM AUTO TRADER: Account telemetry sync failed. HTTP ", status, ". ", response);
+   }
+}
+
+
 int OnInit()
 {
    if(InpRiskPercent < 0.1 || InpRiskPercent > 1.0 ||
@@ -704,6 +769,8 @@ void OnTimer()
    if(TimeCurrent() - g_last_configure > 60) ConfigureServer();
    PollServer();
    SyncRecentDeals();
+   if(g_last_snapshot == 0 || TimeCurrent() - g_last_snapshot >= 15)
+      SyncAccountSnapshot();
 }
 
 void OnTick()
