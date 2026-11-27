@@ -271,66 +271,83 @@ def _decode_job_result(encoded):
     return result if isinstance(result, dict) else None
 
 
-def _create_link_code(user):
-    code = secrets.token_urlsafe(LINK_CODE_BYTES)
-    code_hash = _token_hash(code)
-    expires = datetime.now(timezone.utc) + timedelta(seconds=LINK_CODE_TTL_SECONDS)
-    _db_request(
-        "POST",
-        "/rest/v1/lm_mt5_link_codes",
-        {
-            "user_id": str(user["id"]),
-            "code_hash": code_hash,
-            "expires_at": expires.isoformat(timespec="seconds").replace("+00:00", "Z"),
+def _call_mt5_connector(payload):
+    """Forward MT5 credentials only to the configured Windows connector over HTTPS."""
+    connector_url = os.environ.get("LM_MT5_CONNECTOR_URL", "").strip()
+    connector_token = os.environ.get("LM_MT5_CONNECTOR_TOKEN", "").strip()
+    if not connector_url or not connector_token:
+        raise RuntimeError(
+            "Direct MT5 password authentication is not configured yet. "
+            "The Windows MT5 connector service must be configured before accounts can connect."
+        )
+    parsed = urllib.parse.urlsplit(connector_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise RuntimeError("The MT5 connector must use a valid HTTPS URL.")
+    request = urllib.request.Request(
+        connector_url,
+        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + connector_token,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
         },
-        prefer="return=minimal",
+        method="POST",
     )
-    return {
-        "link_code": code,
-        "expires_in_seconds": LINK_CODE_TTL_SECONDS,
-        "expires_at": expires.isoformat(timespec="seconds").replace("+00:00", "Z"),
-        "instructions": "Enter this one-time code in LM AUTO TRADER inside MT5. It expires after 15 minutes and can be used once.",
-    }
-
-
-def _link_terminal(body):
-    code = str(body.get("link_code", "")).strip()
-    if len(code) < 40 or len(code) > 128:
-        raise RequestError("Generate a valid one-time MT5 link code in LM Analyzer.")
     try:
-        login_value = float(body.get("account_login"))
-        if not login_value.is_integer():
-            raise ValueError("integer required")
-        account_login = int(login_value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise RequestError("Invalid MT5 account number.") from exc
-    if account_login <= 0:
-        raise RequestError("Invalid MT5 account number.")
-    broker_server = str(body.get("broker_server", "")).strip()[:120]
-    if not broker_server:
-        raise RequestError("MT5 broker server is required.")
-    account_mode = str(body.get("account_mode", "")).strip().lower()
-    if account_mode not in ("demo", "real", "contest"):
-        raise RequestError("Invalid MT5 account type.")
+        with urllib.request.urlopen(request, timeout=60) as response:
+            raw = response.read(128 * 1024).decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        # Do not pass connector response bodies through; they may contain sensitive data.
+        raise RequestError("The MT5 connector rejected the account request.") from exc
+    except Exception as exc:
+        raise RuntimeError("The Windows MT5 connector is unavailable.") from exc
+    try:
+        result = json.loads(raw)
+    except Exception as exc:
+        raise RuntimeError("The MT5 connector returned an invalid response.") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError("The MT5 connector returned an invalid response.")
+    return result
 
-    code_hash = _token_hash(code)
-    code_rows = _db_request(
-        "PATCH",
-        _query(
-            "lm_mt5_link_codes",
-            code_hash="eq." + code_hash,
-            consumed_at="is.null",
-            expires_at="gt." + _now_iso(),
-            select="id,user_id",
-        ),
-        {"consumed_at": _now_iso()},
-        prefer="return=representation",
-    )
-    if not isinstance(code_rows, list) or not code_rows:
-        raise RequestError("This MT5 link code is invalid, expired or already used.")
-    user_id = str(code_rows[0]["user_id"])
-    token = secrets.token_urlsafe(DEVICE_TOKEN_BYTES)
-    token_hash = _token_hash(token)
+
+def _connect_mt5_credentials(user, body):
+    broker_name = str(body.get("broker_name", "")).strip()[:80]
+    broker_server = str(body.get("broker_server", "")).strip()[:120]
+    account_password = str(body.get("account_password", ""))
+    raw_login = str(body.get("account_login", "")).strip()
+    if not broker_name:
+        raise RequestError("Enter the broker name.")
+    if not broker_server:
+        raise RequestError("Enter the exact MT5 server for this account.")
+    if not re.fullmatch(r"[0-9]{1,24}", raw_login):
+        raise RequestError("Enter a valid MT5 account number or login.")
+    account_login = int(raw_login)
+    if account_login <= 0:
+        raise RequestError("Enter a valid MT5 account number or login.")
+    if not account_password or len(account_password) > 128:
+        raise RequestError("Enter the MT5 trading password.")
+
+    # The password is forwarded in memory to the Windows MT5 connector.
+    # It is never written to lm_mt5_devices, logs, or another Supabase table.
+    connection_id = secrets.token_urlsafe(24)
+    auth_result = _call_mt5_connector({
+        "action": "authenticate",
+        "connection_id": connection_id,
+        "broker_name": broker_name,
+        "broker_server": broker_server,
+        "account_login": account_login,
+        "account_password": account_password,
+    })
+    if auth_result.get("authenticated") is not True:
+        raise RequestError("MT5 authentication failed. Check the broker, server, account login and password.")
+    if str(auth_result.get("account_login", "")) != str(account_login):
+        raise RequestError("The broker authenticated a different account number.")
+    if str(auth_result.get("broker_server", "")).strip().lower() != broker_server.lower():
+        raise RequestError("The broker authenticated a different MT5 server.")
+    account_mode = str(auth_result.get("account_mode", "demo")).strip().lower()
+    if account_mode not in ("demo", "real", "contest"):
+        raise RuntimeError("The MT5 connector did not return a valid account type.")
+
     existing = _db_request(
         "GET",
         _query(
@@ -341,23 +358,27 @@ def _link_terminal(body):
             limit="1",
         ),
     )
+    if isinstance(existing, list) and existing:
+        current = existing[0]
+        if str(current.get("user_id")) != str(user["id"]):
+            raise RequestError("This MT5 account is already connected to another LM Analyzer user.")
+    token = secrets.token_urlsafe(DEVICE_TOKEN_BYTES)
     device_values = {
-        "user_id": user_id,
+        "user_id": str(user["id"]),
         "account_login": account_login,
+        "broker_name": broker_name,
         "broker_server": broker_server,
         "account_mode": account_mode,
-        "token_hash": token_hash,
+        "token_hash": _token_hash(token),
         "auto_trade_enabled": False,
         "revoked_at": None,
         "last_seen_at": _now_iso(),
+        "updated_at": _now_iso(),
     }
     if isinstance(existing, list) and existing:
-        current = existing[0]
-        if str(current.get("user_id")) != user_id:
-            raise RequestError("This MT5 account is already linked to another LM Analyzer user.")
         rows = _db_request(
             "PATCH",
-            _query("lm_mt5_devices", id="eq." + str(current["id"])),
+            _query("lm_mt5_devices", id="eq." + str(existing[0]["id"])),
             device_values,
             prefer="return=representation",
         )
@@ -369,14 +390,38 @@ def _link_terminal(body):
             prefer="return=representation",
         )
     if not isinstance(rows, list) or not rows:
-        raise RuntimeError("MT5 account link was not saved.")
-    return {
+        raise RuntimeError("The authenticated MT5 account could not be registered.")
+    device_id = str(rows[0]["id"])
+
+    activation = _call_mt5_connector({
+        "action": "activate",
+        "connection_id": connection_id,
+        "device_id": device_id,
         "device_token": token,
+        "user_id": str(user["id"]),
         "account_login": account_login,
+        "broker_name": broker_name,
         "broker_server": broker_server,
+        "account_mode": account_mode,
+        "backend_url": "https://lamar-trading-bot.vercel.app/api/mt5_trader",
+    })
+    if activation.get("ready") is not True:
+        _db_request(
+            "PATCH",
+            _query("lm_mt5_devices", id="eq." + device_id),
+            {"revoked_at": _now_iso(), "auto_trade_enabled": False},
+            prefer="return=minimal",
+        )
+        raise RuntimeError("MT5 credentials were accepted, but the account connector did not finish starting.")
+    return {
+        "connected": True,
+        "device_id": device_id,
+        "account_login": account_login,
+        "broker_name": broker_name,
+        "broker_server": broker_server,
+        "account_mode": account_mode,
         "auto_trade_enabled": False,
-        "live_trading_enabled": False,
-        "message": "MT5 account linked. The independent AI trading session remains STOPPED until you press Start in LM Analyzer.",
+        "message": "MT5 account authenticated successfully. Waiting for the terminal to send its first live account update.",
     }
 
 
@@ -1424,7 +1469,7 @@ def _dashboard_for_user(user):
         "GET",
         _query(
             "lm_mt5_devices",
-            select="id,account_login,broker_server,account_mode,auto_trade_enabled,risk_per_trade,max_daily_loss_percent,max_open_positions,max_trades_per_day,max_lot,min_confidence,max_signal_age_minutes,last_seen_at,created_at",
+            select="id,account_login,broker_name,broker_server,account_mode,auto_trade_enabled,risk_per_trade,max_daily_loss_percent,max_open_positions,max_trades_per_day,max_lot,min_confidence,max_signal_age_minutes,last_seen_at,created_at",
             user_id="eq." + str(user["id"]),
             revoked_at="is.null",
             order="created_at.desc",
@@ -1558,16 +1603,13 @@ class handler(BaseHTTPRequestHandler):
         try:
             body = _json_body(self)
             action = str(body.get("action", "")).strip().lower()
-            if action == "create_link_code":
+            if action == "connect_credentials":
                 user = verify_access_token(extract_bearer_token(self))
-                json_response(self, 200, _create_link_code(user))
+                json_response(self, 200, _connect_mt5_credentials(user, body))
                 return
             if action == "dashboard":
                 user = verify_access_token(extract_bearer_token(self))
                 json_response(self, 200, _dashboard_for_user(user))
-                return
-            if action == "link":
-                json_response(self, 200, _link_terminal(body))
                 return
             if action == "revoke_all":
                 user = verify_access_token(extract_bearer_token(self))
