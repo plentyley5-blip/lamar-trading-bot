@@ -28,7 +28,7 @@ from api.user_security import (
     verify_access_token,
 )
 
-MAX_BODY_BYTES = 32 * 1024
+MAX_BODY_BYTES = 64 * 1024
 DEVICE_TOKEN_BYTES = 48
 LINK_CODE_BYTES = 32
 LINK_CODE_TTL_SECONDS = 15 * 60
@@ -376,7 +376,7 @@ def _link_terminal(body):
         "broker_server": broker_server,
         "auto_trade_enabled": False,
         "live_trading_enabled": False,
-        "message": "MT5 account linked. Auto trading remains OFF until enabled in the EA settings.",
+        "message": "MT5 account linked. The independent AI trading session remains STOPPED until you press Start in LM Analyzer.",
     }
 
 
@@ -457,33 +457,630 @@ def _load_candidates(device):
     return candidates
 
 
+
+
+def _user_is_owner(user_id):
+    """Resolve OWNER_EMAIL server-side; no client-provided owner flags are trusted."""
+    owner_email = os.environ.get("OWNER_EMAIL", "").strip().lower()
+    if not owner_email:
+        return False
+    url = get_supabase_url().rstrip("/") + "/auth/v1/admin/users/" + urllib.parse.quote(str(user_id), safe="")
+    key = get_supabase_service_key()
+    request = urllib.request.Request(url, headers={
+        "apikey": key, "Authorization": "Bearer " + key, "Accept": "application/json"
+    }, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            data = json.loads(response.read().decode("utf-8", errors="replace"))
+        email = str((data or {}).get("email", "")).strip().lower()
+        return bool(email and hmac.compare_digest(email, owner_email))
+    except Exception:
+        return False
+
+
+def _has_auto_trader_access(user_id):
+    """Only active AUTO TRADER entitlements unlock customers; OWNER_EMAIL is test bypass."""
+    if _user_is_owner(user_id):
+        return True, "owner_test_bypass"
+    rows = _db_request("GET", _query(
+        "lm_auto_trader_subscriptions",
+        select="id,plan_key,expires_at",
+        user_id="eq." + str(user_id),
+        status="eq.active",
+        expires_at="gt." + _now_iso(),
+        order="expires_at.desc",
+        limit="1",
+    ))
+    if isinstance(rows, list) and rows:
+        return True, "subscription"
+    return False, "subscription_required"
+
+
+def _iso_age_seconds(value):
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - parsed).total_seconds())
+    except (TypeError, ValueError):
+        return 10 ** 9
+
+
+def _read_user_device(user, device_id):
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", str(device_id or "")):
+        raise RequestError("Select a valid linked MT5 account.")
+    rows = _db_request("GET", _query(
+        "lm_mt5_devices",
+        select="id,user_id,account_login,broker_server,account_mode,auto_trade_enabled,revoked_at",
+        id="eq." + str(device_id),
+        user_id="eq." + str(user["id"]),
+        revoked_at="is.null",
+        limit="1",
+    ))
+    if not isinstance(rows, list) or not rows:
+        raise RequestError("This MT5 account is not linked to your signed-in account.")
+    return rows[0]
+
+
+def _latest_snapshot(device):
+    rows = _db_request("GET", _query(
+        "lm_mt5_account_snapshots",
+        select="balance,equity,floating_profit,free_margin,margin,margin_level,currency,leverage,terminal_connected,positions,updated_at,account_mode",
+        device_id="eq." + str(device["id"]),
+        limit="1",
+    ))
+    return rows[0] if isinstance(rows, list) and rows else None
+
+
+def _latest_market_data(device):
+    rows = _db_request("GET", _query(
+        "lm_mt5_market_data",
+        select="market_data,updated_at,account_login,broker_server",
+        device_id="eq." + str(device["id"]),
+        limit="1",
+    ))
+    return rows[0] if isinstance(rows, list) and rows else None
+
+
+def _load_risk_tier(equity):
+    rows = _db_request("GET", _query(
+        "lm_auto_trader_risk_tiers",
+        select="tier_key,min_equity,max_equity,max_open_positions,max_lot,risk_per_trade_percent",
+        order="min_equity.desc",
+        limit="10",
+    ))
+    for tier in rows if isinstance(rows, list) else []:
+        try:
+            minimum = float(tier.get("min_equity", 0))
+            maximum = tier.get("max_equity")
+            if equity >= minimum and (maximum is None or equity < float(maximum)):
+                return tier
+        except (TypeError, ValueError):
+            continue
+    return {
+        "tier_key": "under_50", "max_open_positions": 1,
+        "max_lot": 0.01, "risk_per_trade_percent": 0.50
+    }
+
+
+def _ensure_daily_risk(device, equity, risk_config):
+    today = datetime.now(timezone.utc).date().isoformat()
+    rows = _db_request("GET", _query(
+        "lm_mt5_daily_risk_state",
+        select="device_id,trading_day,starting_equity,realized_pnl,peak_equity,daily_loss_locked,drawdown_locked,trades_opened",
+        device_id="eq." + str(device["id"]),
+        trading_day="eq." + today,
+        limit="1",
+    ))
+    if isinstance(rows, list) and rows:
+        state = rows[0]
+    else:
+        payload = {
+            "device_id": str(device["id"]),
+            "trading_day": today,
+            "starting_equity": max(float(equity), 0.01),
+            "realized_pnl": 0,
+            "peak_equity": max(float(equity), 0.01),
+            "daily_loss_locked": False,
+            "drawdown_locked": False,
+            "trades_opened": 0,
+            "updated_at": _now_iso(),
+        }
+        created = _db_request(
+            "POST",
+            "/rest/v1/lm_mt5_daily_risk_state?on_conflict=device_id,trading_day",
+            payload,
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+        state = created[0] if isinstance(created, list) and created else payload
+    peak = max(float(state.get("peak_equity") or 0), float(equity))
+    if peak > float(state.get("peak_equity") or 0):
+        _db_request(
+            "PATCH",
+            _query("lm_mt5_daily_risk_state",
+                   device_id="eq." + str(device["id"]), trading_day="eq." + today),
+            {"peak_equity": peak, "updated_at": _now_iso()},
+            prefer="return=minimal",
+        )
+        state["peak_equity"] = peak
+    start = max(float(state.get("starting_equity") or 0), 0.01)
+    daily_loss = max(0.0, (start - float(equity)) / start * 100.0)
+    drawdown = max(0.0, (peak - float(equity)) / peak * 100.0)
+    daily_limit = float(risk_config.get("max_daily_loss_percent", 2.0))
+    drawdown_limit = float(risk_config.get("max_drawdown_percent", 5.0))
+    if daily_loss >= daily_limit or bool(state.get("daily_loss_locked")):
+        state["daily_loss_locked"] = True
+    if drawdown >= drawdown_limit or bool(state.get("drawdown_locked")):
+        state["drawdown_locked"] = True
+    if state["daily_loss_locked"] or state["drawdown_locked"]:
+        _db_request(
+            "PATCH",
+            _query("lm_mt5_daily_risk_state",
+                   device_id="eq." + str(device["id"]), trading_day="eq." + today),
+            {
+                "daily_loss_locked": bool(state["daily_loss_locked"]),
+                "drawdown_locked": bool(state["drawdown_locked"]),
+                "updated_at": _now_iso(),
+            },
+            prefer="return=minimal",
+        )
+    state["daily_loss_percent"] = daily_loss
+    state["drawdown_percent"] = drawdown
+    return state
+
+
+def _session_start(user, body):
+    device = _read_user_device(user, body.get("device_id"))
+    allowed, access_source = _has_auto_trader_access(str(user["id"]))
+    if not allowed:
+        raise RequestError("An active LM AUTO TRADER subscription is required. Billing verification is not enabled yet.")
+    snapshot = _latest_snapshot(device)
+    market = _latest_market_data(device)
+    if not snapshot or snapshot.get("terminal_connected") is not True or _iso_age_seconds(snapshot.get("updated_at")) > 45:
+        raise RequestError("MT5 must be connected and sending fresh account telemetry before Start.")
+    if not market or _iso_age_seconds(market.get("updated_at")) > 60:
+        raise RequestError("Waiting for fresh M1/M5 broker candles from MT5. Keep the EA connected and try Start again.")
+    if str(market.get("account_login")) != str(device.get("account_login")) or str(market.get("broker_server")) != str(device.get("broker_server")):
+        raise RequestError("The market-data feed does not match this linked MT5 account.")
+    equity = float(snapshot.get("equity") or 0)
+    if equity <= 0:
+        raise RequestError("MT5 reported invalid account equity.")
+    tier = _load_risk_tier(equity)
+    risk_config = {
+        "tier_key": tier.get("tier_key", "under_50"),
+        "risk_per_trade_percent": min(0.50, float(tier.get("risk_per_trade_percent") or 0.50)),
+        "max_daily_loss_percent": 2.0,
+        "max_drawdown_percent": 5.0,
+        "max_open_positions": int(tier.get("max_open_positions") or 1),
+        "max_trades_per_day": 3,
+        "max_lot": float(tier.get("max_lot") or 0.01),
+        "min_confidence": 75,
+        "max_signal_age_seconds": 55,
+        "max_entry_deviation_points": 50,
+        "max_spread_fx_points": 30,
+        "max_spread_gold_points": 100,
+    }
+    risk_state = _ensure_daily_risk(device, equity, risk_config)
+    if risk_state.get("daily_loss_locked") or risk_state.get("drawdown_locked"):
+        raise RequestError("Risk lock is active. Trading cannot start until the next UTC trading day or an owner risk review.")
+    existing = _db_request("GET", _query(
+        "lm_mt5_trading_sessions",
+        select="id",
+        device_id="eq." + str(device["id"]),
+        limit="1",
+    ))
+    payload = {
+        "device_id": str(device["id"]),
+        "user_id": str(user["id"]),
+        "status": "active",
+        "account_mode": str(device.get("account_mode", "demo")),
+        "started_at": _now_iso(),
+        "stopped_at": None,
+        "stop_reason": None,
+        "risk_config": risk_config,
+        "updated_at": _now_iso(),
+    }
+    if isinstance(existing, list) and existing:
+        _db_request(
+            "PATCH",
+            _query("lm_mt5_trading_sessions", device_id="eq." + str(device["id"])),
+            payload,
+            prefer="return=minimal",
+        )
+    else:
+        _db_request("POST", "/rest/v1/lm_mt5_trading_sessions", payload, prefer="return=minimal")
+    _db_request(
+        "PATCH", _query("lm_mt5_devices", id="eq." + str(device["id"]), revoked_at="is.null"),
+        {"auto_trade_enabled": True}, prefer="return=minimal"
+    )
+    return {
+        "started": True, "status": "active", "account_mode": device.get("account_mode"),
+        "access_source": access_source, "risk": risk_config,
+        "message": "AI session started. New orders require fresh backend AI approval."
+    }
+
+
+def _session_stop(user, body):
+    device = _read_user_device(user, body.get("device_id"))
+    rows = _db_request("GET", _query(
+        "lm_mt5_trading_sessions",
+        select="id,status",
+        device_id="eq." + str(device["id"]),
+        user_id="eq." + str(user["id"]),
+        limit="1",
+    ))
+    if rows:
+        _db_request(
+            "PATCH",
+            _query("lm_mt5_trading_sessions", device_id="eq." + str(device["id"])),
+            {"status": "stopped", "stopped_at": _now_iso(),
+             "stop_reason": "Stopped by account owner", "updated_at": _now_iso()},
+            prefer="return=minimal",
+        )
+    _db_request(
+        "PATCH", _query("lm_mt5_devices", id="eq." + str(device["id"]), revoked_at="is.null"),
+        {"auto_trade_enabled": False}, prefer="return=minimal"
+    )
+    _db_request(
+        "PATCH",
+        _query("lm_mt5_ai_decisions", device_id="eq." + str(device["id"]), status="eq.pending"),
+        {"status": "cancelled", "completed_at": _now_iso()},
+        prefer="return=minimal",
+    )
+    return {"stopped": True, "status": "stopped", "message": "New entries are stopped. MT5 continues protective management of positions already open."}
+
+
+def _session_status(user, body):
+    device = _read_user_device(user, body.get("device_id"))
+    rows = _db_request("GET", _query(
+        "lm_mt5_trading_sessions",
+        select="id,status,account_mode,started_at,stopped_at,last_decision_at,last_heartbeat_at,stop_reason,risk_config,updated_at",
+        device_id="eq." + str(device["id"]),
+        user_id="eq." + str(user["id"]),
+        limit="1",
+    ))
+    snapshot = _latest_snapshot(device)
+    market = _latest_market_data(device)
+    return {
+        "device_id": str(device["id"]),
+        "session": rows[0] if isinstance(rows, list) and rows else None,
+        "account": snapshot,
+        "market_data_updated_at": market.get("updated_at") if market else None,
+        "telemetry_status": "live" if snapshot and snapshot.get("terminal_connected") is True and _iso_age_seconds(snapshot.get("updated_at")) <= 45 else "stale",
+    }
+
+
+def _record_market_data(device, body):
+    _check_account_identity(device, body.get("account_login"), body.get("broker_server"))
+    symbols = body.get("symbols")
+    if not isinstance(symbols, list) or not symbols or len(symbols) > 8:
+        raise RequestError("MT5 must report between 1 and 8 supported scalping symbols.")
+    clean_symbols = []
+    seen = set()
+    for item in symbols:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol", "")).strip()
+        if not re.fullmatch(r"[A-Za-z0-9._-]{3,32}", symbol) or symbol in seen:
+            continue
+        seen.add(symbol)
+        bid = _number(item.get("bid"), "bid", 0.00000001, 100000000)
+        ask = _number(item.get("ask"), "ask", bid, 100000000)
+        point = _number(item.get("point"), "point", 0.00000001, 1000)
+        digits = int(_number(item.get("digits"), "digits", 0, 10, integer=True))
+        if ask < bid:
+            raise RequestError("MT5 reported an invalid bid/ask spread.")
+        clean = {
+            "symbol": symbol, "bid": bid, "ask": ask, "point": point,
+            "digits": digits, "news_blocked": item.get("news_blocked") is True,
+        }
+        for timeframe in ("m1", "m5"):
+            bars = item.get(timeframe)
+            maximum = 24 if timeframe == "m1" else 18
+            if not isinstance(bars, list) or len(bars) < 8 or len(bars) > maximum:
+                raise RequestError("Incomplete " + timeframe.upper() + " candles for " + symbol + ".")
+            parsed_bars = []
+            previous_time = 0
+            for bar in bars:
+                if not isinstance(bar, dict):
+                    continue
+                stamp = int(_number(bar.get("time"), "candle_time", 1, 4102444800, integer=True))
+                opening = _number(bar.get("open"), "candle_open", 0.00000001, 100000000)
+                high = _number(bar.get("high"), "candle_high", 0.00000001, 100000000)
+                low = _number(bar.get("low"), "candle_low", 0.00000001, 100000000)
+                close = _number(bar.get("close"), "candle_close", 0.00000001, 100000000)
+                if high < max(opening, close, low) or low > min(opening, close, high):
+                    raise RequestError("MT5 candle OHLC values are inconsistent.")
+                if stamp <= previous_time:
+                    raise RequestError("MT5 candles must be ordered oldest to newest.")
+                previous_time = stamp
+                parsed_bars.append({
+                    "time": stamp, "open": opening, "high": high,
+                    "low": low, "close": close,
+                    "tick_volume": int(_number(bar.get("tick_volume", 0), "tick_volume", 0, 1000000000, integer=True)),
+                })
+            if len(parsed_bars) < 8:
+                raise RequestError("MT5 candle history is incomplete for " + symbol + ".")
+            clean[timeframe] = parsed_bars
+        if time.time() - clean["m1"][-1]["time"] > 180 or clean["m1"][-1]["time"] > time.time() + 60:
+            raise RequestError("MT5 M1 candle data is stale for " + symbol + ".")
+        clean_symbols.append(clean)
+    if not clean_symbols:
+        raise RequestError("No valid broker market data was supplied.")
+    payload = {
+        "device_id": str(device["id"]), "user_id": str(device["user_id"]),
+        "account_login": int(device["account_login"]),
+        "broker_server": str(device["broker_server"]),
+        "market_data": {"provider": "linked_mt5_broker", "symbols": clean_symbols, "received_at": _now_iso()},
+        "updated_at": _now_iso(),
+    }
+    _db_request(
+        "POST", "/rest/v1/lm_mt5_market_data?on_conflict=device_id",
+        payload, prefer="resolution=merge-duplicates,return=minimal"
+    )
+    # Heartbeat also confirms this terminal has delivered fresh market bars.
+    _db_request(
+        "PATCH", _query("lm_mt5_trading_sessions", device_id="eq." + str(device["id"]), status="eq.active"),
+        {"last_heartbeat_at": _now_iso(), "updated_at": _now_iso()},
+        prefer="return=minimal"
+    )
+    return {"saved": True, "symbols": len(clean_symbols), "provider": "linked_mt5_broker"}
+
+
+def _validate_and_queue_ai_decisions(device, session, market_data, decisions, snapshot):
+    config = session.get("risk_config") if isinstance(session.get("risk_config"), dict) else {}
+    equity = float(snapshot.get("equity") or 0)
+    risk_state = _ensure_daily_risk(device, equity, config)
+    if risk_state.get("daily_loss_locked") or risk_state.get("drawdown_locked"):
+        _db_request("PATCH", _query("lm_mt5_trading_sessions", device_id="eq." + str(device["id"])),
+                    {"status": "risk_locked", "stop_reason": "Daily loss or equity drawdown limit reached", "updated_at": _now_iso()},
+                    prefer="return=minimal")
+        return 0, "RISK_LOCKED"
+    positions = snapshot.get("positions") if isinstance(snapshot.get("positions"), list) else []
+    open_positions = [p for p in positions if isinstance(p, dict) and int(p.get("magic_number", 0) or 0) == MT5_MAGIC_NUMBER]
+    open_symbols = {str(p.get("symbol", "")).upper() for p in open_positions}
+    if len(open_positions) >= int(config.get("max_open_positions", 1)):
+        return 0, "POSITION_LIMIT"
+    trades_opened = int(risk_state.get("trades_opened") or 0)
+    if trades_opened >= int(config.get("max_trades_per_day", 3)):
+        return 0, "DAILY_TRADE_LIMIT"
+    data_by_symbol = {str(item.get("symbol", "")).upper(): item for item in market_data if isinstance(item, dict)}
+    queued = 0
+    for decision in decisions:
+        if not isinstance(decision, dict) or str(decision.get("decision", "")).upper() not in ("BUY", "SELL"):
+            continue
+        symbol = str(decision.get("symbol", "")).strip()
+        market = data_by_symbol.get(symbol.upper())
+        if not market or market.get("news_blocked") is True or symbol.upper() in open_symbols:
+            continue
+        if int(decision.get("confidence", 0)) < int(config.get("min_confidence", 75)):
+            continue
+        if len(decision.get("confirmations") or []) < 2:
+            continue
+        direction = str(decision["decision"]).upper()
+        entry = _single_price(decision.get("entry_price"))
+        stop = _single_price(decision.get("stop_loss"))
+        target = _single_price(decision.get("take_profit"))
+        if not entry or not stop or not target:
+            continue
+        if direction == "BUY" and not stop < entry < target:
+            continue
+        if direction == "SELL" and not target < entry < stop:
+            continue
+        point = float(market["point"])
+        bid, ask = float(market["bid"]), float(market["ask"])
+        spread_points = (ask - bid) / point
+        gold = symbol.upper().startswith("XAU")
+        allowed_spread = float(config.get("max_spread_gold_points" if gold else "max_spread_fx_points", 100 if gold else 30))
+        if spread_points > allowed_spread:
+            continue
+        live_price = ask if direction == "BUY" else bid
+        if abs(live_price - entry) / point > float(config.get("max_entry_deviation_points", 50)):
+            continue
+        risk_distance = abs(entry - stop)
+        reward_distance = abs(target - entry)
+        if risk_distance <= point * 2 or reward_distance / risk_distance < 1.2:
+            continue
+        if risk_distance > entry * 0.02:
+            continue
+        payload = {
+            "device_id": str(device["id"]), "user_id": str(device["user_id"]),
+            "session_id": str(session["id"]), "symbol": symbol,
+            "decision": direction, "confidence": int(decision["confidence"]),
+            "entry_price": entry, "stop_loss": stop, "take_profit": target,
+            "rationale": (str(decision.get("rationale", "")) + " Confirmations: " + "; ".join(decision.get("confirmations") or []))[:1200],
+            "model": "Gemini independent MT5 market analysis",
+            "market_snapshot": {"bid": bid, "ask": ask, "point": point, "spread_points": spread_points,
+                                "m1_last": market["m1"][-1], "m5_last": market["m5"][-1]},
+            "status": "pending",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=55)).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        }
+        _db_request("POST", "/rest/v1/lm_mt5_ai_decisions", payload, prefer="return=minimal")
+        queued += 1
+        open_symbols.add(symbol.upper())
+        if queued + len(open_positions) >= int(config.get("max_open_positions", 1)):
+            break
+    return queued, "QUEUED" if queued else "NO_APPROVED_SETUP"
+
+
+def _run_ai_cycle(device, session, market_row, snapshot):
+    market_data = market_row.get("market_data") if isinstance(market_row.get("market_data"), dict) else {}
+    symbols = market_data.get("symbols")
+    if not isinstance(symbols, list) or not symbols:
+        return 0, "NO_MARKET_DATA"
+    last = session.get("last_decision_at")
+    if last and _iso_age_seconds(last) < 45:
+        return 0, "ANALYSIS_COOLDOWN"
+    _db_request(
+        "PATCH", _query("lm_mt5_trading_sessions", device_id="eq." + str(device["id"]), status="eq.active"),
+        {"last_decision_at": _now_iso(), "updated_at": _now_iso()},
+        prefer="return=minimal"
+    )
+    from handlers.lm_auto_trader_ai import analyse
+    decisions = analyse(symbols)
+    return _validate_and_queue_ai_decisions(device, session, symbols, decisions, snapshot)
+
+
+def _claim_ai_decision(device):
+    rows = _db_request("GET", _query(
+        "lm_mt5_ai_decisions",
+        select="id,symbol,decision,confidence,entry_price,stop_loss,take_profit,expires_at",
+        device_id="eq." + str(device["id"]),
+        status="eq.pending",
+        expires_at="gt." + _now_iso(),
+        order="created_at.asc",
+        limit="1",
+    ))
+    if not isinstance(rows, list) or not rows:
+        return None
+    decision = rows[0]
+    claimed = _db_request(
+        "PATCH",
+        _query("lm_mt5_ai_decisions", id="eq." + str(decision["id"]),
+               device_id="eq." + str(device["id"]), status="eq.pending",
+               expires_at="gt." + _now_iso(), select="id"),
+        {"status": "claimed", "claimed_at": _now_iso()},
+        prefer="return=representation",
+    )
+    if not isinstance(claimed, list) or not claimed:
+        return None
+    return decision
+
+
 def _poll_signal(device):
-    if not bool(device.get("auto_trade_enabled")):
-        return "STATE|AUTO_DISABLED|LIVE=0\n"
-    live_enabled = os.environ.get("LM_MT5_LIVE_TRADING_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
-    account_mode = str(device.get("account_mode", "demo")).lower()
-    if account_mode == "real" and not live_enabled:
-        return "STATE|LIVE_BLOCKED|LIVE=0\n"
-    if account_mode not in ("demo", "contest", "real"):
-        return "STATE|ACCOUNT_MODE_BLOCKED|LIVE=0\n"
-    candidates = _load_candidates(device)
-    live_value = "1" if live_enabled else "0"
-    output = "STATE|ACTIVE|LIVE={}\n".format(live_value)
-    if not candidates:
-        return output
-    job, parsed, epoch = candidates[0]
+    """MT5 polls this endpoint; backend AI, never chart-upload jobs, creates commands."""
+    sessions = _db_request("GET", _query(
+        "lm_mt5_trading_sessions",
+        select="id,status,account_mode,last_decision_at,risk_config,user_id",
+        device_id="eq." + str(device["id"]),
+        user_id="eq." + str(device["user_id"]),
+        limit="1",
+    ))
+    if not isinstance(sessions, list) or not sessions or sessions[0].get("status") != "active":
+        return "STATE|STOPPED|SESSION=STOPPED|LIVE=0\n"
+    session = sessions[0]
+    allowed, access_source = _has_auto_trader_access(str(device["user_id"]))
+    if not allowed:
+        _db_request("PATCH", _query("lm_mt5_trading_sessions", device_id="eq." + str(device["id"])),
+                    {"status": "subscription_locked", "stop_reason": "LM AUTO TRADER subscription expired", "updated_at": _now_iso()},
+                    prefer="return=minimal")
+        return "STATE|SUBSCRIPTION_LOCKED|SESSION=LOCKED|LIVE=0\n"
+    snapshot = _latest_snapshot(device)
+    market_row = _latest_market_data(device)
+    if not snapshot or snapshot.get("terminal_connected") is not True or _iso_age_seconds(snapshot.get("updated_at")) > 45:
+        return "STATE|TERMINAL_STALE|SESSION=ACTIVE|LIVE=0\n"
+    if not market_row or _iso_age_seconds(market_row.get("updated_at")) > 45:
+        return "STATE|MARKET_DATA_STALE|SESSION=ACTIVE|LIVE=0\n"
+    config = session.get("risk_config") if isinstance(session.get("risk_config"), dict) else {}
+    try:
+        _run_ai_cycle(device, session, market_row, snapshot)
+    except Exception as exc:
+        # Never create a command from partial or failed AI output.
+        print("LM AUTO TRADER AI cycle failed:", type(exc).__name__, str(exc)[:180])
+    command = _claim_ai_decision(device)
+    state = (
+        "STATE|ACTIVE|SESSION=ACTIVE|LIVE=1"
+        "|RISK={:.3f}|MAXLOT={:.5f}|MAXPOS={}|DAILY={:.3f}|TRADES={}"
+        "|DEVIATION={}|SPREADFX={}|SPREADGOLD={}|AGE={}\n"
+    ).format(
+        float(config.get("risk_per_trade_percent", 0.50)),
+        float(config.get("max_lot", 0.01)),
+        int(config.get("max_open_positions", 1)),
+        float(config.get("max_daily_loss_percent", 2.0)),
+        int(config.get("max_trades_per_day", 3)),
+        int(config.get("max_entry_deviation_points", 50)),
+        int(config.get("max_spread_fx_points", 30)),
+        int(config.get("max_spread_gold_points", 100)),
+        int(config.get("max_signal_age_seconds", 55)),
+    )
+    if not command:
+        return state
+    expiry_epoch = int(datetime.fromisoformat(str(command["expires_at"]).replace("Z", "+00:00")).timestamp())
     fields = [
-        "SIGNAL",
-        str(job["id"]),
-        parsed["instrument"],
-        parsed["direction"],
-        "{:.10f}".format(parsed["entry"]),
-        "{:.10f}".format(parsed["stop_loss"]),
-        "{:.10f}".format(parsed["take_profit_1"]),
-        str(parsed["confidence"]),
-        str(epoch),
+        "AI_CMD", str(command["id"]), str(command["symbol"]), str(command["decision"]),
+        "{:.10f}".format(float(command["entry_price"])),
+        "{:.10f}".format(float(command["stop_loss"])),
+        "{:.10f}".format(float(command["take_profit"])),
+        str(int(command["confidence"])), str(int(time.time())),
+        "{:.3f}".format(float(config.get("risk_per_trade_percent", 0.50))),
+        "{:.5f}".format(float(config.get("max_lot", 0.01))),
+        str(int(config.get("max_open_positions", 1))),
+        "{:.3f}".format(float(config.get("max_daily_loss_percent", 2.0))),
+        str(int(config.get("max_trades_per_day", 3))),
+        str(int(config.get("max_entry_deviation_points", 50))),
+        str(int(config.get("max_spread_gold_points" if str(command["symbol"]).upper().startswith("XAU") else "max_spread_fx_points", 100 if str(command["symbol"]).upper().startswith("XAU") else 30))),
+        str(expiry_epoch),
     ]
-    return output + "|".join(fields) + "\n"
+    return state + "|".join(fields) + "\n"
+
+
+def _report_ai_execution(device, body):
+    decision_id = str(body.get("decision_id", "")).strip()
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", decision_id):
+        raise RequestError("Invalid AI decision reference.")
+    status = str(body.get("status", "")).strip().lower()
+    if status not in ("executed", "rejected"):
+        raise RequestError("Invalid AI execution result.")
+    rows = _db_request("GET", _query(
+        "lm_mt5_ai_decisions",
+        select="id,session_id,symbol,decision,entry_price,stop_loss,take_profit,device_id,user_id,status",
+        id="eq." + decision_id,
+        device_id="eq." + str(device["id"]),
+        user_id="eq." + str(device["user_id"]),
+        status="eq.claimed",
+        limit="1",
+    ))
+    if not isinstance(rows, list) or not rows:
+        raise RequestError("This AI command is not claimed by this linked MT5 account.")
+    decision = rows[0]
+    result = {"reported_at": _now_iso()}
+    if status == "rejected":
+        result["reason"] = str(body.get("reason", "MT5 rejected the order."))[:300]
+    else:
+        order_ticket = int(_number(body.get("order_ticket"), "order_ticket", 1, 9223372036854775807, integer=True))
+        position_id = int(_number(body.get("position_id"), "position_id", 1, 9223372036854775807, integer=True))
+        requested_volume = _number(body.get("requested_volume"), "requested_volume", 0.001, 1000)
+        filled_volume = _number(body.get("filled_volume"), "filled_volume", 0.001, 1000)
+        fill_price = _number(body.get("fill_price"), "fill_price", 0.00000001, 100000000)
+        result.update({
+            "order_ticket": order_ticket, "position_id": position_id,
+            "requested_volume": requested_volume, "filled_volume": filled_volume,
+            "fill_price": fill_price,
+        })
+        _db_request("POST", "/rest/v1/lm_mt5_scalp_trades", {
+            "device_id": str(device["id"]), "user_id": str(device["user_id"]),
+            "position_id": position_id, "order_ticket": order_ticket,
+            "symbol": decision["symbol"], "direction": decision["decision"],
+            "requested_volume": requested_volume, "filled_volume": filled_volume,
+            "entry_price": fill_price, "stop_loss": float(decision["stop_loss"]),
+            "take_profit": float(decision["take_profit"]),
+            "initial_risk_distance": abs(float(decision["entry_price"]) - float(decision["stop_loss"])),
+            "magic_number": MT5_MAGIC_NUMBER, "status": "open", "updated_at": _now_iso(),
+        }, prefer="return=minimal")
+        today = datetime.now(timezone.utc).date().isoformat()
+        state = _db_request("GET", _query(
+            "lm_mt5_daily_risk_state",
+            select="trades_opened",
+            device_id="eq." + str(device["id"]),
+            trading_day="eq." + today,
+            limit="1",
+        ))
+        if isinstance(state, list) and state:
+            _db_request("PATCH", _query(
+                "lm_mt5_daily_risk_state",
+                device_id="eq." + str(device["id"]), trading_day="eq." + today,
+            ), {"trades_opened": int(state[0].get("trades_opened") or 0) + 1, "updated_at": _now_iso()},
+                prefer="return=minimal")
+    updated = _db_request("PATCH", _query(
+        "lm_mt5_ai_decisions", id="eq." + decision_id,
+        device_id="eq." + str(device["id"]), status="eq.claimed",
+        select="id",
+    ), {
+        "status": status, "completed_at": _now_iso(), "execution_result": result,
+    }, prefer="return=representation")
+    if not isinstance(updated, list) or not updated:
+        raise RequestError("AI execution report could not be saved.")
+    return {"saved": True, "status": status, "decision_id": decision_id}
 
 
 def _claim_signal(device, body):
