@@ -47,6 +47,34 @@ create table if not exists public.lm_mt5_vps_instances (
 create index if not exists lm_mt5_vps_instances_user_status_idx
     on public.lm_mt5_vps_instances (user_id, status, updated_at desc);
 
+
+create table if not exists public.lm_mt5_scalp_trades (
+    id uuid primary key default gen_random_uuid(),
+    device_id uuid not null references public.lm_mt5_devices(id) on delete cascade,
+    user_id uuid not null references auth.users(id) on delete cascade,
+    position_id bigint not null,
+    order_ticket bigint not null,
+    symbol text not null,
+    direction text not null check (direction in ('BUY', 'SELL')),
+    requested_volume numeric(18,8) not null,
+    filled_volume numeric(18,8) not null,
+    entry_price numeric(24,10) not null,
+    stop_loss numeric(24,10) not null,
+    take_profit numeric(24,10) not null,
+    initial_risk_distance numeric(24,10) not null,
+    magic_number bigint not null check (magic_number = 26112701),
+    status text not null default 'open' check (status in ('open', 'closed', 'rejected')),
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint lm_mt5_scalp_trades_device_position_unique unique (device_id, position_id)
+);
+
+create index if not exists lm_mt5_scalp_trades_user_created_idx
+    on public.lm_mt5_scalp_trades (user_id, created_at desc);
+
+create index if not exists lm_mt5_scalp_trades_device_created_idx
+    on public.lm_mt5_scalp_trades (device_id, created_at desc);
+
 create table if not exists public.lm_auto_trader_plans (
     plan_key text primary key check (plan_key in ('monthly', 'quarterly', 'six_months')),
     display_name text not null,
@@ -88,16 +116,19 @@ create index if not exists lm_auto_trader_subscriptions_user_expiry_idx
     on public.lm_auto_trader_subscriptions (user_id, status, expires_at desc);
 
 alter table public.lm_mt5_account_snapshots enable row level security;
+alter table public.lm_mt5_scalp_trades enable row level security;
 alter table public.lm_mt5_vps_instances enable row level security;
 alter table public.lm_auto_trader_plans enable row level security;
 alter table public.lm_auto_trader_subscriptions enable row level security;
 
 revoke all on table public.lm_mt5_account_snapshots from anon, authenticated, public;
+revoke all on table public.lm_mt5_scalp_trades from anon, authenticated, public;
 revoke all on table public.lm_mt5_vps_instances from anon, authenticated, public;
 revoke all on table public.lm_auto_trader_plans from anon, authenticated, public;
 revoke all on table public.lm_auto_trader_subscriptions from anon, authenticated, public;
 
 grant select, insert, update, delete on table public.lm_mt5_account_snapshots to service_role;
+grant select, insert, update, delete on table public.lm_mt5_scalp_trades to service_role;
 grant select, insert, update, delete on table public.lm_mt5_vps_instances to service_role;
 grant select, insert, update, delete on table public.lm_auto_trader_plans to service_role;
 grant select, insert, update, delete on table public.lm_auto_trader_subscriptions to service_role;
