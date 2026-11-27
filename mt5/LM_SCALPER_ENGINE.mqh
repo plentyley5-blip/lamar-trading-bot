@@ -173,10 +173,6 @@ void ManageOpenScalpPositions()
       int index = FindScalperSymbolIndex(symbol);
       if(index < 0 || g_m1_atr[index] == INVALID_HANDLE) continue;
 
-      double atr_values[];
-      ArraySetAsSeries(atr_values, true);
-      if(CopyBuffer(g_m1_atr[index], 0, 0, 2, atr_values) < 2 || atr_values[1] <= 0.0) continue;
-
       ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
       bool is_buy = (type == POSITION_TYPE_BUY);
       double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -190,17 +186,48 @@ void ManageOpenScalpPositions()
       if(!SymbolInfoTick(symbol, tick)) continue;
       double favorable_move = is_buy ? tick.bid - open_price : open_price - tick.ask;
       double proposed_sl = current_sl;
+      double spread_points = (tick.ask - tick.bid) / point;
 
-      // Break-even at 1R plus two points.
-      if(favorable_move >= initial_risk)
+      // Lock a small net-positive amount as soon as the trade has moved 0.25R.
+      // The spread allowance helps avoid calling a gross entry-price stop "break-even".
+      double lock_trigger = initial_risk * 0.25;
+      double cost_buffer = (spread_points + 2.0) * point;
+      if(favorable_move >= lock_trigger)
       {
-         double break_even = open_price + (is_buy ? 2.0 * point : -2.0 * point);
-         if(is_buy && (proposed_sl <= 0.0 || break_even > proposed_sl)) proposed_sl = break_even;
-         if(!is_buy && (proposed_sl <= 0.0 || break_even < proposed_sl)) proposed_sl = break_even;
+         double protected_sl = open_price + (is_buy ? cost_buffer : -cost_buffer);
+         if(is_buy && (proposed_sl <= 0.0 || protected_sl > proposed_sl)) proposed_sl = protected_sl;
+         if(!is_buy && (proposed_sl <= 0.0 || protected_sl < proposed_sl)) proposed_sl = protected_sl;
       }
 
-      // Start ATR trailing only after 1.2R has been reached.
-      if(favorable_move >= initial_risk * 1.2)
+      // If a small profit exists but the broker's stop-distance rule prevents
+      // placing the protective stop, exit on a confirmed M1 close against EMA 9.
+      if(favorable_move >= initial_risk * 0.10)
+      {
+         double fast_values[];
+         ArraySetAsSeries(fast_values, true);
+         if(CopyBuffer(g_m1_fast[index], 0, 0, 2, fast_values) >= 2)
+         {
+            double last_closed = iClose(symbol, PERIOD_M1, 1);
+            bool momentum_reversed = (is_buy && last_closed < fast_values[1]) ||
+                                     (!is_buy && last_closed > fast_values[1]);
+            if(momentum_reversed)
+            {
+               if(!g_trade.PositionClose(ticket))
+                  Print("LM AUTO TRADER: Momentum-protection exit failed for ", symbol,
+                        ". ", g_trade.ResultRetcodeDescription());
+               else
+                  Print("LM AUTO TRADER: Closed ", symbol,
+                        " on confirmed M1 momentum reversal while protecting open profit.");
+               continue;
+            }
+         }
+      }
+
+      // Tighten the stop progressively once the move reaches 0.50R.
+      double atr_values[];
+      ArraySetAsSeries(atr_values, true);
+      if(CopyBuffer(g_m1_atr[index], 0, 0, 2, atr_values) >= 2 && atr_values[1] > 0.0 &&
+         favorable_move >= initial_risk * 0.50)
       {
          double trailing = is_buy ? tick.bid - atr_values[1] : tick.ask + atr_values[1];
          if(is_buy && trailing > proposed_sl) proposed_sl = trailing;
