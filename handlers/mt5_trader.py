@@ -218,7 +218,11 @@ def _eligible_signal(result, instrument, min_confidence):
         return None
     if str(result.get("order_type", "")).strip().upper() != "MARKET":
         return None
-    if str(result.get("chart_instrument_status", "")).strip().upper() != "MATCH":
+    # Older chart-analysis payloads may omit chart_instrument_status. The
+    # analysis job instrument is still checked exactly below, so absence alone
+    # must not discard an otherwise valid signal. Explicit mismatches remain blocked.
+    chart_status = str(result.get("chart_instrument_status", "")).strip().upper()
+    if chart_status and chart_status != "MATCH":
         return None
     result_instrument = re.sub(r"[^A-Z0-9]", "", str(result.get("instrument", "")).upper())
     row_instrument = re.sub(r"[^A-Z0-9]", "", str(instrument or "").upper())
