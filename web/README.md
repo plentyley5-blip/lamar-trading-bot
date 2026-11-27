@@ -15,7 +15,7 @@ Connect this GitHub repository:
 - Build command: `exit 0`
 - Build output directory: `.`
 
-The site is plain static HTML, CSS and JavaScript. It uses the existing API at `https://lamar-trading-bot.vercel.app/api`. Do not add Supabase service-role keys, Gemini keys, Google Play service-account keys, MT5 passwords, or other secrets to this browser bundle.
+The site is plain static HTML, CSS and JavaScript. The public product/SEO page is available at `/about/`; the authenticated application is served from `/`. It uses the existing API at `https://lamar-trading-bot.vercel.app/api`. Do not add Supabase service-role keys, Gemini keys, Google Play service-account keys, MT5 passwords, or other secrets to this browser bundle.
 
 After the branch is reviewed and the web flows are tested, change the Pages production branch to the approved release branch. Do not connect Cloudflare Pages to `main` yet.
 
@@ -67,5 +67,5 @@ The latest Android Auto Trader screen calls the `/api/mt5_trader` endpoint using
 - Test owner, free-lifetime, active-paid, and expired-subscription accounts.
 - Test High Impact News gating on both UI and server.
 - Test that no browser bundle contains secrets or trading credentials.
-- Confirm the Cloudflare project slug before first creation.
+- Confirm the Cloudflare project slug before first creation; after the final hostname is known, add the absolute XML sitemap URL and canonical metadata.
 - Deploy to a preview first; only then move the approved branch to production.
