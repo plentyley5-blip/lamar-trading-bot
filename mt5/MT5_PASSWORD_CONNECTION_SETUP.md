@@ -74,6 +74,12 @@ On success return:
 
 The connector must then keep the correct account-specific MT5 terminal instance running and use the issued device token for its authenticated terminal heartbeat, market-data and execution-report traffic. Use isolated terminal instances/processes per account; a single MetaTrader5 Python process must not be switched between different customers' accounts.
 
+The connector must also provision the token for the MT5 Expert Advisor. The EA reads an account-specific state file from the terminal's Common\\Files directory. The exact filename is:
+
+`LM_AUTO_TRADER_<account_login>_<server_sanitized>.dat`
+
+For the server portion, replace spaces, slash, backslash and colon with underscores (matching `MakeStateFileName()` in `mt5/LM_AUTO_TRADER.mq5`). Write three newline-separated values: the device token, last-deal timestamp (initially `0`), and last-deal ticket (initially `0`). The EA polls for this file while waiting, so no one-time code or manual token copy is required.
+
 ## Database migration
 
 Apply `sql/lm_auto_trader_password_connection.sql` after the existing MT5 schema migration. It adds the broker-name column and drops the obsolete one-time link-code table.
