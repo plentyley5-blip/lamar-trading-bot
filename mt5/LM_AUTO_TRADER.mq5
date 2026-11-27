@@ -6,8 +6,8 @@
 //| First validation must be performed on an MT5 DEMO account.       |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.00"
-#property description "Executes eligible LM Analyzer READY/MARKET signals with user-defined risk limits."
+#property version   "2.00"
+#property description "Autonomous LM SCALPER M1/M5 engine with MT5 telemetry and managed account bridge."
 
 #include <Trade/Trade.mqh>
 
@@ -727,6 +727,12 @@ int OnInit()
       InpMaximumSignalAgeMinutes < 1 || InpMaximumSignalAgeMinutes > 120 ||
       InpMaxEntryDeviationPoints < 1 || InpMaxEntryDeviationPoints > 2000 ||
       InpMaxSpreadPoints < 1 || InpMaxSpreadPoints > 2000 ||
+      InpMaxSpreadFxPoints < 1 || InpMaxSpreadFxPoints > 2000 ||
+      InpMaxSpreadGoldPoints < 1 || InpMaxSpreadGoldPoints > 2000 ||
+      InpMaxHoldingMinutes < 1 || InpMaxHoldingMinutes > 1440 ||
+      InpNewsBlockMinutes < 0 || InpNewsBlockMinutes > 240 ||
+      InpProfitTargetUSD < 0.0 || InpProfitTargetUSD > 1000000.0 ||
+      InpProfitTargetCycle < 1 ||
       InpMaximumSlippagePoints < 0 || InpMaximumSlippagePoints > 1000 ||
       InpPollIntervalSeconds < 5 || InpPollIntervalSeconds > 60)
    {
