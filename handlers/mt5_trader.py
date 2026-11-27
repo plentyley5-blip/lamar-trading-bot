@@ -635,6 +635,147 @@ def _record_deal(device, body):
         raise
 
 
+
+def _snapshot_positions(raw_positions):
+    if not isinstance(raw_positions, list) or len(raw_positions) > 50:
+        raise RequestError("Invalid MT5 open-position snapshot.")
+    positions = []
+    for item in raw_positions:
+        if not isinstance(item, dict):
+            raise RequestError("Invalid MT5 position entry.")
+        try:
+            magic = int(item.get("magic_number", 0))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise RequestError("Invalid MT5 position magic number.") from exc
+        # The customer dashboard must not expose or manage manual/other-EA trades.
+        if magic != MT5_MAGIC_NUMBER:
+            continue
+        ticket = int(_number(item.get("ticket"), "position_ticket", 1, 9223372036854775807, integer=True))
+        position_id = int(_number(item.get("position_id"), "position_id", 1, 9223372036854775807, integer=True))
+        symbol = str(item.get("symbol", "")).strip()
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,32}", symbol):
+            raise RequestError("Invalid MT5 position symbol.")
+        direction = str(item.get("direction", "")).strip().upper()
+        if direction not in ("BUY", "SELL"):
+            raise RequestError("Invalid MT5 position direction.")
+        positions.append({
+            "ticket": ticket,
+            "position_id": position_id,
+            "symbol": symbol,
+            "direction": direction,
+            "volume": _number(item.get("volume"), "position_volume", 0.001, 1000),
+            "price_open": _number(item.get("price_open"), "position_price_open", 0.00000001, 100000000),
+            "stop_loss": _number(item.get("stop_loss", 0), "position_stop_loss", 0, 100000000),
+            "take_profit": _number(item.get("take_profit", 0), "position_take_profit", 0, 100000000),
+            "profit": _number(item.get("profit", 0), "position_profit", -1000000000, 1000000000),
+            "swap": _number(item.get("swap", 0), "position_swap", -1000000000, 1000000000),
+            "magic_number": magic,
+            "opened_at_epoch": int(_number(item.get("opened_at_epoch", 0), "position_open_time", 0, 4102444800, integer=True)),
+        })
+    return positions
+
+
+def _record_account_snapshot(device, body):
+    _check_account_identity(device, body.get("account_login"), body.get("broker_server"))
+    currency = str(body.get("currency", "")).strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{3,8}", currency):
+        raise RequestError("Invalid MT5 account currency.")
+    connected = body.get("terminal_connected") is True
+    positions = _snapshot_positions(body.get("positions", []))
+    payload = {
+        "device_id": str(device["id"]),
+        "user_id": str(device["user_id"]),
+        "account_login": int(device["account_login"]),
+        "broker_server": str(device["broker_server"]),
+        "account_mode": str(device.get("account_mode", "demo")),
+        "balance": _number(body.get("balance"), "balance", -1000000000, 1000000000),
+        "equity": _number(body.get("equity"), "equity", -1000000000, 1000000000),
+        "floating_profit": _number(body.get("floating_profit", 0), "floating_profit", -1000000000, 1000000000),
+        "credit": _number(body.get("credit", 0), "credit", -1000000000, 1000000000),
+        "margin": _number(body.get("margin", 0), "margin", 0, 1000000000),
+        "free_margin": _number(body.get("free_margin", 0), "free_margin", -1000000000, 1000000000),
+        "margin_level": _number(body.get("margin_level", 0), "margin_level", 0, 1000000000),
+        "currency": currency,
+        "leverage": int(_number(body.get("leverage", 1), "leverage", 1, 1000000, integer=True)),
+        "terminal_connected": connected,
+        "terminal_build": int(_number(body.get("terminal_build", 0), "terminal_build", 0, 1000000, integer=True)),
+        "positions": positions,
+        "updated_at": _now_iso(),
+    }
+    _db_request(
+        "POST",
+        "/rest/v1/lm_mt5_account_snapshots?on_conflict=device_id",
+        payload,
+        prefer="resolution=merge-duplicates,return=minimal",
+    )
+    return {"saved": True, "terminal_connected": connected, "open_positions": len(positions)}
+
+
+def _dashboard_for_user(user):
+    devices = _db_request(
+        "GET",
+        _query(
+            "lm_mt5_devices",
+            select="id,account_login,broker_server,account_mode,auto_trade_enabled,risk_per_trade,max_daily_loss_percent,max_open_positions,max_trades_per_day,max_lot,min_confidence,max_signal_age_minutes,last_seen_at,created_at",
+            user_id="eq." + str(user["id"]),
+            revoked_at="is.null",
+            order="created_at.desc",
+            limit="5",
+        ),
+    )
+    if not isinstance(devices, list) or not devices:
+        return {"connected": False, "telemetry_status": "not_connected", "device": None, "account": None, "open_positions": [], "executions": [], "recent_deals": []}
+    device = devices[0]
+    snapshots = _db_request(
+        "GET",
+        _query(
+            "lm_mt5_account_snapshots",
+            select="balance,equity,floating_profit,credit,margin,free_margin,margin_level,currency,leverage,terminal_connected,terminal_build,positions,updated_at",
+            device_id="eq." + str(device["id"]),
+            limit="1",
+        ),
+    )
+    snapshot = snapshots[0] if isinstance(snapshots, list) and snapshots else None
+    telemetry_status = "waiting_for_terminal"
+    if snapshot:
+        try:
+            updated = datetime.fromisoformat(str(snapshot.get("updated_at", "")).replace("Z", "+00:00"))
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - updated).total_seconds()
+            telemetry_status = "live" if age <= 45 and snapshot.get("terminal_connected") is True else "stale"
+        except (TypeError, ValueError):
+            telemetry_status = "stale"
+    executions = _db_request(
+        "GET",
+        _query(
+            "lm_mt5_execution_records",
+            select="signal_id,symbol,direction,status,order_ticket,position_id,requested_volume,filled_volume,fill_price,reason,created_at,updated_at",
+            device_id="eq." + str(device["id"]),
+            order="created_at.desc",
+            limit="20",
+        ),
+    )
+    deals = _db_request(
+        "GET",
+        _query(
+            "lm_mt5_trade_deals",
+            select="deal_ticket,position_id,symbol,deal_entry,deal_type,volume,price,profit,commission,swap,deal_time",
+            device_id="eq." + str(device["id"]),
+            order="deal_time.desc",
+            limit="30",
+        ),
+    )
+    return {
+        "connected": True,
+        "telemetry_status": telemetry_status,
+        "device": device,
+        "account": snapshot,
+        "open_positions": (snapshot or {}).get("positions") or [],
+        "executions": executions if isinstance(executions, list) else [],
+        "recent_deals": deals if isinstance(deals, list) else [],
+    }
+
 def _revoke_user_devices(user):
     _db_request(
         "PATCH",
@@ -678,6 +819,10 @@ class handler(BaseHTTPRequestHandler):
                 user = verify_access_token(extract_bearer_token(self))
                 json_response(self, 200, _create_link_code(user))
                 return
+            if action == "dashboard":
+                user = verify_access_token(extract_bearer_token(self))
+                json_response(self, 200, _dashboard_for_user(user))
+                return
             if action == "link":
                 json_response(self, 200, _link_terminal(body))
                 return
@@ -696,6 +841,8 @@ class handler(BaseHTTPRequestHandler):
                 json_response(self, 200, _report_execution(device, body))
             elif action == "deal":
                 json_response(self, 200, _record_deal(device, body))
+            elif action == "snapshot":
+                json_response(self, 200, _record_account_snapshot(device, body))
             else:
                 json_response(self, 400, {"error": "Unknown MT5 action."})
         except RequestError as exc:
