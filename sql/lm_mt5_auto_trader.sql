@@ -66,6 +66,11 @@ create index if not exists lm_mt5_execution_device_created_idx
 create index if not exists lm_mt5_execution_position_idx
     on public.lm_mt5_execution_records (device_id, position_id)
     where position_id is not null;
+create index if not exists lm_mt5_execution_records_signal_idx
+    on public.lm_mt5_execution_records (signal_id);
+
+create index if not exists lm_mt5_execution_records_user_idx
+    on public.lm_mt5_execution_records (user_id, created_at desc);
 
 create table if not exists public.lm_mt5_trade_deals (
     id uuid primary key default gen_random_uuid(),
