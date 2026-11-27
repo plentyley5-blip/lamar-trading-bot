@@ -1528,6 +1528,15 @@ class handler(BaseHTTPRequestHandler):
                 user = verify_access_token(extract_bearer_token(self))
                 json_response(self, 200, _revoke_user_devices(user))
                 return
+            if action in ("session_start", "session_stop", "session_status"):
+                user = verify_access_token(extract_bearer_token(self))
+                if action == "session_start":
+                    json_response(self, 200, _session_start(user, body))
+                elif action == "session_stop":
+                    json_response(self, 200, _session_stop(user, body))
+                else:
+                    json_response(self, 200, _session_status(user, body))
+                return
 
             device = _read_device(self)
             _check_account_identity(device, body.get("account_login"), body.get("broker_server"))
@@ -1543,6 +1552,10 @@ class handler(BaseHTTPRequestHandler):
                 json_response(self, 200, _record_account_snapshot(device, body))
             elif action == "scalp_trade":
                 json_response(self, 200, _record_scalp_trade(device, body))
+            elif action == "market_data":
+                json_response(self, 200, _record_market_data(device, body))
+            elif action == "ai_report":
+                json_response(self, 200, _report_ai_execution(device, body))
             else:
                 json_response(self, 400, {"error": "Unknown MT5 action."})
         except RequestError as exc:
