@@ -25,7 +25,7 @@ input int    InpMaximumSignalAgeMinutes = 10;
 input int    InpMaxEntryDeviationPoints = 50;
 input int    InpMaxSpreadPoints = 50;
 input int    InpMaximumSlippagePoints = 20;
-input int    InpPollIntervalSeconds = 5;
+input int    InpPollIntervalSeconds = 15;
 input ulong  InpMagicNumber = 26112701;
 
 #define LM_API_TIMEOUT_MS 5000
@@ -608,6 +608,7 @@ void SyncRecentDeals()
       if(ticket == 0) continue;
       datetime deal_time = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
       if(deal_time < g_last_deal_time || (deal_time == g_last_deal_time && ticket <= g_last_deal_ticket)) continue;
+      bool deal_synced = true;
       if((ulong)HistoryDealGetInteger(ticket, DEAL_MAGIC) == InpMagicNumber)
       {
          ulong position_id = (ulong)HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
@@ -631,10 +632,13 @@ void SyncRecentDeals()
                AccountInfoInteger(ACCOUNT_LOGIN), JsonEscape(AccountInfoString(ACCOUNT_SERVER)));
             string response;
             int status = HttpRequest("POST", "", body, g_device_token, response);
-            if(status != 200 && status != 409)
-               Print("LM AUTO TRADER: Deal history sync failed for ticket ", ticket, ". HTTP ", status);
+            deal_synced = (status == 200 || status == 409);
+            if(!deal_synced)
+               Print("LM AUTO TRADER: Deal history sync failed for ticket ", ticket, ". HTTP ", status,
+                     ". Cursor retained so it can retry.");
          }
       }
+      if(!deal_synced) break;
       g_last_deal_time = deal_time;
       g_last_deal_ticket = ticket;
       changed = true;
@@ -654,7 +658,7 @@ int OnInit()
       InpMaxEntryDeviationPoints < 1 || InpMaxEntryDeviationPoints > 2000 ||
       InpMaxSpreadPoints < 1 || InpMaxSpreadPoints > 2000 ||
       InpMaximumSlippagePoints < 0 || InpMaximumSlippagePoints > 1000 ||
-      InpPollIntervalSeconds < 3 || InpPollIntervalSeconds > 60)
+      InpPollIntervalSeconds < 5 || InpPollIntervalSeconds > 60)
    {
       Print("LM AUTO TRADER: One or more risk settings are outside permitted limits.");
       return INIT_PARAMETERS_INCORRECT;
