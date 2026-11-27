@@ -312,7 +312,6 @@ void TryScalpingEntry(const int index)
    int allowed_spread = (StringFind(symbol, "XAUUSD") == 0 ? InpMaxSpreadGoldPoints : InpMaxSpreadFxPoints);
    if(InpMaxSpreadPoints > 0) allowed_spread = (int)MathMin(allowed_spread, InpMaxSpreadPoints);
    if(spread_points > allowed_spread) return;
-   if(IsHighImpactNewsWindow(symbol)) return;
 
    double m1_fast[], m1_slow[], m5_fast[], m5_slow[], rsi_values[], atr_values[];
    ArraySetAsSeries(m1_fast, true);
@@ -331,6 +330,7 @@ void TryScalpingEntry(const int index)
    datetime closed_bar = iTime(symbol, PERIOD_M1, 1);
    if(closed_bar <= 0 || closed_bar == g_last_scalp_signal_bar[index]) return;
    g_last_scalp_signal_bar[index] = closed_bar;
+   if(IsHighImpactNewsWindow(symbol)) return;
 
    bool buy_cross = (m1_fast[1] > m1_slow[1] && m1_fast[2] <= m1_slow[2]);
    bool sell_cross = (m1_fast[1] < m1_slow[1] && m1_fast[2] >= m1_slow[2]);
@@ -379,13 +379,46 @@ void TryScalpingEntry(const int index)
       if(filled_volume <= 0.0) filled_volume = HistoryDealGetDouble(deal_ticket, DEAL_VOLUME);
       if(fill_price <= 0.0) fill_price = HistoryDealGetDouble(deal_ticket, DEAL_PRICE);
    }
+   if(position_id == 0 && PositionSelect(symbol) &&
+      (ulong)PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+      position_id = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+   if(filled_volume <= 0.0) filled_volume = volume;
+   if(fill_price <= 0.0) fill_price = entry;
    if(position_id > 0)
       ReportScalpTrade(order_ticket, position_id, symbol, is_buy, volume,
-                       MathMax(filled_volume, 0.001), MathMax(fill_price, entry), sl, tp, initial_risk);
+                       filled_volume, fill_price, sl, tp, initial_risk);
    Print("LM AUTO TRADER SCALP: ", (is_buy ? "BUY " : "SELL "), symbol,
          " volume=", DoubleToString(filled_volume, 2),
          " SL=", DoubleToString(sl, digits), " TP=", DoubleToString(tp, digits),
          " risk=", DoubleToString(InpRiskPercent, 2), "%");
+}
+
+
+void SyncOpenScalpTradeRecords()
+{
+   if(g_device_token == "") return;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || (ulong)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      double initial_risk = ReadInitialRiskFromComment(comment);
+      if(initial_risk <= 0.0) continue; // Skip legacy LM Analyzer signal positions.
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      bool is_buy = (type == POSITION_TYPE_BUY);
+      double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+      double volume = PositionGetDouble(POSITION_VOLUME);
+      double current_sl = PositionGetDouble(POSITION_SL);
+      double tp = PositionGetDouble(POSITION_TP);
+      double original_sl = entry + (is_buy ? -initial_risk : initial_risk);
+      if(current_sl > 0.0 && tp > 0.0)
+      {
+         ulong position_id = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+         ReportScalpTrade(ticket, position_id, symbol, is_buy, volume, volume,
+                          entry, original_sl, tp, initial_risk);
+      }
+   }
 }
 
 void ScanScalpingSymbols()
