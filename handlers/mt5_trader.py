@@ -382,7 +382,7 @@ def _link_terminal(body):
 
 def _configure_device(device, body):
     _check_account_identity(device, body.get("account_login"), body.get("broker_server"))
-    enabled = body.get("auto_trade_enabled") is True
+    enabled = (bool(device.get("auto_trade_enabled", False)) if "auto_trade_enabled" not in body else body.get("auto_trade_enabled") is True)
     values = {
         "auto_trade_enabled": enabled,
         "risk_per_trade": _number(body.get("risk_per_trade", 0.25), "risk_per_trade", 0.1, 1.0),
@@ -635,6 +635,118 @@ def _record_deal(device, body):
         raise
 
 
+def _record_account_snapshot(device, body):
+    """Store a validated account/positions snapshot reported by the linked MT5 terminal."""
+    currency = str(body.get("currency", "")).strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{3,8}", currency):
+        raise RequestError("Invalid MT5 account currency.")
+
+    raw_positions = body.get("positions", [])
+    if not isinstance(raw_positions, list) or len(raw_positions) > 100:
+        raise RequestError("Invalid MT5 open-position snapshot.")
+
+    positions = []
+    for row in raw_positions:
+        if not isinstance(row, dict):
+            raise RequestError("Invalid MT5 open-position record.")
+        ticket = int(_number(row.get("ticket"), "position ticket", 1, 9223372036854775807, integer=True))
+        symbol = str(row.get("symbol", "")).strip()
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,32}", symbol):
+            raise RequestError("Invalid MT5 position symbol.")
+        side = str(row.get("side", "")).strip().upper()
+        if side not in ("BUY", "SELL"):
+            raise RequestError("Invalid MT5 position direction.")
+        opened_epoch = int(_number(row.get("opened_at_epoch", 0), "position open time", 0, 4102444800, integer=True))
+        positions.append({
+            "ticket": ticket,
+            "symbol": symbol,
+            "side": side,
+            "volume": _number(row.get("volume"), "position volume", 0.00000001, 1000),
+            "open_price": _number(row.get("open_price"), "position open price", 0, 100000000),
+            "stop_loss": _number(row.get("stop_loss", 0), "position stop loss", 0, 100000000),
+            "take_profit": _number(row.get("take_profit", 0), "position take profit", 0, 100000000),
+            "profit": _number(row.get("profit", 0), "position profit", -1000000000000, 1000000000000),
+            "swap": _number(row.get("swap", 0), "position swap", -1000000000000, 1000000000000),
+            "magic_number": int(_number(row.get("magic_number", 0), "position magic number", 0, 9223372036854775807, integer=True)),
+            "opened_at": datetime.fromtimestamp(opened_epoch, timezone.utc).isoformat() if opened_epoch else None,
+        })
+
+    payload = {
+        "account_balance": _number(body.get("balance"), "account balance", 0, 1000000000000),
+        "account_equity": _number(body.get("equity"), "account equity", 0, 1000000000000),
+        "account_margin": _number(body.get("margin", 0), "account margin", 0, 1000000000000),
+        "account_free_margin": _number(body.get("free_margin", 0), "free margin", -1000000000000, 1000000000000),
+        "account_floating_profit": _number(body.get("floating_profit", 0), "floating profit", -1000000000000, 1000000000000),
+        "account_currency": currency,
+        "account_positions": positions,
+        "account_ea_auto_trade_enabled": body.get("ea_auto_trade_enabled") is True,
+        "account_snapshot_at": _now_iso(),
+    }
+    rows = _db_request(
+        "PATCH",
+        _query("lm_mt5_devices", id="eq." + str(device["id"]), revoked_at="is.null"),
+        payload,
+        prefer="return=representation",
+    )
+    if not isinstance(rows, list) or not rows:
+        raise RequestError("MT5 account snapshot could not be stored for this linked terminal.")
+    return {"saved": True, "position_count": len(positions), "updated_at": payload["account_snapshot_at"]}
+
+
+def _set_user_session(user, body, enabled):
+    """Start/stop new EA entries without resetting any stored risk settings."""
+    params = {
+        "select": "id,account_login,broker_server,account_mode,risk_per_trade,max_daily_loss_percent,"
+                  "max_open_positions,max_trades_per_day,max_lot,min_confidence,max_signal_age_minutes,"
+                  "max_entry_deviation_points,max_spread_points,account_snapshot_at,"
+                  "account_ea_auto_trade_enabled,revoked_at",
+        "user_id": "eq." + str(user["id"]),
+        "revoked_at": "is.null",
+        "order": "created_at.desc",
+        "limit": "1",
+    }
+    device_id = str(body.get("device_id", "")).strip()
+    if device_id:
+        params["id"] = "eq." + device_id
+    devices = _db_request("GET", _query("lm_mt5_devices", **params))
+    if not isinstance(devices, list) or not devices:
+        raise RequestError("No active MT5 terminal is linked to this LM Analyzer account.")
+    device = devices[0]
+
+    if enabled:
+        snapshot_at = device.get("account_snapshot_at")
+        try:
+            stamp = datetime.fromisoformat(str(snapshot_at).replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - stamp).total_seconds()
+        except (TypeError, ValueError):
+            age = float("inf")
+        if age > 90:
+            raise RequestError("The MT5 account feed is not live. Keep the terminal and LM AUTO TRADER EA running, then refresh.")
+        if device.get("account_ea_auto_trade_enabled") is not True:
+            raise RequestError("Enable InpEnableAutoTrading in the LM AUTO TRADER EA inputs, then start the session here.")
+        live_enabled = os.environ.get("LM_MT5_LIVE_TRADING_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+        if str(device.get("account_mode", "demo")).lower() == "real" and not live_enabled:
+            raise RequestError("Real-account execution is disabled by the server. Connect a demo account for validation.")
+
+    settings = {key: device.get(key) for key in (
+        "account_login", "broker_server", "risk_per_trade", "max_daily_loss_percent",
+        "max_open_positions", "max_trades_per_day", "max_lot", "min_confidence",
+        "max_signal_age_minutes", "max_entry_deviation_points", "max_spread_points",
+    )}
+    settings["auto_trade_enabled"] = bool(enabled)
+    result = _configure_device(device, settings)
+    result["device_id"] = str(device["id"])
+    result["session"] = {"status": "active" if enabled else "stopped"}
+    result["message"] = (
+        "New MT5 entries are enabled. Existing risk limits remain in force."
+        if enabled else
+        "New MT5 entries are stopped. Existing positions remain under MT5 protective management."
+    )
+    return result
+
+
 def _revoke_user_devices(user):
     _db_request(
         "PATCH",
@@ -653,7 +765,7 @@ def _user_dashboard(user):
         "GET",
         _query(
             "lm_mt5_devices",
-            select="id,user_id,account_login,broker_server,account_mode,auto_trade_enabled,risk_per_trade,max_daily_loss_percent,max_open_positions,max_trades_per_day,max_lot,min_confidence,max_signal_age_minutes,max_entry_deviation_points,max_spread_points,created_at,updated_at,last_seen_at,revoked_at",
+            select="id,user_id,account_login,broker_server,account_mode,auto_trade_enabled,risk_per_trade,max_daily_loss_percent,max_open_positions,max_trades_per_day,max_lot,min_confidence,max_signal_age_minutes,max_entry_deviation_points,max_spread_points,created_at,updated_at,last_seen_at,revoked_at,account_balance,account_equity,account_margin,account_free_margin,account_floating_profit,account_currency,account_positions,account_snapshot_at,account_ea_auto_trade_enabled",
             user_id="eq." + user_id,
             revoked_at="is.null",
             order="created_at.desc",
@@ -671,6 +783,8 @@ def _user_dashboard(user):
             "executions": [],
             "recent_deals": [],
             "ai_decisions": [],
+            "account": None,
+            "open_positions": [],
         }
 
     last_seen = device.get("last_seen_at")
@@ -684,6 +798,32 @@ def _user_dashboard(user):
             telemetry_status = "live" if age <= 90 else "stale"
         except (TypeError, ValueError, OverflowError):
             telemetry_status = "unknown"
+
+    account_positions = device.get("account_positions")
+    if not isinstance(account_positions, list):
+        account_positions = []
+    account = None
+    if device.get("account_snapshot_at"):
+        snapshot_stale = True
+        try:
+            snapshot_stamp = datetime.fromisoformat(str(device["account_snapshot_at"]).replace("Z", "+00:00"))
+            if snapshot_stamp.tzinfo is None:
+                snapshot_stamp = snapshot_stamp.replace(tzinfo=timezone.utc)
+            snapshot_stale = (datetime.now(timezone.utc) - snapshot_stamp).total_seconds() > 90
+        except (TypeError, ValueError, OverflowError):
+            snapshot_stale = True
+        account = {
+            "balance": device.get("account_balance"),
+            "equity": device.get("account_equity"),
+            "margin": device.get("account_margin"),
+            "free_margin": device.get("account_free_margin"),
+            "floating_profit": device.get("account_floating_profit"),
+            "currency": device.get("account_currency") or "USD",
+            "positions": account_positions,
+            "updated_at": device.get("account_snapshot_at"),
+            "stale": snapshot_stale,
+            "ea_auto_trade_enabled": device.get("account_ea_auto_trade_enabled") is True,
+        }
 
     executions = _db_request(
         "GET",
@@ -739,7 +879,7 @@ def _user_dashboard(user):
         "risk_per_trade", "max_daily_loss_percent", "max_open_positions",
         "max_trades_per_day", "max_lot", "min_confidence",
         "max_signal_age_minutes", "max_entry_deviation_points",
-        "max_spread_points", "created_at", "updated_at", "last_seen_at",
+        "max_spread_points", "created_at", "updated_at", "last_seen_at", "account_snapshot_at",
     )}
     return {
         "connected": True,
@@ -751,8 +891,8 @@ def _user_dashboard(user):
             "max_trades_per_day", "max_lot", "min_confidence",
             "max_signal_age_minutes", "max_entry_deviation_points", "max_spread_points",
         )},
-        "account": None,
-        "open_positions": [],
+        "account": account,
+        "open_positions": account_positions,
         "executions": executions if isinstance(executions, list) else [],
         "recent_deals": deals if isinstance(deals, list) else [],
         "ai_decisions": decisions,
@@ -830,6 +970,10 @@ class handler(BaseHTTPRequestHandler):
                 user = verify_access_token(extract_bearer_token(self))
                 json_response(self, 200, _configure_user_device(user, body))
                 return
+            if action in ("session_start", "session_stop"):
+                user = verify_access_token(extract_bearer_token(self))
+                json_response(self, 200, _set_user_session(user, body, action == "session_start"))
+                return
 
             device = _read_device(self)
             _check_account_identity(device, body.get("account_login"), body.get("broker_server"))
@@ -841,6 +985,8 @@ class handler(BaseHTTPRequestHandler):
                 json_response(self, 200, _report_execution(device, body))
             elif action == "deal":
                 json_response(self, 200, _record_deal(device, body))
+            elif action == "account_snapshot":
+                json_response(self, 200, _record_account_snapshot(device, body))
             else:
                 json_response(self, 400, {"error": "Unknown MT5 action."})
         except RequestError as exc:
