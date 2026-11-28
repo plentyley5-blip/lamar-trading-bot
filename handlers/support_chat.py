@@ -233,6 +233,95 @@ def fallback_support_reply(messages):
     )
 
 
+def latest_customer_message(messages):
+    for item in reversed(messages or []):
+        if str(item.get("role", "")) == "user":
+            return " ".join(str(item.get("content", "")).split()).strip()
+    return ""
+
+
+def customer_explicitly_requests_human(messages):
+    """Only route to a human when the customer clearly asks for one."""
+    latest = latest_customer_message(messages).lower()
+    normalized = re.sub(r"[^a-z0-9 ]", " ", latest)
+    normalized = " ".join(normalized.split())
+    phrases = (
+        "human agent", "live agent", "real person", "human support",
+        "talk to a human", "speak to a human", "talk to an agent",
+        "speak to an agent", "connect me to an agent",
+        "connect me to a human", "i want an agent", "i need an agent",
+        "i want a human", "i need a human", "agent support",
+        "contact a human", "please transfer me", "escalate this",
+        "talk to someone from support", "speak to someone from support",
+        "let me talk to someone", "can i talk to someone",
+        "can i speak to someone",
+    )
+    if any(phrase in normalized for phrase in phrases):
+        return True
+    return bool(re.search(
+        r"\\b(?:talk|speak|connect|transfer|escalate|request)\\b.{0,35}\\b(?:agent|human|person)\\b",
+        normalized,
+    ))
+
+
+def customer_needs_private_staff_action(messages):
+    """Identify requests that genuinely require account/payment access."""
+    latest = latest_customer_message(messages).lower()
+    normalized = re.sub(r"[^a-z0-9 ]", " ", latest)
+    normalized = " ".join(normalized.split())
+    payment_topic = any(term in normalized for term in (
+        "payment", "paid", "transaction", "receipt", "charged",
+        "deducted", "refund", "billing", "purchase",
+    ))
+    payment_problem = any(term in normalized for term in (
+        "not reflected", "not showing", "not received", "not updated",
+        "failed", "was deducted", "been deducted", "was charged",
+        "been charged", "verify", "confirm", "check my payment",
+        "refund", "reverse the payment",
+    ))
+    if payment_topic and payment_problem:
+        return True
+
+    subscription_topic = "subscription" in normalized or "my plan" in normalized
+    account_action = any(term in normalized for term in (
+        "not active", "not activated", "activate", "reactivate",
+        "renew my", "cancel my", "refund my", "change my plan",
+        "upgrade my plan", "downgrade my plan", "extend my plan",
+    ))
+    if subscription_topic and account_action:
+        return True
+
+    return any(phrase in normalized for phrase in (
+        "delete my account", "change my email address",
+        "change the email on my account", "restore my account access",
+        "unlock my account",
+    ))
+
+
+def customer_reports_unresolved_after_troubleshooting(messages):
+    """Escalate only after the bot has already offered practical troubleshooting."""
+    user_messages = [
+        " ".join(str(item.get("content", "")).lower().split())
+        for item in (messages or []) if str(item.get("role", "")) == "user"
+    ]
+    assistant_messages = [
+        " ".join(str(item.get("content", "")).lower().split())
+        for item in (messages or []) if str(item.get("role", "")) == "assistant"
+    ]
+    if len(user_messages) < 2 or not assistant_messages:
+        return False
+    unresolved = any(phrase in user_messages[-1] for phrase in (
+        "still not working", "still doesn't work", "still does not work",
+        "same issue", "did not work", "didn't work", "tried that",
+        "no change", "still failing", "not fixed", "still stuck",
+    ))
+    gave_steps = any(term in " ".join(assistant_messages[:-1] or assistant_messages) for term in (
+        "try ", "check ", "open ", "restart", "step 1", "first,",
+        "clear cache", "sign out", "sign in again",
+    ))
+    return unresolved and gave_steps
+
+
 def save_message(conversation_id, customer_user_id, role, content, sender_id=None, sender_name=None, attachment_data_url=None):
     payload = {
         "conversation_id": conversation_id,
@@ -1005,6 +1094,35 @@ class handler(BaseHTTPRequestHandler):
                 json_response(self, 200, {"resolved": True, "next_waiting_request": bool(waiting_rows), "notification": notified})
                 return
 
+            if action == "resume_bot":
+                conversation_id = str(data.get("conversation_id", "")).strip()
+                if not conversation_id:
+                    raise ValueError("Select the support conversation you want to resume.")
+                conversation = owned_conversation(conversation_id, user_id)
+                status = str(conversation.get("support_status") or "bot")
+                if status == "assigned":
+                    raise ValueError("A support agent has already joined. Continue in that conversation or start a separate new bot chat.")
+                if status == "waiting":
+                    conversation = update_conversation_status(conversation_id, {
+                        "support_status": "bot",
+                        "assigned_agent_id": None,
+                        "assigned_agent_name": None,
+                        "handoff_requested_at": None,
+                        "assigned_at": None,
+                        "resolved_at": None,
+                    }) or conversation
+                    save_message(
+                        conversation_id, user_id, "system",
+                        "The customer chose to continue with LM Support Bot. The pending human-support request was withdrawn.",
+                    )
+                json_response(self, 200, {
+                    "resumed": True,
+                    "conversation_id": conversation_id,
+                    "support_status": "bot",
+                    "assigned_agent_name": "",
+                })
+                return
+
             if action == "request_human":
                 conversation_id = str(data.get("conversation_id", "")).strip()
                 if not conversation_id:
@@ -1111,10 +1229,25 @@ class handler(BaseHTTPRequestHandler):
                 # Never leave a customer with the same dead-end error. Preserve bot
                 # mode and return a helpful, honest fallback tied to their message.
                 raw_reply = fallback_support_reply(context)
-            should_handoff = HANDOFF_MARKER in raw_reply
+            marker_requested = HANDOFF_MARKER in raw_reply
+            direct_human_request = customer_explicitly_requests_human(context)
+            private_staff_action = customer_needs_private_staff_action(context)
+            unresolved_after_steps = customer_reports_unresolved_after_troubleshooting(context)
+            # The model's marker alone is not enough. This server-side gate keeps
+            # ordinary, unfamiliar, or short questions in bot mode.
+            should_handoff = (
+                direct_human_request
+                or private_staff_action
+                or (marker_requested and unresolved_after_steps)
+            )
             reply = raw_reply.replace(HANDOFF_MARKER, "").strip()
+            if marker_requested and not should_handoff and re.search(
+                r"\\b(?:human support|support agent|contact an agent|escalat)\\b",
+                reply.lower(),
+            ):
+                reply = fallback_support_reply(context)
             if not reply:
-                reply = "I need a human support agent to help resolve this."
+                reply = fallback_support_reply(context)
             save_message(conversation_id, user_id, "assistant", reply)
             touch_conversation(conversation_id)
             if should_handoff:
