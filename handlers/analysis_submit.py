@@ -34,7 +34,7 @@ from api.user_security import (
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-MAX_REQUEST_BYTES = 25 * 1024 * 1024
+# Vercel functions reject request bodies above 4.5 MB. Keep a buffer for JSON/base64 overhead.\nMAX_REQUEST_BYTES = 4 * 1024 * 1024
 WORKER_WAKE_TIMEOUT_SECONDS = 4
 DEFAULT_PRODUCTION_HOST = "lamar-trading-bot.vercel.app"
 
