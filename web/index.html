@@ -479,6 +479,103 @@ function homeView(){
  const p=profile();
  return '<div class="home-dashboard"><header class="dashboard-welcome"><h1>Welcome, '+safe((p.full_name||"Trader").split(" ")[0])+'</h1><p>Ready to analyse the market?</p></header>'+tradersRightNow().replace('<section class="glass card"','<section class="glass card dashboard-stat-card"')+'<section class="glass chart-intelligence-card"><h2>Chart Intelligence</h2><p>Select your market, upload 4H and 15M charts, and analyse the setup.</p><button class="start-orb" data-sub="ANALYZER" aria-label="Start analysis"><span class="star">✦</span><strong>START</strong><strong>ANALYSIS</strong></button><div class="caption">'+(canAnalyze()?"Your current allowance: "+safe(allowanceText()):"An active allowance or paid plan is required to analyse charts.")+'</div></section><div class="dashboard-section-title"><h2>LM Analyzer Recommended Tools</h2><span class="pill">AUTO ROTATES</span></div><div class="featured-tool-card">'+featuredTool()+'</div><section class="glass news-teaser"><div class="news-mark">◷</div><div style="flex:1"><h3>View High Impact News</h3><p>'+(canNews()?"Forex events · AI market outlooks":"Premium feature · Active subscription required")+'</p></div><button type="button" class="news-teaser-arrow" data-sub="HIGH_IMPACT_NEWS" aria-label="View High Impact News">›</button></section></div>';
 }
+
+function webRiskSymbolKey(instrument){return String(instrument||"").trim().toUpperCase().replace(/[^A-Z0-9]/g,"_")}
+function webRiskStorageKey(instrument,field){return "lm_risk_"+webRiskSymbolKey(instrument)+"_"+field}
+function loadWebLotProfile(instrument){
+ const equity=localStorage.getItem("lm_risk_account_equity")||"";
+ const currency=localStorage.getItem("lm_risk_account_currency")||"USD";
+ const riskPercent=localStorage.getItem("lm_risk_percent")||"1";
+ const tickSize=localStorage.getItem(webRiskStorageKey(instrument,"tick_size"))||"";
+ const tickValue=localStorage.getItem(webRiskStorageKey(instrument,"tick_value_per_lot"))||"";
+ const volumeStep=localStorage.getItem(webRiskStorageKey(instrument,"volume_step"))||"";
+ const minVolume=localStorage.getItem(webRiskStorageKey(instrument,"min_volume"))||"";
+ if(!equity||!tickSize||!tickValue||!volumeStep||!minVolume)return null;
+ return {equity,currency,riskPercent,tickSize,tickValue,volumeStep,minVolume};
+}
+function saveWebLotProfile(instrument,form){
+ localStorage.setItem("lm_risk_account_equity",form.equity);
+ localStorage.setItem("lm_risk_account_currency",form.currency.toUpperCase());
+ localStorage.setItem("lm_risk_percent",form.riskPercent);
+ localStorage.setItem(webRiskStorageKey(instrument,"tick_size"),form.tickSize);
+ localStorage.setItem(webRiskStorageKey(instrument,"tick_value_per_lot"),form.tickValue);
+ localStorage.setItem(webRiskStorageKey(instrument,"volume_step"),form.volumeStep);
+ localStorage.setItem(webRiskStorageKey(instrument,"min_volume"),form.minVolume);
+}
+function numberOrNull(v){const n=Number(String(v===undefined||v===null?"":v).trim().replace(/,/g,""));return Number.isFinite(n)&&String(v===undefined||v===null?"":v).trim()!==""?n:null}
+function formatLotNumberWeb(n){return Number(n).toFixed(4).replace(/\.?0+$/,"")}
+function extractRiskPrice(v,direction){
+ const nums=(String(v||"").replace(/,/g,"").match(/\d+(?:\.\d+)?/g)||[]).map(Number).filter(x=>Number.isFinite(x)&&x>0);
+ if(!nums.length)return "";
+ return String(direction==="SELL"?Math.min(...nums):Math.max(...nums));
+}
+function calculateLotEstimate(form,signal){
+ const equity=numberOrNull(form.equity),riskPercent=numberOrNull(form.riskPercent),entry=numberOrNull(form.entry),stop=numberOrNull(form.stopLoss);
+ const tp1=numberOrNull(form.tp1),tp2=numberOrNull(form.tp2),tickSize=numberOrNull(form.tickSize),tickValue=numberOrNull(form.tickValue),volumeStep=numberOrNull(form.volumeStep),minVolume=numberOrNull(form.minVolume);
+ const currency=String(form.currency||"").trim().toUpperCase();
+ if(equity===null||equity<=0)return {ok:false,error:"Enter a valid account balance or equity greater than zero."};
+ if(!/^[A-Z]{3}$/.test(currency))return {ok:false,error:"Enter a three-letter account currency code, for example USD or UGX."};
+ if(riskPercent===null||riskPercent<0.1||riskPercent>2)return {ok:false,error:"Risk per trade must be between 0.1% and 2%. The default is 1%."};
+ if(entry===null||entry<=0||stop===null||stop<=0||entry===stop)return {ok:false,error:"Enter valid entry and stop-loss prices."};
+ if(String(form.tp1||"").trim()&&(tp1===null||tp1<=0))return {ok:false,error:"Take profit 1 must be a positive numeric price."};
+ if(String(form.tp2||"").trim()&&(tp2===null||tp2<=0))return {ok:false,error:"Take profit 2 must be a positive numeric price."};
+ if(tickSize===null||tickSize<=0||tickValue===null||tickValue<=0||volumeStep===null||volumeStep<=0||minVolume===null||minVolume<=0)return {ok:false,error:"Enter the exact tick size, tick value for 1.00 lot, volume step and minimum volume from your broker's symbol specification. Do not guess these values."};
+ if(signal==="BUY"&&stop>=entry)return {ok:false,error:"For a BUY setup, the stop-loss must be below entry. Check the analysis levels before sizing."};
+ if(signal==="SELL"&&stop<=entry)return {ok:false,error:"For a SELL setup, the stop-loss must be above entry. Check the analysis levels before sizing."};
+ if(signal==="BUY"&&((tp1!==null&&tp1<=entry)||(tp2!==null&&tp2<=entry)))return {ok:false,error:"Take-profit direction does not match the BUY signal."};
+ if(signal==="SELL"&&((tp1!==null&&tp1>=entry)||(tp2!==null&&tp2>=entry)))return {ok:false,error:"Take-profit direction does not match the SELL signal."};
+ const ticks=Math.max(1,Math.ceil(Math.abs(entry-stop)/tickSize));
+ const riskPerLot=ticks*tickValue,cashRisk=equity*riskPercent/100;
+ if(!Number.isFinite(riskPerLot)||riskPerLot<=0||!Number.isFinite(cashRisk)||cashRisk<=0)return {ok:false,error:"Unable to calculate a positive cash-risk budget."};
+ const maxLots=Math.min(cashRisk/riskPerLot,1000);
+ let lots=Math.floor(maxLots/volumeStep+1e-10)*volumeStep;
+ let estimatedLoss=lots*riskPerLot;
+ while(lots>=minVolume&&estimatedLoss>cashRisk+1e-9){lots=Math.max(0,lots-volumeStep);estimatedLoss=lots*riskPerLot}
+ const canEstimate=lots>0&&lots+1e-9>=minVolume&&estimatedLoss<=cashRisk+1e-9;
+ return {ok:true,canEstimate:canEstimate,recommendedLots:canEstimate?lots:null,estimatedLoss:canEstimate?estimatedLoss:null,equity:equity,currency:currency,riskPercent:riskPercent,cashRisk:cashRisk,riskPerLot:riskPerLot,ticks:ticks,rr1:tp1?Math.abs(tp1-entry)/Math.abs(entry-stop):null,rr2:tp2?Math.abs(tp2-entry)/Math.abs(entry-stop):null,explanation:canEstimate?"The setup spans "+ticks+" broker tick(s). The suggested size is rounded DOWN to your broker's volume step and stays within your selected cash-risk budget.":"The risk budget allows a size below the broker's minimum of "+formatLotNumberWeb(minVolume)+" lots. No position size is recommended. Do not round up to the minimum or increase risk just to force a trade.",assumptions:"Broker values saved for this symbol: tick size "+tickSize+"; tick value "+tickValue+" "+currency+" per tick for 1.00 lot; volume step "+volumeStep+" lots; minimum volume "+minVolume+" lots. Stop distance is rounded UP to whole ticks and volume is rounded DOWN.",warning:"Confirm these values from MT5's exact symbol Specification and update account equity when it changes. Estimated loss excludes spread, slippage, commissions, swaps, gaps, margin constraints and conversion-rate changes. No broker account is connected and no trade is placed."};
+}
+function getPreferredLotMarkup(r,instrument,signal){
+ const status=String(r.setup_status||"").trim().toUpperCase().replace(/ /g,"_");
+ const entry=extractRiskPrice(r.entry,signal),stop=extractRiskPrice(r.stop_loss||r.stopLoss,signal);
+ if(signal==="NO TRADE")return '<div class="analysis-lot-card"><div class="analysis-kicker">PREFERRED LOT SIZE</div><h2>NO POSITION SIZE</h2><p>This analysis returned NO TRADE, so LM Analyzer will not suggest a lot size.</p></div>';
+ if(["WAITING","LATE_ENTRY","INVALID","NO_SETUP"].includes(status))return '<div class="analysis-lot-card"><div class="analysis-kicker">PREFERRED LOT SIZE</div><h2>SETUP NOT READY</h2><p>The analysis says '+safe(status.replace(/_/g," "))+'. Reanalyse when the setup is READY before calculating lot size.</p></div>';
+ const saved=loadWebLotProfile(instrument);
+ if(!saved||!entry||!stop||Number(entry)===Number(stop))return '<div class="analysis-lot-card"><div class="analysis-kicker">PREFERRED LOT SIZE</div><h2>SET UP ACCOUNT RISK FIRST</h2><p>Enter your current account equity and risk limit, then the exact MT5 symbol tick/volume specification once for '+safe(instrument)+'. Future analyses of this symbol can show the lot size automatically.</p><button type="button" class="analysis-lot-button" data-act="open-analysis-risk">SET UP LOT SIZE</button></div>';
+ const estimate=calculateLotEstimate(Object.assign({},saved,{entry:entry,stopLoss:stop}),signal);
+ if(!estimate.ok||!estimate.canEstimate)return '<div class="analysis-lot-card"><div class="analysis-kicker">PREFERRED LOT SIZE</div><h2>LOT SIZE NOT CONFIRMED</h2><p>'+(estimate.ok?estimate.explanation:"Saved account or broker settings need review.")+'</p><button type="button" class="analysis-lot-button" data-act="open-analysis-risk">REVIEW ACCOUNT RISK</button></div>';
+ return '<div class="analysis-lot-card"><div class="analysis-kicker">PREFERRED LOT SIZE</div><h2>'+safe(formatLotNumberWeb(estimate.recommendedLots))+' LOTS</h2><p>Estimated stop-loss risk: '+safe(estimate.estimatedLoss.toFixed(2))+' '+safe(estimate.currency)+'. Risk budget: '+safe(estimate.cashRisk.toFixed(2))+' '+safe(estimate.currency)+'.</p><button type="button" class="analysis-lot-button" data-act="open-analysis-risk">EDIT ACCOUNT RISK</button></div>';
+}
+function currentAnalysisRiskItem(){return (state.history||[]).find(x=>String(x.id||x.analysis_id||x.created_at)===String(state.selectedHistoryId))||null}
+function openAnalysisRiskCalculator(){
+ const item=currentAnalysisRiskItem();if(!item)return;
+ const r=item.result||{},signal=String(r.signal||r.direction||"NO TRADE").toUpperCase(),instrument=item.instrument||r.instrument||"";
+ const saved=loadWebLotProfile(instrument)||{};
+ state.analysisRiskForm={equity:saved.equity||"",currency:saved.currency||"USD",riskPercent:saved.riskPercent||"1",entry:extractRiskPrice(r.entry,signal),stopLoss:extractRiskPrice(r.stop_loss||r.stopLoss,signal),tp1:extractRiskPrice(r.take_profit_1||r.takeProfit1,signal),tp2:extractRiskPrice(r.take_profit_2||r.takeProfit2,signal),tickSize:saved.tickSize||"",tickValue:saved.tickValue||"",volumeStep:saved.volumeStep||"",minVolume:saved.minVolume||""};
+ state.analysisRiskError="";state.analysisRiskOutput=null;state.analysisRiskOpen=true;render();
+}
+function analysisRiskDialog(item){
+ const r=item.result||{},signal=String(r.signal||r.direction||"NO TRADE").toUpperCase(),status=String(r.setup_status||"").trim().toUpperCase().replace(/ /g,"_");
+ const noTrade=signal==="NO TRADE",notReady=["WAITING","LATE_ENTRY","INVALID","NO_SETUP"].includes(status),form=state.analysisRiskForm||{},out=state.analysisRiskOutput;
+ const field=(label,name,placeholder)=>'<label class="analysis-risk-field"><span>'+label+'</span><input class="field" type="text" inputmode="decimal" autocomplete="off" data-risk-field="'+name+'" value="'+safe(form[name]||"")+'" placeholder="'+(placeholder||label)+'"></label>';
+ const result=out?'<div class="analysis-risk-output"><div class="analysis-risk-output-title">'+(out.canEstimate?"LOT SIZE CONFIRMED":"LOT SIZE NOT CONFIRMED")+'</div>'+(out.canEstimate?'<div class="analysis-risk-lots">'+safe(formatLotNumberWeb(out.recommendedLots))+' lots</div>':'<p>'+safe(out.explanation)+'</p>')+'<div class="analysis-risk-output-rows"><div><span>Instrument</span><strong>'+safe(item.instrument||r.instrument||"")+'</strong></div><div><span>Direction</span><strong>'+safe(signal)+'</strong></div><div><span>Account equity</span><strong>'+safe(out.equity.toFixed(2))+' '+safe(out.currency)+'</strong></div><div><span>Risk budget</span><strong>'+safe(out.cashRisk.toFixed(2))+' '+safe(out.currency)+' ('+safe(out.riskPercent)+'%)</strong></div><div><span>Estimated loss at stop</span><strong>'+safe(out.estimatedLoss===null?"—":out.estimatedLoss.toFixed(2)+" "+out.currency)+'</strong></div><div><span>Reward / risk to TP1</span><strong>'+safe(out.rr1===null?"—":"1 : "+out.rr1.toFixed(2))+'</strong></div><div><span>Reward / risk to TP2</span><strong>'+safe(out.rr2===null?"—":"1 : "+out.rr2.toFixed(2))+'</strong></div></div><strong>CALCULATION DETAILS</strong><p>'+safe(out.explanation)+'</p><strong>ASSUMPTIONS</strong><p>'+safe(out.assumptions)+'</p><p class="analysis-risk-warning">'+safe(out.warning)+'</p><p class="analysis-risk-caption">This is an estimate only. LM Analyzer does not connect to your brokerage account or place trades.</p></div>':"";
+ const formBody='<p class="analysis-risk-intro">Enter your account/equity. Entry, stop-loss and take-profits are prefilled from this result and can be edited.</p><div class="analysis-risk-fields">'+field("ACCOUNT / EQUITY","equity")+field("ACCOUNT CURRENCY (USD, UGX, etc.)","currency","USD")+field("ENTRY","entry")+field("STOPLOSS","stopLoss")+field("TAKE PROFIT 1","tp1")+field("TAKE PROFIT 2 (optional)","tp2")+field("RISK PER TRADE (%) · DEFAULT 1%","riskPercent","1")+'</div><div class="analysis-risk-spec"><strong>BROKER SYMBOL SPECIFICATION · REQUIRED</strong><p>In MT5, open Market Watch, right-click the exact symbol, select Specification, and enter the values shown there. Tick value must be in your account currency and for 1.00 lot. If you cannot verify a value, stop rather than guess.</p><div class="analysis-risk-fields">'+field("TICK SIZE (price units)","tickSize")+field("TICK VALUE FOR 1.00 LOT (account currency)","tickValue")+field("BROKER VOLUME STEP (lots)","volumeStep")+field("BROKER MINIMUM VOLUME (lots)","minVolume")+'</div></div>';
+ const body=noTrade?'<p class="analysis-risk-blocked">This analysis returned NO TRADE. LM Analyzer will not suggest a position size for a setup it rejected.</p>':notReady?'<p class="analysis-risk-blocked">The setup status is '+safe(status.replace(/_/g," "))+'. Do not enter now. Reanalyse when a valid setup is READY before calculating lot size.</p>':out?result:formBody;
+ const buttons=noTrade||notReady?'<button type="button" class="btn" data-act="close-analysis-risk">CLOSE</button>':out?'<button type="button" class="btn outline" data-act="edit-analysis-risk">EDIT INPUTS</button><button type="button" class="btn" data-act="close-analysis-risk">CLOSE</button>':'<button type="button" class="btn outline" data-act="close-analysis-risk">CANCEL</button><button type="button" class="btn" data-act="calculate-analysis-risk">CONTINUE</button>';
+ return '<div class="analysis-risk-overlay"><section class="analysis-risk-dialog" role="dialog" aria-modal="true" aria-labelledby="analysis-risk-title"><header><h2 id="analysis-risk-title">🧮 Risk Calculator</h2><button type="button" class="analysis-risk-close" data-act="close-analysis-risk" aria-label="Close">×</button></header><div class="analysis-risk-dialog-body">'+body+(state.analysisRiskError?'<p class="analysis-risk-error">'+safe(state.analysisRiskError)+'</p>':"")+'</div><footer>'+buttons+'</footer></section></div>';
+}
+function runAnalysisRiskCalculation(){
+ const f={...(state.analysisRiskForm||{})};
+ document.querySelectorAll("[data-risk-field]").forEach(el=>{f[el.dataset.riskField]=el.value});
+ state.analysisRiskForm=f;
+ const item=currentAnalysisRiskItem();if(!item)return;
+ const r=item.result||{},signal=String(r.signal||r.direction||"NO TRADE").toUpperCase(),status=String(r.setup_status||"").toUpperCase().replace(/ /g,"_");
+ if(signal==="NO TRADE"){state.analysisRiskError="This analysis returned NO TRADE. A lot-size estimate is not available.";render();return}
+ if(["WAITING","LATE_ENTRY","INVALID","NO_SETUP"].includes(status)){state.analysisRiskError="This setup is not READY. Reanalyse once the entry setup is ready.";render();return}
+ const result=calculateLotEstimate(f,signal);if(!result.ok){state.analysisRiskError=result.error;render();return}
+ saveWebLotProfile(item.instrument||r.instrument||"",f);
+ state.analysisRiskError="";state.analysisRiskOutput=result;render();
+}
+
 function historyCard(item){const r=item.result||{},signal=String(r.signal||r.direction||"WAIT").toUpperCase(),color=signal==="BUY"?"var(--green)":signal==="SELL"?"var(--red)":"var(--gold)";return '<article class="glass list-card" data-history-id="'+safe(item.id||item.analysis_id||item.created_at)+'" style="cursor:pointer"><div class="list-top"><div><h3>'+safe(item.instrument||r.instrument||"Analysis")+'</h3><p>'+safe(item.trade_focus||"")+' · '+safe(formatDate(item.created_at))+'</p></div><span class="signal" style="color:'+color+'">'+safe(signal)+'</span></div><div class="divider"></div><div class="metric-grid">'+metric("Confidence",String(r.confidence??"—")+"%")+metric("Entry",r.entry||"—")+metric("Stop loss",r.stop_loss||r.stopLoss||"—")+metric("TP1 / TP2",(r.take_profit_1||r.takeProfit1||"—")+" / "+(r.take_profit_2||r.takeProfit2||"—"))+metric("Setup status",r.setup_status||"—")+metric("Order type",r.order_type||"—")+metric("Risk / reward",r.risk_reward||"—")+'</div></article>'}
 function historyDetailView(item){
  const r=item.result||{},instrument=item.instrument||r.instrument||"—";
