@@ -1037,6 +1037,7 @@ async function loadSupportChat(){
 
 async function loadSupportAgentQueueWeb(silent=false){
  if(!state.chatAgentIsAgent||state.chatAgentQueueLoading)return;
+ const previousScroll=$(".agent-inbox-list")?.scrollTop||0;
  state.chatAgentQueueLoading=true;state.chatAgentQueueError="";
  if(!silent&&state.sub==="LIVE_CHAT"&&state.chatAgentScreen==="inbox")render();
  try{
@@ -1047,7 +1048,7 @@ async function loadSupportAgentQueueWeb(silent=false){
   state.chatAgentActiveCount=Number(r.active_count||0);
   state.chatAgentMaxActiveChats=Math.max(1,Number(r.max_active_chats||1));
  }catch(e){state.chatAgentQueueError=e.message||"Unable to refresh the support inbox."}
- finally{state.chatAgentQueueLoading=false;if(state.sub==="LIVE_CHAT"&&state.chatAgentScreen==="inbox")render()}
+ finally{state.chatAgentQueueLoading=false;if(state.sub==="LIVE_CHAT"&&state.chatAgentScreen==="inbox"){render();const list=$(".agent-inbox-list");if(list)list.scrollTop=previousScroll}}
 }
 async function openSupportAgentInboxWeb(){
  if(!state.chatAgentIsAgent)return;
@@ -1055,6 +1056,7 @@ async function openSupportAgentInboxWeb(){
 }
 async function loadSupportAgentConversationWeb(silent=false){
  const id=state.chatAgentConversationId;if(!id||!state.chatAgentIsAgent||state.chatAgentLoading)return;
+ const wasResolved=state.chatAgentResolved;
  state.chatAgentLoading=true;
  if(!silent&&state.sub==="LIVE_CHAT"&&state.chatAgentScreen==="agent_chat")render();
  try{
@@ -1064,7 +1066,7 @@ async function loadSupportAgentConversationWeb(silent=false){
   state.chatAgentResolved=state.chatAgentConversationStatus==="resolved";
   state.chatAgentQueueError="";
  }catch(e){state.chatAgentQueueError=e.message||"Unable to load this conversation."}
- finally{state.chatAgentLoading=false;if(state.sub==="LIVE_CHAT"&&state.chatAgentScreen==="agent_chat")render()}
+ finally{state.chatAgentLoading=false;if(state.sub==="LIVE_CHAT"&&state.chatAgentScreen==="agent_chat"){if(!silent||wasResolved!==state.chatAgentResolved)render();else refreshAgentConversationDom()}}
 }
 async function claimSupportConversationWeb(id){
  if(!id||state.chatAgentBusyId)return;
@@ -1110,6 +1112,19 @@ function supportAgentMessagesHtml(){
   return '<div class="agent-chat-message '+(isAgent?"agent-outgoing":isCustomer?"customer-incoming":"system-message")+'"><div class="agent-chat-bubble"><div class="agent-chat-sender">'+safe(name)+'</div>'+body+'</div></div>';
  }).join("");
 }
+function refreshAgentConversationDom(){
+ const list=$("agent-conversation-message-list");
+ if(list){
+  const nearBottom=list.scrollHeight-list.scrollTop-list.clientHeight<90;
+  const html=supportAgentMessagesHtml();
+  if(list.innerHTML!==html){list.innerHTML=html;if(nearBottom)list.scrollTop=list.scrollHeight}
+ }
+ const error=$("agent-conversation-error");if(error)error.textContent=state.chatAgentQueueError||"";
+ const subtitle=document.querySelector(".support-agent-screen .support-full-header-copy small");
+ if(subtitle)subtitle.textContent="Status · "+String(state.chatAgentConversationStatus||"assigned").toUpperCase();
+ const resolve=document.querySelector('[data-act="resolve-agent-conversation"]');
+ if(resolve){resolve.disabled=state.chatAgentResolved||state.chatAgentReplyBusy;resolve.textContent=state.chatAgentResolved?"RESOLVED":"RESOLVE"}
+}
 function supportAgentInboxView(){
  const waiting=state.chatAgentQueue.filter(x=>x.support_status==="waiting");
  const assigned=state.chatAgentQueue.filter(x=>x.support_status==="assigned");
@@ -1125,7 +1140,7 @@ function supportAgentInboxView(){
 }
 function supportAgentConversationView(){
  const id=state.chatAgentConversationId;
- return '<div class="support-agent-screen"><header class="support-full-header"><button type="button" class="chat-back-button" data-act="agent-back-inbox">‹</button><div class="support-full-header-copy"><strong>CUSTOMER CONVERSATION</strong><small>Same conversation · live updates</small></div><button type="button" class="agent-resolve-button" data-act="resolve-agent-conversation" '+(state.chatAgentResolved||state.chatAgentReplyBusy?"disabled":"")+'>'+ (state.chatAgentResolved?"RESOLVED":"RESOLVE")+'</button></header><div class="agent-conversation-message-list" id="agent-conversation-message-list">'+(state.chatAgentLoading&&!state.chatAgentMessages.length?'<div class="chat-empty-message">Loading conversation…</div>':supportAgentMessagesHtml())+'</div>'+(state.chatAgentQueueError?'<div class="error">'+safe(state.chatAgentQueueError)+'</div>':"")+(state.chatAgentResolved?'<div class="agent-resolved-note">This conversation has been resolved.</div>':'<div class="chat-composer agent-reply-composer"><textarea id="agent-chat-draft" class="field" rows="2" maxlength="2000" placeholder="Reply to customer…">'+safe(state.chatAgentReplyDraft)+'</textarea><div class="chat-composer-actions"><button type="button" class="btn agent-send-button" data-act="send-agent-reply" '+(state.chatAgentReplyBusy||!state.chatAgentReplyDraft.trim()?"disabled":"")+'>'+(state.chatAgentReplyBusy?"SENDING…":"SEND")+'</button></div></div>')+'</div>';
+ return '<div class="support-agent-screen"><header class="support-full-header"><button type="button" class="chat-back-button" data-act="agent-back-inbox">‹</button><div class="support-full-header-copy"><strong>CUSTOMER CONVERSATION</strong><small>Same conversation · live updates</small></div><button type="button" class="agent-resolve-button" data-act="resolve-agent-conversation" '+(state.chatAgentResolved||state.chatAgentReplyBusy?"disabled":"")+'>'+ (state.chatAgentResolved?"RESOLVED":"RESOLVE")+'</button></header><div class="agent-conversation-message-list" id="agent-conversation-message-list">'+(state.chatAgentLoading&&!state.chatAgentMessages.length?'<div class="chat-empty-message">Loading conversation…</div>':supportAgentMessagesHtml())+'</div>'+(state.chatAgentQueueError?'<div class="error" id="agent-conversation-error">'+safe(state.chatAgentQueueError)+'</div>':'<div class="error" id="agent-conversation-error"></div>')+(state.chatAgentResolved?'<div class="agent-resolved-note">This conversation has been resolved.</div>':'<div class="chat-composer agent-reply-composer"><textarea id="agent-chat-draft" class="field" rows="2" maxlength="2000" placeholder="Reply to customer…">'+safe(state.chatAgentReplyDraft)+'</textarea><div class="chat-composer-actions"><button type="button" class="btn agent-send-button" data-act="send-agent-reply" '+(state.chatAgentReplyBusy||!state.chatAgentReplyDraft.trim()?"disabled":"")+'>'+(state.chatAgentReplyBusy?"SENDING…":"SEND")+'</button></div></div>')+'</div>';
 }
 async function loadSupportBotProfileWeb(){
  try{const r=await api("/support_chat?action=bot_profile");state.chatBotIsOwner=!!r.is_owner;state.chatBotAvatarDataUrl=r.avatar_data_url||""}catch(_){state.chatBotIsOwner=false;state.chatBotAvatarDataUrl=""}
