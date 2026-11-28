@@ -1,5 +1,6 @@
 # LM Analyzer — Human support-agent takeover
 
+> Official LM Analyzer website: [Open the platform](https://lmanalyzer.pages.dev/) · [Product information and features](https://lmanalyzer.pages.dev/about/)
 This is an additive upgrade for the existing LM Analyzer Android app and its existing Vercel `support_chat` endpoint. It reuses the existing customer conversation rows, so the AI and human agent work inside the same conversation.
 
 ## Included files
