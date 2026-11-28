@@ -337,6 +337,57 @@ html[data-appearance="light"] .profile-identity-avatar,html[data-appearance="lig
  .community-header-actions .community-cta-compact{padding:7px 8px!important;font-size:8px!important}
  .trader-view-all-link{font-size:8px}
 }
+
+/* Real interactive control styling */
+.community-post-card .community-follow-button{height:28px;min-height:28px;padding:4px 8px!important;border-radius:8px;font-size:8px!important;line-height:1;font-weight:850;letter-spacing:.12px;box-shadow:none!important;white-space:nowrap;flex:0 0 auto}
+.analysis-accordion{margin:0 0 12px;background:rgba(5,13,27,.94);border:1px solid rgba(255,255,255,.035);border-radius:19px;overflow:hidden}
+.analysis-accordion-head{width:100%;min-height:68px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 18px;border:0;background:transparent;color:#75B7FF;text-align:left;font:inherit;font-size:13px;font-weight:950;letter-spacing:.15px;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+.analysis-accordion-head:focus-visible,.lm-choice-option:focus-visible,.lm-timeframe-selector:focus-visible{outline:2px solid #67B3FF;outline-offset:2px}
+.analysis-accordion-toggle{width:24px;height:24px;flex:0 0 24px;display:grid;place-items:center;color:#F2F6FF;font-size:26px;line-height:1;font-weight:500}
+.analysis-accordion-body{padding:0 18px 18px;color:#B9C8D8;font-size:12px;line-height:1.8}
+.analysis-risk-overlay,.lm-choice-overlay{position:fixed;inset:0;z-index:1005;display:flex;align-items:center;justify-content:center;padding:14px;background:rgba(0,0,0,.72);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.analysis-risk-dialog,.lm-choice-sheet{width:min(560px,100%);max-height:88dvh;overflow:hidden;border-radius:21px;background:#0C1D32;border:1px solid rgba(112,169,228,.26);box-shadow:0 25px 75px rgba(0,0,0,.52);color:#F4F7FC;display:flex;flex-direction:column}
+.analysis-risk-dialog header,.lm-choice-sheet header{padding:16px 18px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:space-between;gap:12px}
+.analysis-risk-dialog header h2,.lm-choice-sheet header h2{font-size:17px;font-weight:950;margin:0;color:#F4F7FC}
+.analysis-risk-close{border:0;background:transparent;color:#DDE8F6;font-size:25px;line-height:1;cursor:pointer}
+.analysis-risk-dialog-body{padding:16px 18px;overflow-y:auto;overscroll-behavior:contain}
+.analysis-risk-dialog footer{padding:12px 18px;border-top:1px solid rgba(255,255,255,.08);display:flex;justify-content:flex-end;gap:9px}
+.analysis-risk-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.analysis-risk-field{display:flex;flex-direction:column;gap:5px;min-width:0}
+.analysis-risk-field span{font-size:9px;line-height:1.35;color:#AEC2D9;font-weight:900;letter-spacing:.35px}
+.analysis-risk-field .field{min-width:0;width:100%;height:42px;min-height:42px;padding:9px 10px;border-radius:10px;background:#071426;border:1px solid rgba(120,171,223,.24);color:#F4F7FC;font-size:13px}
+.analysis-risk-intro,.analysis-risk-spec p,.analysis-risk-blocked{font-size:11px;line-height:1.65;color:#B8C8DA;margin:0 0 13px}
+.analysis-risk-spec{margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.09)}
+.analysis-risk-spec>strong,.analysis-risk-output>strong{display:block;font-size:10px;letter-spacing:.4px;color:#77B8FF;margin-bottom:6px}
+.analysis-risk-error{margin:12px 0 0;padding:10px 12px;border-radius:10px;background:rgba(222,73,94,.12);border:1px solid rgba(222,73,94,.3);color:#FFB3BE;font-size:11px;line-height:1.5}
+.analysis-risk-output{display:flex;flex-direction:column;gap:9px}
+.analysis-risk-output-title{font-size:11px;color:#74B9FF;font-weight:950;letter-spacing:.6px}
+.analysis-risk-lots{font-size:29px;color:#45D5A2;font-weight:950}
+.analysis-risk-output-rows{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.analysis-risk-output-rows>div{padding:9px 10px;border-radius:10px;background:rgba(255,255,255,.035)}
+.analysis-risk-output-rows span{display:block;font-size:9px;color:#98AEC7;margin-bottom:4px}
+.analysis-risk-output-rows strong{display:block;font-size:11px;color:#F1F6FC}
+.analysis-risk-output p{font-size:11px;line-height:1.6;color:#C0CDDD;margin:0}
+.analysis-risk-warning{color:#EFC56D!important}
+.analysis-risk-caption{font-size:9px;line-height:1.55;color:#90A3B9;margin:0}
+.lm-choice-sheet{padding-bottom:8px}
+.lm-choice-sheet .choice-list{padding:12px 14px 18px;overflow-y:auto}
+.lm-choice-option{width:100%;display:flex;align-items:center;gap:12px;padding:14px;margin-bottom:9px;border:1px solid rgba(255,255,255,.09);border-radius:15px;background:rgba(255,255,255,.035);color:#F4F7FC;text-align:left;cursor:pointer}
+.lm-choice-option.selected{border-color:#63AFFF;background:rgba(47,140,255,.16)}
+.lm-choice-option .choice-copy{flex:1;min-width:0}
+.lm-choice-option strong{display:block;font-size:13px}
+.lm-choice-option small{display:block;margin-top:3px;color:#A8BCD2;font-size:10px;line-height:1.45}
+.lm-choice-check{font-size:19px;color:#63B5FF;font-weight:950}
+.lm-selector-button{min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 13px}
+.lm-timeframe-selector{width:100%;display:flex;align-items:center;gap:11px;padding:13px 14px;border:1px solid rgba(93,162,234,.42);border-radius:16px;background:rgba(36,115,205,.12);color:#F5F8FC;text-align:left;cursor:pointer}
+.lm-timeframe-selector .plus{width:34px;height:34px;flex:0 0 34px;display:grid;place-items:center;border-radius:10px;background:rgba(47,140,255,.18);color:#78B9FF;font-size:24px}
+.lm-timeframe-selector-copy{flex:1;min-width:0}
+.lm-timeframe-selector-copy strong{display:block;font-size:12px}
+.lm-timeframe-selector-copy small{display:block;margin-top:3px;font-size:10px;color:var(--muted)}
+.news-teaser-arrow{width:32px;height:32px;min-width:32px;flex:0 0 32px;display:grid;place-items:center;padding:0;border:0;border-radius:50%;background:rgba(47,140,255,.13);color:#83BBFF;font-size:25px;line-height:1;cursor:pointer}
+.featured-news-arrow{min-width:30px!important;width:30px;height:30px;min-height:30px!important;padding:0!important;border-radius:50%!important;font-size:21px!important;line-height:1}
+@media(max-width:400px){.community-post-card .community-follow-button{height:26px;min-height:26px;padding:3px 7px!important;font-size:8px!important}.analysis-risk-fields{grid-template-columns:1fr 1fr}.analysis-risk-dialog footer .btn{min-height:36px;padding:7px 12px!important;font-size:10px!important}}
+
 </style>
 </head>
 <body><div id="app"><div class="loading"><span class="spinner"></span>Loading LM Analyzer…</div></div>
@@ -712,7 +763,7 @@ function riskView(){
  inputField("Instrument / broker symbol","risk-instrument","text","XAUUSD")+
  inputField("Account balance / equity","risk-balance","number",saved.equity||"100")+
  inputField("Account currency","risk-currency","text",saved.currency||"USD")+
- inputField("Risk per trade (%) · maximum 10","risk-percent","number",saved.riskPercent||"1")+
+ inputField("Risk per trade (%) · maximum 10","risk-percent","number",saved.riskPercent||"1")+'<div class="field-wrap"><label class="field-label">Direction</label><select class="field" id="risk-direction"><option value="BUY">BUY</option><option value="SELL">SELL</option></select></div>'+
  '<div class="divider"></div><div class="eyebrow">PRICE LEVELS</div>'+
  inputField("Entry price","risk-entry","number","")+
  inputField("Stop-loss price","risk-stop","number","")+
