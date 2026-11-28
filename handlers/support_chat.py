@@ -259,7 +259,7 @@ def customer_explicitly_requests_human(messages):
     if any(phrase in normalized for phrase in phrases):
         return True
     return bool(re.search(
-        r"\\b(?:talk|speak|connect|transfer|escalate|request)\\b.{0,35}\\b(?:agent|human|person)\\b",
+        r"\b(?:talk|speak|connect|transfer|escalate|request)\\b.{0,35}\\b(?:agent|human|person)\\b",
         normalized,
     ))
 
@@ -1242,7 +1242,7 @@ class handler(BaseHTTPRequestHandler):
             )
             reply = raw_reply.replace(HANDOFF_MARKER, "").strip()
             if marker_requested and not should_handoff and re.search(
-                r"\\b(?:human support|support agent|contact an agent|escalat)\\b",
+                r"\b(?:human support|support agent|contact an agent|escalat)\\b",
                 reply.lower(),
             ):
                 reply = fallback_support_reply(context)
