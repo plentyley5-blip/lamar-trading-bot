@@ -531,6 +531,10 @@ button[data-act^="refresh-"]{width:auto!important;min-width:29px;max-width:max-c
 button[data-act="refresh-news-signal"]{width:30px!important;height:30px!important;min-height:30px!important;padding:0!important}
 .profile-avatar-picker{border:0;background:transparent;overflow:visible}
 
+.avatar{overflow:hidden}
+.avatar img{width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block}
+.chat-resume-bot-button{margin-top:9px;border:1px solid rgba(54,211,153,.34);background:rgba(54,211,153,.1);color:#9be7c5;border-radius:10px;padding:8px 11px;font-size:10px;font-weight:950;letter-spacing:.3px}
+.chat-resume-bot-button:disabled{opacity:.5}
 </style>
 </head>
 <body><div id="app"><div class="loading"><span class="spinner"></span>Loading LM Analyzer…</div></div>
@@ -607,7 +611,7 @@ function quotaType(){return String(profile().quota_type||"blocked")}
 function canAnalyze(){const p=profile();return isOwner()||((p.quota_type==="free_lifetime"||(p.quota_type==="paid_daily"&&p.subscription_active))&&p.analysis_allowed!==false&&Number(p.remaining||0)>0)}
 function canNews(){return isOwner()||(quotaType()==="paid_daily"&&!!profile().subscription_active)}
 function allowanceText(){const p=profile();if(isOwner())return "Owner · Unlimited";if(p.quota_type==="free_lifetime")return Number(p.used||0)+" / "+Number(p.lifetime_limit||4)+" lifetime";if(p.quota_type==="paid_daily")return Number(p.used||0)+" / "+Number(p.daily_limit||0)+" today";return "Access paused"}
-function head(){const p=profile(),initial=(p.full_name||p.email||"L").trim().charAt(0).toUpperCase();return '<header class="brandbar"><div class="brand-lockup"><div class="brand-mark">LM</div><div><div class="brand-name">LM ANALYZER</div><div class="brand-sub">4H + 15M CHART INTELLIGENCE</div></div></div><div class="user-chip"><div class="avatar">'+safe(initial)+'</div><div><div class="user-name">'+safe(p.full_name||"Trader")+'</div><div class="user-state">'+safe(allowanceText())+'</div></div></div></header>'}
+function head(){const p=profile(),initial=(p.full_name||p.email||"L").trim().charAt(0).toUpperCase(),avatar=getLocalProfileAvatar()||(state.communityProfile||{}).avatar_url||"",avatarMarkup=avatar?'<img src="'+safe(avatar)+'" alt="Profile photo">':safe(initial);return '<header class="brandbar"><div class="brand-lockup"><div class="brand-mark">LM</div><div><div class="brand-name">LM ANALYZER</div><div class="brand-sub">4H + 15M CHART INTELLIGENCE</div></div></div><div class="user-chip"><div class="avatar">'+avatarMarkup+'</div><div><div class="user-name">'+safe(p.full_name||"Trader")+'</div><div class="user-state">'+safe(allowanceText())+'</div></div></div></header>'}
 function nav(){const items=["HOME","TRADE","COMMUNITY","MARKETS","TOOLS","PROFILE"];return '<nav class="bottom-nav">'+items.map(x=>'<button class="nav-item '+(state.page===x?"active":"")+'" data-page="'+x+'">'+x+'</button>').join("")+'</nav>'}
 function pageHead(title,sub){return '<div class="page-head"><h1>'+safe(title)+'</h1><p>'+safe(sub)+'</p></div>'}
 function showMsg(message,type){state.message=message;state.msgType=type||"notice";render()}
@@ -852,11 +856,22 @@ function marketsView(){if(state.marketSelectedSymbol)return marketDetailView();r
 function toolsView(){return pageHead("TOOLS","Education and practical trading utilities")+'<section class="glass card"><div class="eyebrow">TOOLS & EDUCATION</div>'+option("📘","Learning Hub","Lessons, quizzes and learning progress","LEARNING")+option("🛡","Smart Risk Manager","Calculate planned risk and position sizing","RISK_MANAGER")+option("📓","Trading Journal","Record a plan, outcome and lesson","JOURNAL")+'</section><section class="glass card" style="margin-top:12px"><div class="eyebrow">ANALYSIS SUPPORT</div>'+option("📝","Analysis Feedback","Report inaccurate results or app errors","FEEDBACK")+option("🖼","Screenshot Guide","Capture clear 4H and 15M charts","GUIDE")+'</section><section class="glass card" style="margin-top:12px;border-color:rgba(47,140,255,.55)">'+option("🤖","LM AUTO TRADER","Independent AI trading · Connect and manage your MT5 account","MT5_AUTO_TRADER","AUTONOMOUS TRADING")+'</section>'}
 function option(icon,title,desc,sub,badge){return '<button class="option" data-sub="'+sub+'"><span style="display:flex;gap:12px;align-items:center"><span style="font-size:20px">'+icon+'</span><span><strong>'+safe(title)+'</strong><small>'+safe(desc)+'</small>'+(badge?'<small class="pill blue" style="margin-top:7px">'+badge+'</small>':"")+'</span></span><span style="color:var(--bright);font-size:22px">›</span></button>'}
 function profileGroup(icon,title,items){return '<section class="glass card" style="margin-top:10px"><div class="eyebrow">'+icon+' · '+title+'</div>'+items+'</section>'}
-function profileAvatarLocalKey(){
- const id=String(profile().email||profile().id||"lm-user").trim().toLowerCase();
+function profileAvatarKeyFor(value){
+ const id=String(value||"lm-user").trim().toLowerCase();
  return "lm_analyzer_profile_avatar_"+id.replace(/[^a-z0-9._-]/g,"_");
 }
-function getLocalProfileAvatar(){try{return localStorage.getItem(profileAvatarLocalKey())||""}catch(_){return ""}}
+function profileAvatarLocalKey(){
+ const p=profile();
+ return profileAvatarKeyFor(p.id||p.user_id||p.email||"lm-user");
+}
+function getLocalProfileAvatar(){
+ try{
+  const p=profile();
+  return localStorage.getItem(profileAvatarLocalKey())
+   ||localStorage.getItem(profileAvatarKeyFor(p.email||p.id||p.user_id||"lm-user"))
+   ||"";
+ }catch(_){return ""}
+}
 function profileView(){
  const p=profile(),c=state.communityProfile||{};
  const status=isOwner()?"★ OWNER · UNLIMITED":quotaType()==="paid_daily"&&p.subscription_active?"ACTIVE PAID PLAN":quotaType()==="free_lifetime"?"FREE · "+Number(p.remaining||0)+" LEFT":"ACCESS PAUSED";
@@ -1242,9 +1257,9 @@ function supportChatView(){
  const botAvatar=state.chatBotAvatarDataUrl?'<img src="'+safe(state.chatBotAvatarDataUrl)+'" alt="LM Support Bot">':botAvatarSvg();
  const topAction=state.chatAgentIsAgent?
   '<button type="button" class="support-header-action agent" data-act="open-agent-inbox">AGENT INBOX</button>':
-  '<button type="button" class="support-header-action human" data-act="request-human" '+(!state.chatConversationId||state.chatBusy?"disabled":"")+'>HUMAN</button>';
+  status==="waiting"?"":'<button type="button" class="support-header-action human" data-act="request-human" '+(!state.chatConversationId||state.chatBusy?"disabled":"")+'>HUMAN</button>';
  const statusText=status==="assigned"?(state.chatAssignedAgent||"A support agent")+" has joined":status==="waiting"?"Waiting for a human support agent":status==="resolved"?"This conversation was marked resolved":"Online · AI support";
- const statusBanner=status==="waiting"?'<div class="chat-status-banner waiting">Your request is saved in the human-support queue. Continue adding details here.</div>':status==="assigned"?'<div class="chat-status-banner assigned">'+safe(statusText)+'. Continue in this same conversation.</div>':status==="resolved"?'<div class="chat-status-banner resolved">This request was marked resolved. Send a new message to continue.</div>':"";
+ const statusBanner=status==="waiting"?'<div class="chat-status-banner waiting"><div>Your request is saved in the human-support queue. You can keep waiting for an agent or return to the AI assistant.</div><button type="button" class="chat-resume-bot-button" data-act="resume-support-bot">CONTINUE WITH LM SUPPORT BOT</button></div>':status==="assigned"?'<div class="chat-status-banner assigned">'+safe(statusText)+'. Continue in this same conversation.</div>':status==="resolved"?'<div class="chat-status-banner resolved">This request was marked resolved. Send a new message to continue.</div>':"";
  const suggestions=!state.chatMessages.length?'<div class="chat-suggestions"><div class="chat-suggestions-label">SUGGESTED TOPICS</div><div class="chat-suggestions-row"><button type="button" data-chat-suggestion="I forgot my password. How can I reset it?">Forgot password</button><button type="button" data-chat-suggestion="I need help with my subscription and payment.">Subscription</button><button type="button" data-chat-suggestion="How do I upload clear 4H and 15M charts?">How to upload charts</button><button type="button" data-chat-suggestion="Please explain the entry, stop loss and take profit in my analysis.">Understand analysis</button></div></div>':"";
  const attachment=state.chatAttachment?'<div class="chat-attachment-preview"><img src="'+safe(state.chatAttachment)+'" alt="Attachment preview"><span>Image attached</span><button type="button" class="chat-attachment-remove" data-act="remove-chat-image">REMOVE</button></div>':"";
  const botEdit=state.chatBotIsOwner?'<input class="hidden" id="support-bot-avatar" type="file" accept="image/jpeg,image/png,image/webp">':"";
@@ -1294,6 +1309,18 @@ async function requestHumanSupportWeb(){
  try{const r=await api("/support_chat",{method:"POST",body:{action:"request_human",conversation_id:state.chatConversationId}});state.chatSupportStatus=r.support_status||"waiting";state.chatAssignedAgent=r.assigned_agent_name||"";await loadSupportSnapshotWeb(false)}
  catch(e){state.chatError=e.message}
  finally{state.chatBusy=false;render()}
+}
+async function resumeSupportBotWeb(){
+ if(!state.chatConversationId||state.chatBusy)return;
+ chatSnapshotRequestId++;
+ state.chatBusy=true;state.chatTyping=false;state.chatError="";render();
+ try{
+  const r=await api("/support_chat",{method:"POST",body:{action:"resume_bot",conversation_id:state.chatConversationId}});
+  state.chatSupportStatus=r.support_status||"bot";
+  state.chatAssignedAgent=r.assigned_agent_name||"";
+  await loadSupportSnapshotWeb(false);
+ }catch(e){state.chatError=e.message||"Could not return to LM Support Bot."}
+ finally{state.chatBusy=false;render();scrollSupportChatToLatest()}
 }
 async function loadAutoTrader(silent=false){
  if(state.autoTraderBusy)return;
@@ -1509,6 +1536,7 @@ document.addEventListener("click",async e=>{
  if(a==="revoke-autotrader")revokeAutoTraderLinks();
  if(a==="submit-lesson-quiz")submitLessonQuiz();
  if(a==="request-human")requestHumanSupportWeb();
+ if(a==="resume-support-bot")await resumeSupportBotWeb();
  if(a==="calculate-risk"){
  const instrument=$("risk-instrument")?.value.trim().toUpperCase()||"XAUUSD";
  const form={equity:$("risk-balance")?.value||"",currency:$("risk-currency")?.value||"USD",riskPercent:$("risk-percent")?.value||"1",entry:$("risk-entry")?.value||"",stopLoss:$("risk-stop")?.value||"",tp1:$("risk-target")?.value||"",tp2:"",tickSize:$("risk-tick-size")?.value||"",tickValue:$("risk-tick-value")?.value||"",volumeStep:$("risk-volume-step")?.value||"",minVolume:$("risk-min-volume")?.value||""};
