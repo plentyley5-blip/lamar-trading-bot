@@ -213,6 +213,65 @@ def simple_acknowledgement_reply(messages):
     return None
 
 
+
+def _latest_customer_message(messages):
+    for item in reversed(messages or []):
+        if str(item.get("role", "")) == "user":
+            return " ".join(str(item.get("content", "")).split()).strip()
+    return ""
+
+
+def customer_explicitly_requests_human(messages):
+    latest = _latest_customer_message(messages).lower()
+    normalized = re.sub(r"[^a-z0-9 ]", " ", latest)
+    normalized = " ".join(normalized.split())
+    phrases = (
+        "human agent", "support agent", "live agent", "real person",
+        "human please", "agent please", "talk to a person", "talk to an agent",
+        "speak to a person", "speak to an agent", "connect me to an agent",
+        "connect me to a human", "transfer me to support", "talk to human support",
+        "i want a human", "i need a human", "i want an agent", "i need an agent",
+        "please get me an agent", "please connect me to support",
+    )
+    if any(phrase in normalized for phrase in phrases):
+        return True
+    return bool(re.search(
+        r"\b(?:talk|speak|connect|transfer|put me through|escalate|refer)\b"
+        r".{0,40}\b(?:human|person|agent|representative|support staff)\b",
+        normalized,
+    ))
+
+
+def customer_requires_staff_action(messages):
+    latest = _latest_customer_message(messages).lower()
+    patterns = (
+        r"\b(?:verify|confirm|trace|check|look up|investigate)\b.{0,50}\b(?:my\s+)?(?:payment|transaction|receipt|deposit)\b",
+        r"\b(?:payment|transaction|deposit)\b.{0,50}\b(?:not showing|not reflecting|missing|not credited|unconfirmed|not activated)\b",
+        r"\b(?:refund|chargeback|reverse (?:my )?payment)\b",
+        r"\b(?:activate|extend|restore|cancel|change|update|upgrade|downgrade)\s+my\s+(?:subscription|plan|account access)\b",
+        r"\b(?:please\s+)?(?:process|apply)\s+(?:my\s+)?(?:refund|subscription change|account access change)\b",
+        r"\b(?:inspect|investigate|review)\s+my\s+(?:private account records|payment history|server logs|backend records)\b",
+    )
+    return any(re.search(pattern, latest) for pattern in patterns)
+
+
+def customer_still_blocked_after_bot_help(messages):
+    latest = _latest_customer_message(messages).lower()
+    prior_assistant_replies = any(
+        str(item.get("role", "")) in {"assistant", "agent"}
+        for item in (messages or [])[:-1]
+    )
+    if not prior_assistant_replies:
+        return False
+    unresolved_phrases = (
+        "still not working", "still doesn't work", "still does not work",
+        "didn't work", "did not work", "same problem", "same issue",
+        "nothing changed", "still can't", "still cannot", "still failing",
+        "i tried that", "i followed the steps", "that didn't fix it",
+    )
+    return any(phrase in latest for phrase in unresolved_phrases)
+
+
 def fallback_support_reply(messages):
     """Always return a useful, honest support response if the AI provider is unavailable."""
     latest = ""
@@ -614,9 +673,9 @@ def call_gemini(messages):
         "Answer greetings warmly. For an incomplete question, ask one focused follow-up and continue helping; do not send the customer away. "
         "Never tell a customer to contact an admin or human agent just because a question is unfamiliar, general, short, or outside the exact examples in this prompt. "
         "Use your general knowledge to make a best effort, state uncertainty plainly, and ask for missing details when needed. "
-        "Only append the exact token [[ESCALATE_TO_HUMAN]] when the customer explicitly asks for a person, an action requires private staff-only access you do not have "
-        "(for example verifying a specific payment, changing account entitlements, or investigating private server records), or the customer has followed reasonable troubleshooting "
-        "steps and the issue is still unresolved. Before escalating a technical issue, give practical steps and ask for the result at least once. "
+        "Only append the exact token [[ESCALATE_TO_HUMAN]] when the customer explicitly asks for a person, requests a staff-only account/payment action, or reports that a practical "
+        "troubleshooting step you already gave did not work. Do not escalate ordinary first-time questions, general education, simple app navigation, or routine troubleshooting. "
+        "Before escalating a technical issue, give practical steps and ask for the result at least once. "
         "Do not claim you have changed account settings, checked private records, or completed a payment. Do not request passwords, one-time codes, API keys, or card details. "
         "For trading topics, explain concepts and risk; never promise profit, issue fabricated live prices, or guarantee a trade outcome. "
         "Do not display or explain the handoff token. Keep answers practical, clear, and step-by-step. Do not use markdown tables."
@@ -1005,6 +1064,36 @@ class handler(BaseHTTPRequestHandler):
                 json_response(self, 200, {"resolved": True, "next_waiting_request": bool(waiting_rows), "notification": notified})
                 return
 
+            if action == "resume_bot":
+                conversation_id = str(data.get("conversation_id", "")).strip()
+                if not conversation_id:
+                    raise ValueError("A support conversation ID is required.")
+                conversation = owned_conversation(conversation_id, user_id)
+                current_status = str(conversation.get("support_status") or "bot")
+                if current_status == "assigned":
+                    json_response(self, 409, {
+                        "success": False,
+                        "error": "A support agent has already joined. Continue in this conversation with the agent.",
+                        "support_status": "assigned",
+                    })
+                    return
+                if current_status != "bot":
+                    updated = update_conversation_status(conversation_id, {
+                        "support_status": "bot", "assigned_agent_id": None,
+                        "assigned_agent_name": None, "handoff_requested_at": None,
+                        "assigned_at": None, "resolved_at": None,
+                    })
+                    if not updated:
+                        raise RuntimeError("Could not return this conversation to LM Support Bot.")
+                    save_message(conversation_id, user_id, "system",
+                                 "You chose to continue with LM Support Bot. The AI assistant is ready to help again.")
+                    conversation = updated
+                json_response(self, 200, {
+                    "success": True, "conversation_id": conversation_id,
+                    "support_status": "bot", "assigned_agent_name": "",
+                })
+                return
+
             if action == "request_human":
                 conversation_id = str(data.get("conversation_id", "")).strip()
                 if not conversation_id:
@@ -1111,10 +1200,20 @@ class handler(BaseHTTPRequestHandler):
                 # Never leave a customer with the same dead-end error. Preserve bot
                 # mode and return a helpful, honest fallback tied to their message.
                 raw_reply = fallback_support_reply(context)
-            should_handoff = HANDOFF_MARKER in raw_reply
+            marker_requested = HANDOFF_MARKER in raw_reply
+            explicitly_requested = customer_explicitly_requests_human(context)
+            staff_action_required = customer_requires_staff_action(context)
+            unresolved_after_help = customer_still_blocked_after_bot_help(context)
+            should_handoff = explicitly_requested or staff_action_required or unresolved_after_help
             reply = raw_reply.replace(HANDOFF_MARKER, "").strip()
+            if marker_requested and not should_handoff:
+                continuation = (
+                    "I can keep helping you here rather than sending this to an agent. "
+                    "Tell me what you see after the steps above, and we’ll work through the next step together."
+                )
+                reply = (reply + "\n\n" + continuation).strip() if reply else continuation
             if not reply:
-                reply = "I need a human support agent to help resolve this."
+                reply = "I’m here to help. Tell me what you are trying to do and what happens on your screen."
             save_message(conversation_id, user_id, "assistant", reply)
             touch_conversation(conversation_id)
             if should_handoff:
