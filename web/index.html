@@ -489,6 +489,41 @@ html[data-appearance="light"] .profile-identity-avatar,html[data-appearance="lig
  .profile-social-button{flex:1 1 0;justify-content:center}
  .community-member-follow-button{font-size:7px}
 }
+
+.admin-monitor-scroll{max-height:calc(100dvh - 130px);overflow-y:auto;overscroll-behavior:contain;padding-bottom:10px}
+.admin-web-section{margin:0 0 10px;padding:13px;border-radius:15px;background:rgba(9,26,46,.88);border:1px solid rgba(255,255,255,.07)}
+.admin-web-section>strong{display:block;font-size:10px;letter-spacing:.35px;color:#eef5ff;margin-bottom:10px}
+.admin-web-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}
+.admin-web-metric{padding:9px;border-radius:10px;background:rgba(255,255,255,.035)}
+.admin-web-metric small{display:block;font-size:8px;color:var(--muted);font-weight:850}
+.admin-web-metric strong{display:block;margin-top:3px;font-size:18px;font-weight:950;color:#fff}
+.admin-web-agent-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+.admin-web-agent-row:last-child{border-bottom:0}
+.admin-web-presence{width:8px;height:8px;flex:0 0 8px;border-radius:50%;background:#8795a8}
+.admin-web-presence.online{background:#39ca8a;box-shadow:0 0 8px rgba(57,202,138,.45)}
+.admin-web-agent-copy{flex:1;min-width:0}
+.admin-web-agent-copy strong,.admin-web-activity-row strong{display:block;font-size:10px;color:#fff}
+.admin-web-agent-copy small,.admin-web-activity-row small{display:block;margin-top:2px;font-size:8px;color:var(--muted)}
+.admin-web-agent-capacity{font-size:9px;color:#9dcaff;font-weight:950}
+.admin-web-conversation{width:100%;display:flex;flex-direction:column;gap:5px;padding:10px;margin-top:7px;border:1px solid rgba(255,255,255,.08);border-radius:11px;background:rgba(255,255,255,.025);text-align:left;color:#fff}
+.admin-web-conversation.selected{border-color:var(--bright);background:rgba(22,119,255,.11)}
+.admin-web-conversation-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.admin-web-conversation-top strong{font-size:10px;line-height:1.45}
+.admin-web-conversation small{font-size:8px;color:var(--muted)}
+.admin-web-conversation em{font-size:8px;color:var(--bright);font-style:normal;font-weight:900}
+.admin-web-transcript{margin-top:7px;padding:10px;border-radius:10px;background:rgba(255,255,255,.035)}
+.admin-web-transcript.agent{background:rgba(22,119,255,.12)}
+.admin-web-transcript.system{background:rgba(208,165,65,.08)}
+.admin-web-transcript strong{font-size:8px;color:#9bcaff}
+.admin-web-transcript small{font-size:8px;color:var(--muted)}
+.admin-web-transcript p{margin:6px 0 0;font-size:10px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;color:#f3f6fb}
+.admin-web-transcript img{max-width:100%;max-height:200px;margin-top:7px;border-radius:8px}
+.admin-web-activity-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.055)}
+.admin-web-activity-row:last-child{border-bottom:0}
+.admin-web-activity-row>div{flex:1;min-width:0}
+.admin-web-activity-row time{font-size:8px;color:var(--muted)}
+.activity-dot{font-size:8px;color:var(--bright)}
+
 </style>
 </head>
 <body><div id="app"><div class="loading"><span class="spinner"></span>Loading LM Analyzer…</div></div>
@@ -535,7 +570,7 @@ const state={
  selectedInstrument:"EURUSD",instrumentPickerOpen:false,instrumentSearch:"",focus:"DAY TRADE",focusPickerOpen:false,timeframeSelectorOpen:false,optionalTimeframes:[],images:{H4:"",M15:"","1D":"","1H":"","5M":"","1M":""},analysisBusy:false,analysisError:"",analysisResult:null,
  communityPosts:[],communityBusy:false,communityError:"",communityCanPost:false,communityImage:"",communityMeta:null,communityProfile:null,communityProfileError:"",communityMembers:[],communityMembersLoading:false,communityMemberDirection:"followers",communityMembersError:"",communityFollowBusyId:"",profileAvatarBusy:false,activeCommentsPostId:"",communityComments:[],
  toolsTab:"TOOLS",selectedPlan:"monthly",lessons:[],lessonProgress:[],selectedLessonId:"",selectedQuizOption:null,quizFeedback:"",journal:[],toolError:"",toolNotice:"",
- autoTrader:null,autoTraderError:"",autoTraderBusy:false,marketSelectedSymbol:"",marketInterval:"15min",marketCandles:[],marketChartBusy:false,marketChartError:"",marketChartUpdatedAt:"",marketAlerts:[],marketAlertsError:"",chatMessages:[],chatConversationId:"",chatBusy:false,chatTyping:false,chatError:"",chatLoading:false,chatSupportStatus:"bot",chatAssignedAgent:"",chatConversations:[],chatAgentIsAgent:false,chatAgentDisplayName:"",chatAgentScreen:"customer",chatAgentConversationId:"",chatAgentQueue:[],chatAgentQueueLoading:false,chatAgentQueueError:"",chatAgentActiveCount:0,chatAgentMaxActiveChats:1,chatAgentBusyId:"",chatAgentMessages:[],chatAgentLoading:false,chatAgentReplyDraft:"",chatAgentReplyBusy:false,chatAgentResolved:false,chatBotAvatarDataUrl:"",chatBotIsOwner:false,adminMonitor:null,adminMonitorBusy:false,adminMonitorError:"",googleNonce:"",googleScriptLoading:false,
+ autoTrader:null,autoTraderError:"",autoTraderBusy:false,marketSelectedSymbol:"",marketInterval:"15min",marketCandles:[],marketChartBusy:false,marketChartError:"",marketChartUpdatedAt:"",marketAlerts:[],marketAlertsError:"",chatMessages:[],chatConversationId:"",chatBusy:false,chatTyping:false,chatError:"",chatLoading:false,chatSupportStatus:"bot",chatAssignedAgent:"",chatConversations:[],chatAgentIsAgent:false,chatAgentDisplayName:"",chatAgentScreen:"customer",chatAgentConversationId:"",chatAgentQueue:[],chatAgentQueueLoading:false,chatAgentQueueError:"",chatAgentActiveCount:0,chatAgentMaxActiveChats:1,chatAgentBusyId:"",chatAgentMessages:[],chatAgentLoading:false,chatAgentReplyDraft:"",chatAgentReplyBusy:false,chatAgentResolved:false,chatBotAvatarDataUrl:"",chatBotIsOwner:false,adminMonitor:null,adminMonitorBusy:false,adminMonitorError:"",adminMonitorConversationId:"",adminMonitorScrollTop:0,googleNonce:"",googleScriptLoading:false,
  appearance:localStorage.getItem("lm_appearance")||"blue",notifications:localStorage.getItem("lm_web_notifications")==="true",communityDraft:"",communityUserId:"",chatDraft:"",chatAttachment:"",chatUploadBusy:false,chatVoiceActive:false,supabaseClient:null,autoTraderTab:"OVERVIEW",autoTraderLinkCode:"",autoTraderLinkExpires:"",autoTraderSelectedPlan:"3 Months"
 };
 const $=id=>document.getElementById(id);
@@ -907,8 +942,42 @@ function supportView(){return subHeader("Help & Support","LM Analyzer customer a
 async function loadCommunityProfileWeb(){state.communityProfileError="";try{const r=await api("/community?action=profile");state.communityProfile=r.profile||null}catch(e){state.communityProfileError=e.message}if(state.page==="PROFILE"&&!state.sub)render()}
 async function loadCommunityMembersWeb(silent=false){if(state.communityMembersLoading)return;state.communityMembersLoading=true;state.communityMembersError="";if(!silent&&(state.sub==="FOLLOWERS"||state.sub==="FOLLOWING"))render();try{const r=await api("/community?action=members&direction="+encodeURIComponent(state.communityMemberDirection));state.communityMembers=Array.isArray(r.members)?r.members:[]}catch(e){state.communityMembersError=e.message}finally{state.communityMembersLoading=false;if(state.sub==="FOLLOWERS"||state.sub==="FOLLOWING")render()}}
 async function toggleCommunityFollow(targetId,following){if(!targetId||state.communityFollowBusyId)return;state.communityFollowBusyId=targetId;render();try{await api("/community",{method:"POST",body:{action:following?"unfollow":"follow",target_user_id:targetId}});await Promise.all([loadCommunityMembersWeb(true),loadCommunityProfileWeb()])}catch(e){showMsg(e.message,"error")}finally{state.communityFollowBusyId="";if(state.sub==="FOLLOWERS"||state.sub==="FOLLOWING")render()}}
-async function loadAdminMonitorWeb(silent=false){if(state.adminMonitorBusy)return;state.adminMonitorBusy=true;try{state.adminMonitor=await api("/support_chat?action=admin_monitor");state.adminMonitorError=""}catch(e){state.adminMonitorError=e.message}finally{state.adminMonitorBusy=false;if(state.sub==="ADMIN_MONITORING"&&!silent)render()}}
-function adminMonitorView(){const d=state.adminMonitor||{},m=d.metrics||{},conversations=Array.isArray(d.conversations)?d.conversations:[],agents=Array.isArray(d.agents)?d.agents:[];return subHeader("ADMIN SUPPORT MONITORING","Owner-only support overview")+(state.adminMonitorError?'<div class="error">'+safe(state.adminMonitorError)+'</div>':"")+'<section class="glass card"><div class="row-between"><strong>SUPPORT OVERVIEW</strong><button type="button" class="compact-refresh-button" data-act="refresh-admin-monitor" aria-label="Refresh support overview">↻</button></div><div class="metric-grid">'+metric("Online agents",m.online_agents??"—")+metric("Active chats",m.active_chats??"—")+metric("Waiting customers",m.waiting_customers??"—")+metric("Resolved today",m.resolved_today??"—")+'</div><div class="divider"></div><strong>SUPPORT AGENTS</strong>'+(agents.length?agents.map(a=>'<div class="info-line"><span>'+safe(a.display_name||"Agent")+' · '+safe(a.status||"offline")+'</span><strong>'+safe(a.active_count??0)+' / '+safe(a.max_active_chats??1)+' chats</strong></div>').join(""):'<p class="muted small">No support agents are configured.</p>')+'<div class="divider"></div><strong>RECENT SUPPORT REQUESTS</strong>'+(conversations.length?conversations.slice(0,15).map(c=>'<div class="info-line"><span>'+safe(c.title||"Support conversation")+' · '+safe(c.support_status||"")+'</span><strong>'+safe(formatDate(c.updated_at))+'</strong></div>').join(""):'<p class="muted small">No support conversations were returned.</p>')+'</section>'}
+async function loadAdminMonitorWeb(silent=false){
+ if(state.adminMonitorBusy)return;
+ state.adminMonitorBusy=true;
+ const scroll=$(".admin-monitor-scroll");if(scroll)state.adminMonitorScrollTop=scroll.scrollTop;
+ try{
+  const query="/support_chat?action=admin_monitor"+(state.adminMonitorConversationId?"&monitor_conversation_id="+encodeURIComponent(state.adminMonitorConversationId):"");
+  state.adminMonitor=await api(query);state.adminMonitorError="";
+ }catch(e){state.adminMonitorError=e.message||"Unable to load owner support monitoring."}
+ finally{
+  state.adminMonitorBusy=false;
+  if(state.sub==="ADMIN_MONITORING"){
+   render();
+   const next=$(".admin-monitor-scroll");if(next)next.scrollTop=state.adminMonitorScrollTop||0;
+  }
+ }
+}
+function adminMonitorView(){
+ const d=state.adminMonitor||{},m=d.metrics||{};
+ const conversations=Array.isArray(d.conversations)?d.conversations:[];
+ const agents=Array.isArray(d.agents)?d.agents:[];
+ const activity=Array.isArray(d.activity)?d.activity:[];
+ const selected=d.selected_conversation||null,messages=Array.isArray(d.messages)?d.messages:[];
+ const metricHtml=[["Online agents",m.online_agents??"—"],["Active chats",m.active_chats??"—"],["Waiting customers",m.waiting_customers??"—"],["Resolved today",m.resolved_today??"—"]].map(x=>'<div class="admin-web-metric"><small>'+safe(x[0])+'</small><strong>'+safe(x[1])+'</strong></div>').join("");
+ const agentHtml=agents.length?agents.map(a=>'<div class="admin-web-agent-row"><span class="admin-web-presence '+(a.status==="online"?"online":"offline")+'"></span><div class="admin-web-agent-copy"><strong>'+safe(a.display_name||"Support Agent")+'</strong><small>'+safe(a.role||"agent")+' · '+safe(a.status||"offline")+'</small></div><span class="admin-web-agent-capacity">'+safe(a.active_count??0)+' / '+safe(a.max_active_chats??1)+'</span></div>').join(""):'<p class="muted small">No support agents are configured.</p>';
+ const conversationHtml=conversations.length?conversations.map(c=>{
+  const id=String(c.id||""),status=String(c.support_status||"bot").toUpperCase(),active=state.adminMonitorConversationId===id;
+  return '<button type="button" class="admin-web-conversation '+(active?"selected":"")+'" data-admin-monitor="'+safe(id)+'"><span class="admin-web-conversation-top"><strong>'+safe(c.title||"Support conversation")+'</strong><span class="agent-status '+(status==="WAITING"?"waiting":status==="ASSIGNED"?"assigned":"")+'">'+safe(status)+'</span></span><small>Agent: '+safe(c.assigned_agent_name||"Not assigned")+' · Customer '+safe(String(c.user_id||"").slice(0,8))+'</small><small>Updated '+safe(String(c.updated_at||"").replace("T"," ").slice(0,16))+'</small><em>'+(active?"HIDE LIVE TRANSCRIPT":"VIEW LIVE TRANSCRIPT")+'</em></button>';
+ }).join(""):'<p class="muted small">No support conversations found.</p>';
+ const transcript=state.adminMonitorConversationId?'<section class="admin-web-section"><div class="row-between"><div><strong>LIVE CONVERSATION TRANSCRIPT</strong><p class="caption">'+safe(selected?.title||"Loading selected conversation…")+'</p></div><button type="button" class="compact-refresh-button" data-act="clear-admin-monitor" aria-label="Close transcript">×</button></div>'+(messages.length?messages.map(msg=>{
+  const role=String(msg.role||"assistant"),heading=role==="user"?"CUSTOMER":role==="agent"?(msg.sender_name||"SUPPORT AGENT"):role==="system"?"SUPPORT UPDATE":"LM SUPPORT BOT";
+  return '<article class="admin-web-transcript '+(role==="agent"?"agent":role==="user"?"customer":"system")+'"><div class="row-between"><strong>'+safe(heading)+'</strong><small>'+safe(String(msg.created_at||"").replace("T"," ").slice(0,16))+'</small></div><p>'+safe(msg.content||"")+'</p>'+(msg.attachment_data_url?'<img src="'+safe(msg.attachment_data_url)+'" alt="Conversation attachment">':"")+'</article>';
+ }).join(""):'<p class="muted small">No messages are available in this conversation yet.</p>')+'</section>':"";
+ const activityHtml=activity.length?activity.slice(0,30).map(event=>'<div class="admin-web-activity-row"><span class="activity-dot">●</span><div><strong>'+safe(event.agent_name||"Support Agent")+' · '+safe(String(event.action||"activity").replace(/_/g," "))+'</strong><small>Conversation '+safe(String(event.conversation_id||"").slice(0,8))+'</small></div><time>'+safe(String(event.created_at||"").replace("T"," ").slice(0,16))+'</time></div>').join(""):'<p class="muted small">New agent actions will appear here as they happen.</p>';
+ return subHeader("AGENT MONITORING","Live support operations · refreshed every 5 seconds")+(state.adminMonitorError?'<div class="error">'+safe(state.adminMonitorError)+'</div>':"")+'<div class="admin-monitor-scroll"><section class="admin-web-section"><div class="row-between"><strong>SUPPORT OVERVIEW</strong><button type="button" class="compact-refresh-button" data-act="refresh-admin-monitor" aria-label="Refresh agent monitoring">↻</button></div><div class="admin-web-metrics">'+metricHtml+'</div></section><section class="admin-web-section"><strong>SUPPORT AGENTS</strong>'+agentHtml+'</section><section class="admin-web-section"><strong>CUSTOMER CONVERSATIONS ('+safe(conversations.length)+')</strong>'+conversationHtml+'</section>'+transcript+'<section class="admin-web-section"><strong>RECENT AGENT ACTIVITY</strong>'+activityHtml+'</section></div>';
+}
+
 function supportMessagesHtml(){
  const rows=Array.isArray(state.chatMessages)?state.chatMessages:[];
  const messages=rows.length?rows.map(m=>{
@@ -1318,6 +1387,7 @@ document.addEventListener("click",async e=>{
  if(a==="refresh-autotrader")loadAutoTrader();
  if(a==="toggle-autotrader-session")toggleAutoTraderSession();
  if(a==="refresh-admin-monitor")await loadAdminMonitorWeb();
+ if(a==="clear-admin-monitor"){const scroll=$(".admin-monitor-scroll");if(scroll)state.adminMonitorScrollTop=scroll.scrollTop;state.adminMonitorConversationId="";await loadAdminMonitorWeb(true)}
  if(a==="send-chat")sendSupportMessageWeb();
  if(a==="voice-chat")startSupportVoiceInput();
  if(a==="remove-chat-image"){state.chatAttachment="";render()}
@@ -1341,6 +1411,7 @@ document.addEventListener("click",async e=>{
  if(a==="android-purchase")showMsg("Open LM Analyzer on Android and select the same plan to complete Google Play checkout. No browser payment has been started.","notice");
  if(a==="test-notification"){if(!("Notification"in window))throw new Error("This browser does not support desktop notifications.");const permission=await Notification.requestPermission();if(permission==="granted")new Notification("LM Analyzer",{body:"Browser notification test."});else throw new Error("Notification permission was not granted.")}
  }catch(err){showMsg(err.message,"error")}return}
+ const adminConversation=e.target.closest("[data-admin-monitor]");if(adminConversation){const scroll=$(".admin-monitor-scroll");if(scroll)state.adminMonitorScrollTop=scroll.scrollTop;state.adminMonitorConversationId=state.adminMonitorConversationId===adminConversation.dataset.adminMonitor?"":adminConversation.dataset.adminMonitor;await loadAdminMonitorWeb(true);return}
  const agentClaim=e.target.closest("[data-agent-claim]");if(agentClaim){await claimSupportConversationWeb(agentClaim.dataset.agentClaim);return}
  const agentOpen=e.target.closest("[data-agent-open]");if(agentOpen){state.chatAgentConversationId=agentOpen.dataset.agentOpen;state.chatAgentScreen="agent_chat";state.chatAgentResolved=false;state.chatAgentReplyDraft="";await loadSupportAgentConversationWeb();render();return}
  const like=e.target.closest("[data-like-post]");if(like){togglePostLike(like.dataset.likePost);return}const comments=e.target.closest("[data-comments]");if(comments){loadPostComments(comments.dataset.comments);return}const sendComment=e.target.closest("[data-send-comment]");if(sendComment){sendPostComment(sendComment.dataset.sendComment);return}const lesson=e.target.closest("[data-lesson]");if(lesson){state.selectedLessonId=lesson.dataset.lesson;state.selectedQuizOption=null;state.quizFeedback="";render();return}const answer=e.target.closest("[data-quiz-answer]");if(answer){state.selectedQuizOption=Number(answer.dataset.quizAnswer);state.quizFeedback="";render();return}const historyItem=e.target.closest("[data-history-id]");if(historyItem){state.selectedHistoryId=historyItem.dataset.historyId;state.analysisExpandedSections={"TRADE SETUP":true};state.analysisRiskOpen=false;state.analysisRiskOutput=null;state.analysisRiskError="";render();return}const filter=e.target.closest("[data-filter]");if(filter){state.historyFilter=filter.dataset.filter;render();return}
