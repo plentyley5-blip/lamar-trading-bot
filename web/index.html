@@ -578,35 +578,39 @@ function runAnalysisRiskCalculation(){
 
 function historyCard(item){const r=item.result||{},signal=String(r.signal||r.direction||"WAIT").toUpperCase(),color=signal==="BUY"?"var(--green)":signal==="SELL"?"var(--red)":"var(--gold)";return '<article class="glass list-card" data-history-id="'+safe(item.id||item.analysis_id||item.created_at)+'" style="cursor:pointer"><div class="list-top"><div><h3>'+safe(item.instrument||r.instrument||"Analysis")+'</h3><p>'+safe(item.trade_focus||"")+' · '+safe(formatDate(item.created_at))+'</p></div><span class="signal" style="color:'+color+'">'+safe(signal)+'</span></div><div class="divider"></div><div class="metric-grid">'+metric("Confidence",String(r.confidence??"—")+"%")+metric("Entry",r.entry||"—")+metric("Stop loss",r.stop_loss||r.stopLoss||"—")+metric("TP1 / TP2",(r.take_profit_1||r.takeProfit1||"—")+" / "+(r.take_profit_2||r.takeProfit2||"—"))+metric("Setup status",r.setup_status||"—")+metric("Order type",r.order_type||"—")+metric("Risk / reward",r.risk_reward||"—")+'</div></article>'}
 function historyDetailView(item){
- const r=item.result||{},instrument=item.instrument||r.instrument||"—";
+ const r=item.result||{};
+ const instrument=item.instrument||r.instrument||"—";
  const confidence=Math.max(0,Math.min(100,Math.round(Number(r.confidence)||0)));
- const signal=String(r.signal||r.direction||"NO TRADE").toUpperCase();
+ const signal=String(r.signal||r.direction||"NO TRADE").trim().toUpperCase();
  const signalColor=signal==="BUY"?"var(--green)":signal==="SELL"?"var(--red)":"var(--gold)";
- const display=v=>(v===undefined||v===null||String(v).trim()==="")?"—":String(v);
- const copyButton=v=>v&&String(v).trim()&&v!=="—"?'<button type="button" class="analysis-copy-button" aria-label="Copy '+safe(v)+'" data-copy-trade="'+safe(v)+'">▢</button>':"";
- const row=(label,value,copy)=>'<div class="analysis-trade-row"><span>'+safe(label)+'</span><strong>'+safe(display(value))+'</strong>'+(copy?copyButton(value):"")+'</div>';
- const accordion=(title,body,open)=>'<details class="analysis-accordion" '+(open?"open":"")+'><summary>'+safe(title)+'<span class="analysis-accordion-toggle"></span></summary><div class="analysis-accordion-body">'+(body||'<p class="analysis-detail-paragraph">No additional details were returned for this section.</p>')+'</div></details>';
- const aiExplanation=display(r.explanation||r.trade_idea||r.data_analysis);
- const marketStructure=[["Trend",r.trend],["Higher timeframe context",r.higher_timeframe_context],["Lower timeframe confirmation",r.lower_timeframe_confirmation]]
-  .filter(x=>x[1]).map(x=>'<div class="analysis-detail-copy"><strong>'+safe(x[0])+'</strong><p>'+safe(x[1])+'</p></div>').join("");
- const methods=(Array.isArray(r.contributing_methods)?r.contributing_methods:[]).map(x=>'<li>'+safe(x)+'</li>').join("");
- const weak=(Array.isArray(r.weak_methods)?r.weak_methods:[]).map(x=>'<li>'+safe(x)+'</li>').join("");
- const conflicting=(Array.isArray(r.conflicting_methods)?r.conflicting_methods:[]).map(x=>'<li>'+safe(x)+'</li>').join("");
- const smcBody=(methods||weak||conflicting)?(methods?'<strong>Contributing methods</strong><ul>'+methods+'</ul>':"")+(weak?'<strong>Weak methods</strong><ul>'+weak+'</ul>':"")+(conflicting?'<strong>Conflicting methods</strong><ul>'+conflicting+'</ul>':""):"";
- const timeframeBody=[["4H chart",r.detected_4h_instrument||r.higher_timeframe_context],["15M chart",r.detected_15m_instrument||r.lower_timeframe_confirmation],["1D chart",r.detected_1d_instrument],["1H chart",r.detected_1h_instrument],["5M chart",r.detected_5m_instrument],["1M chart",r.detected_1m_instrument],["Chart verification",r.chart_instrument_status]]
-  .filter(x=>x[1]).map(x=>'<div class="analysis-detail-copy"><strong>'+safe(x[0])+'</strong><p>'+safe(x[1])+'</p></div>').join("");
- const warnings=[r.news_fundamental_risk,...(Array.isArray(r.warnings)?r.warnings:[])].filter(Boolean).map(x=>'<li>'+safe(x)+'</li>').join("");
+ const value=(...keys)=>{for(const key of keys){const v=r[key];if(v!==undefined&&v!==null&&String(v).trim()!=="")return v}return ""};
+ const shown=v=>(v===undefined||v===null||String(v).trim()==="")?"—":String(v);
+ const list=v=>Array.isArray(v)?v.filter(Boolean).map(x=>"<li>"+safe(x)+"</li>").join(""):"";
+ const copy=v=>v&&String(v).trim()!=="—"?'<button type="button" class="analysis-copy-button" aria-label="Copy price" data-copy-trade="'+safe(v)+'">▢</button>':"";
+ const row=(label,v,copyable)=>'<div class="analysis-trade-row"><span>'+safe(label)+'</span><strong>'+safe(shown(v))+'</strong>'+(copyable?copy(v):"")+'</div>';
+ const open=state.analysisExpandedSections||{"TRADE SETUP":true};
+ const accordion=(name,body)=>{
+  const expanded=!!open[name];
+  return '<section class="analysis-accordion '+(expanded?"expanded":"")+'"><button type="button" class="analysis-accordion-head" data-analysis-toggle="'+safe(name)+'" aria-expanded="'+(expanded?"true":"false")+'"><span>'+safe(name)+'</span><span class="analysis-accordion-toggle">'+(expanded?"−":"+")+'</span></button><div class="analysis-accordion-body" style="display:'+(expanded?"block":"none")+'">'+(body||'<p class="analysis-detail-paragraph">No additional details were returned for this section.</p>')+'</div></section>';
+ };
+ const explanation=value("explanation","trade_idea");
+ const dataAnalysis=value("data_analysis");
+ const marketStructure='<div class="analysis-detail-copy"><strong>Current trend</strong><p>'+safe(shown(value("trend")))+'</p></div><div class="analysis-detail-copy"><strong>Market structure notes</strong><p>'+safe(shown(dataAnalysis||value("higher_timeframe_context")))+'</p></div>'+(value("invalidation_reason")?'<div class="analysis-detail-copy"><strong>INVALIDATION</strong><p>'+safe(value("invalidation_reason"))+'</p></div>':"");
+ const contributors=list(r.contributing_methods),weak=list(r.weak_methods),conflicts=list(r.conflicting_methods);
+ const smc='<strong>Contributing methods</strong>'+(contributors?'<ul>'+contributors+'</ul>':'<p class="analysis-detail-paragraph">No method-level evidence was returned.</p>')+'<strong>Weak methods</strong>'+(weak?'<ul>'+weak+'</ul>':'<p class="analysis-detail-paragraph">None supplied.</p>')+'<strong>Conflicting methods</strong>'+(conflicts?'<ul>'+conflicts+'</ul>':'<p class="analysis-detail-paragraph">None supplied.</p>');
+ const timeframe='<div class="analysis-detail-copy"><strong>4H · HIGHER TIMEFRAME</strong><p>'+safe(shown(value("higher_timeframe_context","higher_timeframe")))+'</p></div><div class="analysis-detail-copy"><strong>15M · EXECUTION TIMEFRAME</strong><p>'+safe(shown(value("lower_timeframe_confirmation","lower_timeframe")))+'</p></div>';
+ const warnings=list(r.warnings);
+ const newsRisk=value("news_fundamental_risk");
+ const riskNotes=value("risk_notes");
+ const warningBody='<strong>NEWS &amp; FUNDAMENTALS</strong><p class="analysis-detail-paragraph">'+safe(shown(newsRisk||"No verified news-risk notes were returned."))+'</p>'+(riskNotes&&String(riskNotes).toUpperCase()!=="N/A"?'<p class="analysis-detail-paragraph">'+safe(riskNotes)+'</p>':"")+(warnings?'<strong>Warnings</strong><ul>'+warnings+'</ul>':'<p class="analysis-detail-paragraph">No additional warnings were supplied. This is not a guarantee of safety.</p>');
  const back='<button type="button" class="btn outline analysis-back-button" data-act="back-trade">BACK TO TRADES</button>';
  const title='<h1 class="analysis-page-title">FULL ANALYSIS</h1>';
- const decision='<section class="analysis-decision-card"><div class="analysis-decision-top"><div class="analysis-decision-copy"><div class="analysis-kicker">TRADE DECISION</div><div class="analysis-signal" style="color:'+signalColor+'">'+safe(signal)+'</div><div class="analysis-instrument">'+safe(instrument)+'</div></div><div class="analysis-confidence-ring" style="--analysis-score:'+confidence+'%"><div class="analysis-confidence-inner"><strong>'+confidence+'%</strong><span>AI CONFIDENCE</span></div></div></div><p class="analysis-confidence-note">Confidence reflects analysis quality, not a guaranteed probability of profit.</p><div class="analysis-lot-card"><div class="analysis-kicker">PREFERRED LOT SIZE</div><h2>SET UP ACCOUNT RISK FIRST</h2><p>Enter your current account equity and risk limit, then the exact MT5 symbol tick/volume specification once for '+safe(instrument)+'. Future analyses of this symbol can show the lot size automatically.</p><button type="button" class="analysis-lot-button" data-sub="RISK_MANAGER">SET UP LOT SIZE</button></div></section>';
- const setup=accordion("TRADE SETUP",'<div class="analysis-trade-rows">'+row("Instrument",instrument)+row("Trend",r.trend)+row("Entry",r.entry,true)+row("Stop loss",r.stop_loss||r.stopLoss,true)+row("Take profit 1",r.take_profit_1||r.takeProfit1,true)+row("Take profit 2",r.take_profit_2||r.takeProfit2,true)+row("Risk / reward",r.risk_reward)+row("Duration",r.duration||item.trade_focus)+row("Entry readiness",r.setup_status)+'</div>',true);
- const sections=accordion("AI EXPLANATION",aiExplanation!=="—"?'<p class="analysis-detail-paragraph">'+safe(aiExplanation)+'</p>':"",false)
-  +accordion("MARKET STRUCTURE",marketStructure,false)
-  +accordion("SMART MONEY CONCEPTS",smcBody,false)
-  +accordion("TIMEFRAME ANALYSIS",timeframeBody,false)
-  +accordion("RISK WARNINGS",warnings?'<ul>'+warnings+'</ul>':"",false);
- const risk='<button type="button" class="analysis-risk-button" data-sub="RISK_MANAGER"><span aria-hidden="true">🧮</span> Risk Calculator</button><p class="analysis-risk-caption">Estimate position size from your account equity and this trade’s stop-loss distance. Confirm your broker’s symbol specifications before placing a trade.</p>';
- return '<div class="analysis-detail-page">'+back+title+decision+setup+sections+risk+'</div>';
+ const decision='<section class="analysis-decision-card"><div class="analysis-decision-top"><div class="analysis-decision-copy"><div class="analysis-kicker">TRADE DECISION</div><div class="analysis-signal" style="color:'+signalColor+'">'+safe(signal)+'</div><div class="analysis-instrument">'+safe(instrument)+'</div></div><div class="analysis-confidence-ring" style="--analysis-score:'+confidence+'%"><div class="analysis-confidence-inner"><strong>'+confidence+'%</strong><span>AI CONFIDENCE</span></div></div></div><p class="analysis-confidence-note">Confidence reflects analysis quality, not a guaranteed probability of profit.</p>'+getPreferredLotMarkup(r,instrument,signal)+'</section>';
+ const tradeSetup=accordion("TRADE SETUP",'<div class="analysis-trade-rows">'+row("Instrument",instrument,false)+row("Trend",value("trend"),false)+row("Entry",value("entry"),true)+row("Stop loss",value("stop_loss","stopLoss"),true)+row("Take profit 1",value("take_profit_1","takeProfit1"),true)+row("Take profit 2",value("take_profit_2","takeProfit2"),true)+row("Risk / reward",value("risk_reward"),false)+row("Duration",value("duration")||item.trade_focus,false)+row("Entry readiness",String(value("setup_status","setupStatus")||"").replace(/_/g," "),false)+(value("entry_trigger")?'<div class="analysis-detail-copy"><strong>ENTRY TRIGGER</strong><p>'+safe(value("entry_trigger"))+'</p></div>':"")+'</div>');
+ const aiBody='<p class="analysis-detail-paragraph">'+safe(shown(explanation||"No explanation was returned by the analysis engine."))+'</p>'+(dataAnalysis?'<strong>DATA ANALYSIS</strong><p class="analysis-detail-paragraph">'+safe(dataAnalysis)+'</p>':"");
+ const sections=accordion("AI EXPLANATION",aiBody)+accordion("MARKET STRUCTURE",marketStructure)+accordion("SMART MONEY CONCEPTS",smc)+accordion("TIMEFRAME ANALYSIS",timeframe)+accordion("RISK WARNINGS",warningBody);
+ const riskButton='<button type="button" class="analysis-risk-button" data-act="open-analysis-risk"><span aria-hidden="true">🧮</span> Risk Calculator</button><p class="analysis-risk-caption">Estimate position size from your account equity and this trade setup.</p>';
+ return '<div class="analysis-detail-page">'+back+title+decision+tradeSetup+sections+riskButton+'</div>'+(state.analysisRiskOpen?analysisRiskDialog(item):"");
 }
 function metric(a,b){return '<div class="metric"><label>'+safe(a)+'</label><strong>'+safe(b)+'</strong></div>'}
 function formatDate(v){if(!v)return "Date unavailable";const d=new Date(v);return Number.isNaN(d.getTime())?String(v):d.toLocaleString()}
