@@ -241,27 +241,21 @@ def latest_customer_message(messages):
 
 
 def customer_explicitly_requests_human(messages):
-    """Only route to a human when the customer clearly asks for one."""
+    """Require a clear request to speak to a human; mentions are not requests."""
     latest = latest_customer_message(messages).lower()
     normalized = re.sub(r"[^a-z0-9 ]", " ", latest)
     normalized = " ".join(normalized.split())
-    phrases = (
-        "human agent", "live agent", "real person", "human support",
-        "talk to a human", "speak to a human", "talk to an agent",
-        "speak to an agent", "connect me to an agent",
-        "connect me to a human", "i want an agent", "i need an agent",
-        "i want a human", "i need a human", "agent support",
-        "contact a human", "please transfer me", "escalate this",
-        "talk to someone from support", "speak to someone from support",
-        "let me talk to someone", "can i talk to someone",
-        "can i speak to someone",
+    patterns = (
+        r"\b(?:please\s+)?(?:connect|transfer|put|move)\s+me\s+(?:to|through)\s+(?:a\s+)?(?:human|real person|support agent|human agent|live agent|representative)\b",
+        r"\b(?:i\s+)?(?:want|need|would like)\s+(?:to\s+)?(?:talk|speak)\s+(?:to|with)\s+(?:a\s+)?(?:human|real person|support agent|agent|representative|someone from support)\b",
+        r"\b(?:can|could|may)\s+i\s+(?:please\s+)?(?:talk|speak)\s+(?:to|with)\s+(?:a\s+)?(?:human|real person|support agent|agent|representative|someone from support|someone)\b",
+        r"\b(?:i\s+)?(?:want|need|would like)\s+(?:a|an)\s+(?:human|live|support)\s+(?:agent|representative|person)\b",
+        r"\b(?:human|agent|live agent)\s+please\b",
+        r"\b(?:please\s+)?contact\s+(?:a\s+)?(?:human|support agent|representative)\b",
+        r"\b(?:please\s+)?escalate\s+(?:this|my case|my issue|my request)\b",
+        r"\blet me\s+(?:talk|speak)\s+(?:to|with)\s+(?:a\s+)?(?:human|agent|representative|someone from support)\b",
     )
-    if any(phrase in normalized for phrase in phrases):
-        return True
-    return bool(re.search(
-        r"\b(?:talk|speak|connect|transfer|escalate|request)\\b.{0,35}\\b(?:agent|human|person)\\b",
-        normalized,
-    ))
+    return any(re.search(pattern, normalized) for pattern in patterns)
 
 
 def customer_needs_private_staff_action(messages):
@@ -703,9 +697,8 @@ def call_gemini(messages):
         "Answer greetings warmly. For an incomplete question, ask one focused follow-up and continue helping; do not send the customer away. "
         "Never tell a customer to contact an admin or human agent just because a question is unfamiliar, general, short, or outside the exact examples in this prompt. "
         "Use your general knowledge to make a best effort, state uncertainty plainly, and ask for missing details when needed. "
-        "Only append the exact token [[ESCALATE_TO_HUMAN]] when the customer explicitly asks for a person, an action requires private staff-only access you do not have "
-        "(for example verifying a specific payment, changing account entitlements, or investigating private server records), or the customer has followed reasonable troubleshooting "
-        "steps and the issue is still unresolved. Before escalating a technical issue, give practical steps and ask for the result at least once. "
+        "Only append the exact token [[ESCALATE_TO_HUMAN]] when the customer clearly asks to speak to a person, requests a private payment/account action, or says that practical troubleshooting you already gave did not work. "
+        "A mention of an agent, human support, agent support, or a support queue is not itself a request for a human. Never escalate an ordinary app question, complaint about this bot, or first troubleshooting attempt. "
         "Do not claim you have changed account settings, checked private records, or completed a payment. Do not request passwords, one-time codes, API keys, or card details. "
         "For trading topics, explain concepts and risk; never promise profit, issue fabricated live prices, or guarantee a trade outcome. "
         "Do not display or explain the handoff token. Keep answers practical, clear, and step-by-step. Do not use markdown tables."
