@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>LM Analyzer endpoint verification</title>
+<style>body{font:15px/1.5 ui-monospace,monospace;background:#071426;color:#eef;padding:24px}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style>
+</head>
+<body>
+<h1>Temporary endpoint verification</h1>
+<pre id="result">Checking…</pre>
+<script>
+(async()=>{
+ const out={tested_at:new Date().toISOString(),checks:[]};
+ for(const path of ["/sitemap.xml","/sitemap.txt","/robots.txt"]){
+  try{
+   const response=await fetch(path,{cache:"no-store"});
+   const body=await response.text();
+   const item={path,status:response.status,url:response.url,content_type:response.headers.get("content-type"),body_length:body.length,starts_correctly:body.startsWith(path.endsWith(".xml")?'<?xml version="1.0"':'https://')};
+   if(path.endsWith(".xml")){
+    const doc=new DOMParser().parseFromString(body,"application/xml");
+    const err=doc.querySelector("parsererror");
+    item.parser_error=err?err.textContent:null;
+    item.root_element=doc.documentElement?.localName||null;
+    item.namespace=doc.documentElement?.namespaceURI||null;
+    item.url_count=doc.querySelectorAll("url").length;
+    item.locations=[...doc.querySelectorAll("loc")].map(x=>x.textContent.trim());
+    item.lastmods=[...doc.querySelectorAll("lastmod")].map(x=>x.textContent.trim());
+    item.tail=body.slice(-40);
+   } else item.body=body;
+   out.checks.push(item);
+  }catch(e){out.checks.push({path,error:String(e)})}
+ }
+ document.getElementById("result").textContent=JSON.stringify(out,null,2);
+})();
+</script>
+</body>
+</html>
