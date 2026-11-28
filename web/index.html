@@ -1039,9 +1039,25 @@ function refreshCustomerSupportChatDom(forceBottom=false){
  const privacy=$("chat-privacy-note");if(privacy)privacy.textContent=state.chatAssignedAgent?"Assigned agent: "+state.chatAssignedAgent:"Never send your MT5 or account password in chat.";
  const error=$("chat-error");if(error)error.textContent=state.chatError||"";
  const send=$("chat-send");if(send){send.disabled=state.chatBusy||(!(field?.value||state.chatDraft||"").trim()&&!state.chatAttachment);send.textContent=state.chatBusy?"…":"➤"}
+ const header=root.querySelector(".support-full-header");
+ const headerAction=header?.querySelector('[data-act="request-human"],[data-act="open-agent-inbox"]');
+ const wantedAction=state.chatAgentIsAgent?"open-agent-inbox":"request-human";
+ if(header&&headerAction&&headerAction.dataset.act!==wantedAction){
+  headerAction.outerHTML=state.chatAgentIsAgent?'<button type="button" class="support-header-action agent" data-act="open-agent-inbox">AGENT INBOX</button>':'<button type="button" class="support-header-action human" data-act="request-human" '+(!state.chatConversationId||state.chatBusy?"disabled":"")+'>HUMAN</button>';
+ }
  const human=root.querySelector('[data-act="request-human"]');if(human)human.disabled=!state.chatConversationId||state.chatBusy;
  const avatar=root.querySelector(".chat-full-avatar");
- if(avatar){avatar.innerHTML=(state.chatBotAvatarDataUrl?'<img src="'+safe(state.chatBotAvatarDataUrl)+'" alt="LM Support Bot">':botAvatarSvg())+(state.chatBotIsOwner?'<span class="chat-avatar-pencil">✎</span>':"");avatar.classList.toggle("editable",!!state.chatBotIsOwner)}
+ if(avatar){
+  avatar.innerHTML=(state.chatBotAvatarDataUrl?'<img src="'+safe(state.chatBotAvatarDataUrl)+'" alt="LM Support Bot">':botAvatarSvg())+(state.chatBotIsOwner?'<span class="chat-avatar-pencil">✎</span>':"");
+  avatar.classList.toggle("editable",!!state.chatBotIsOwner);
+  if(state.chatBotIsOwner){avatar.dataset.act="choose-support-bot-avatar";avatar.setAttribute("aria-label","Change support bot avatar")}
+  else{delete avatar.dataset.act;avatar.setAttribute("aria-label","LM Support Bot avatar")}
+ }
+ if(header){
+  const botInput=$("support-bot-avatar");
+  if(state.chatBotIsOwner&&!botInput){const input=document.createElement("input");input.type="file";input.accept="image/jpeg,image/png,image/webp";input.id="support-bot-avatar";input.className="hidden";header.insertBefore(input,avatar?avatar.nextSibling:null)}
+  else if(!state.chatBotIsOwner&&botInput)botInput.remove();
+ }
  if(field)field.placeholder=status==="waiting"?"Add information for the agent…":"Message LM Support Bot…";
  return true;
 }
