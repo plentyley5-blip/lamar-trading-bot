@@ -414,6 +414,7 @@ html[data-appearance="light"] .profile-identity-avatar,html[data-appearance="lig
 .chat-status-banner.assigned{background:rgba(57,194,143,.12);color:#9be7c5}
 .chat-status-banner.resolved{background:rgba(124,145,172,.12);color:#b4c3d7}
 .support-chat-fullscreen .chat-box{height:auto!important;max-height:none!important;min-height:0;flex:1 1 auto;overflow-y:auto;overflow-anchor:none;overscroll-behavior:contain;scroll-behavior:auto!important;display:flex;flex-direction:column;gap:10px;padding:12px 9px;margin:0;border-radius:15px;background:rgba(3,11,24,.32);border:1px solid rgba(116,174,232,.12)}
+.support-chat-fullscreen .chat-box::before{content:"";flex:0 0 0;margin-top:auto}
 .support-chat-fullscreen .chat-box .bubble{font-size:13px;max-width:min(88%,520px);padding:11px 13px}
 .chat-suggestions{flex:0 0 auto;padding:7px 0 5px}
 .chat-suggestions-label{font-size:8px;font-weight:900;letter-spacing:.6px;color:var(--muted);margin:0 0 6px}
@@ -422,7 +423,7 @@ html[data-appearance="light"] .profile-identity-avatar,html[data-appearance="lig
 .chat-suggestions-row button{flex:0 0 auto;max-width:210px;min-height:28px;padding:6px 9px;border:1px solid rgba(125,177,230,.17);border-radius:10px;background:rgba(22,119,255,.09);color:#bcd8f7;font-size:9px;white-space:nowrap}
 .chat-composer-pinned{flex:0 0 auto;margin-top:6px;padding:8px;background:rgba(7,22,39,.96);border:1px solid rgba(120,178,232,.18);border-radius:15px;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
 .chat-composer-input-row{display:flex;align-items:flex-end;gap:6px}
-.chat-composer-input-row .field{flex:1;min-width:0;min-height:42px;max-height:112px;resize:none;margin:0;padding:10px 12px;border-radius:18px;background:rgba(3,11,24,.6);border-color:rgba(110,170,225,.22);font-size:13px}
+.chat-composer-input-row .field{display:block;flex:1;min-width:0;min-height:42px;max-height:112px;resize:none;margin:0;padding:10px 12px;border-radius:18px;background:rgba(3,11,24,.6);border-color:rgba(110,170,225,.22);color:#fff!important;caret-color:var(--bright);font-size:13px;line-height:1.4;opacity:1;pointer-events:auto;touch-action:manipulation;-webkit-user-select:text;user-select:text}
 .chat-send-button{width:42px;height:42px;flex:0 0 42px;display:grid;place-items:center;border:0;border-radius:50%;background:var(--blue);color:white;font-size:19px;font-weight:950}
 .chat-send-button:disabled{opacity:.42}
 .chat-composer-pinned .chat-tool-button{width:38px;height:38px;flex:0 0 38px}
@@ -995,25 +996,70 @@ function supportMessagesHtml(){
 }
 let chatSnapshotRequestId=0;
 let chatSnapshotInFlight=false;
-function refreshLiveChatDom(){
- if(state.sub!=="LIVE_CHAT"||state.chatAgentIsAgent&&state.chatAgentScreen!=="customer")return;
+let chatHasLoadedInitialSnapshot=false;
+function refreshCustomerSupportChatDom(forceBottom=false){
+ const root=$("customer-support-chat");if(!root)return false;
+ const field=$("chat-draft");
+ if(field&&!field.dataset.chatDraftBound){
+  const syncDraft=()=>{state.chatDraft=field.value;const send=$("chat-send");if(send)send.disabled=state.chatBusy||(!field.value.trim()&&!state.chatAttachment)};
+  field.addEventListener("input",syncDraft);
+  field.addEventListener("keyup",syncDraft);
+  field.dataset.chatDraftBound="1";
+ }
+ if(field&&document.activeElement!==field&&!state.chatBusy&&field.value!==(state.chatDraft||""))field.value=state.chatDraft||"";
  const box=$("chat-box");
- if(box){const nearBottom=box.scrollHeight-box.scrollTop-box.clientHeight<75;const html=supportMessagesHtml();if(box.innerHTML!==html){box.innerHTML=html;if(nearBottom)box.scrollTop=box.scrollHeight}}
- const pill=$("chat-status-pill"),line=$("chat-status-line"),status=String(state.chatSupportStatus||"bot").toLowerCase();
+ if(box){
+  const wasAtBottom=box.scrollHeight-box.scrollTop-box.clientHeight<110;
+  const html=supportMessagesHtml();
+  if(box.innerHTML!==html){
+   box.innerHTML=html;
+   if(forceBottom||wasAtBottom)requestAnimationFrame(()=>{const current=$("chat-box");if(current)current.scrollTop=current.scrollHeight});
+  }else if(forceBottom)requestAnimationFrame(()=>{const current=$("chat-box");if(current)current.scrollTop=current.scrollHeight});
+ }
+ const status=String(state.chatSupportStatus||"bot").toLowerCase();
+ const statusText=status==="assigned"?(state.chatAssignedAgent||"A support agent")+" has joined":status==="waiting"?"Waiting for a human support agent":status==="resolved"?"This conversation was marked resolved":"Online · AI support";
+ const banner=status==="waiting"?'<div class="chat-status-banner waiting">Your request is saved in the human-support queue. Continue adding details here.</div>':status==="assigned"?'<div class="chat-status-banner assigned">'+safe(statusText)+'. Continue in this same conversation.</div>':status==="resolved"?'<div class="chat-status-banner resolved">This request was marked resolved. Send a new message to continue.</div>':"";
+ const bannerSlot=$("chat-status-banner-slot");if(bannerSlot&&bannerSlot.innerHTML!==banner)bannerSlot.innerHTML=banner;
+ const loadingSlot=$("chat-loading-slot");if(loadingSlot)loadingSlot.innerHTML=state.chatLoading?'<div class="loading">Loading conversation…</div>':"";
+ const suggestionSlot=$("chat-suggestions-slot");
+ if(suggestionSlot){
+  const suggestions=!state.chatMessages.length?'<div class="chat-suggestions" id="chat-suggestions"><div class="chat-suggestions-label">SUGGESTED TOPICS</div><div class="chat-suggestions-row"><button type="button" data-chat-suggestion="I forgot my password. How can I reset it?">Forgot password</button><button type="button" data-chat-suggestion="I need help with my subscription and payment.">Subscription</button><button type="button" data-chat-suggestion="How do I upload clear 4H and 15M charts?">How to upload charts</button><button type="button" data-chat-suggestion="Please explain the entry, stop loss and take profit in my analysis.">Understand analysis</button></div></div>':"";
+  if(suggestionSlot.innerHTML!==suggestions)suggestionSlot.innerHTML=suggestions;
+ }
+ const attachmentSlot=$("chat-attachment-slot");
+ if(attachmentSlot){
+  const attachment=state.chatAttachment?'<div class="chat-attachment-preview"><img src="'+safe(state.chatAttachment)+'" alt="Attachment preview"><span>Image attached</span><button type="button" class="chat-attachment-remove" data-act="remove-chat-image">REMOVE</button></div>':"";
+  if(attachmentSlot.innerHTML!==attachment)attachmentSlot.innerHTML=attachment;
+ }
+ const typing=$("chat-typing-note");
+ if(typing){typing.hidden=!state.chatTyping;typing.innerHTML=state.chatTyping?'<span class="chat-typing-dots">•••</span> LM Support Bot is typing':""}
+ const pill=$("chat-status-pill"),line=$("chat-status-line");
  if(pill){pill.className="chat-full-status "+(status==="waiting"||status==="assigned"||status==="human"?"gold":"green");pill.textContent=status.toUpperCase()}
- if(line)line.textContent=status==="assigned"?(state.chatAssignedAgent||"Human support agent joined"):status==="waiting"?"Your request is in the human-support queue":status==="resolved"?"Conversation resolved":"Online · AI support";
- const privacy=document.querySelector(".chat-privacy-note");if(privacy)privacy.textContent=state.chatAssignedAgent?"Assigned agent: "+state.chatAssignedAgent:"Never send your MT5 or account password in chat.";
+ if(line)line.textContent=statusText;
+ const privacy=$("chat-privacy-note");if(privacy)privacy.textContent=state.chatAssignedAgent?"Assigned agent: "+state.chatAssignedAgent:"Never send your MT5 or account password in chat.";
  const error=$("chat-error");if(error)error.textContent=state.chatError||"";
- const send=$("chat-send");if(send){send.disabled=state.chatBusy||(!String(state.chatDraft||"").trim()&&!state.chatAttachment);send.textContent=state.chatBusy?"…":"➤"}
+ const send=$("chat-send");if(send){send.disabled=state.chatBusy||(!(field?.value||state.chatDraft||"").trim()&&!state.chatAttachment);send.textContent=state.chatBusy?"…":"➤"}
+ const human=root.querySelector('[data-act="request-human"]');if(human)human.disabled=!state.chatConversationId||state.chatBusy;
+ const avatar=root.querySelector(".chat-full-avatar");
+ if(avatar){avatar.innerHTML=(state.chatBotAvatarDataUrl?'<img src="'+safe(state.chatBotAvatarDataUrl)+'" alt="LM Support Bot">':botAvatarSvg())+(state.chatBotIsOwner?'<span class="chat-avatar-pencil">✎</span>':"");avatar.classList.toggle("editable",!!state.chatBotIsOwner)}
+ if(field)field.placeholder=status==="waiting"?"Add information for the agent…":"Message LM Support Bot…";
+ return true;
 }
-async function loadSupportSnapshotWeb(redraw){
+function refreshLiveChatDom(forceBottom=false){
+ if(state.sub!=="LIVE_CHAT"||state.chatAgentIsAgent&&state.chatAgentScreen!=="customer")return;
+ refreshCustomerSupportChatDom(forceBottom);
+}
+async function loadSupportSnapshotWeb(redraw,forceBottom=false){
  if(!state.chatConversationId)return;
  const requestId=++chatSnapshotRequestId;
+ let shouldForceBottom=forceBottom;
  try{
   const r=await api("/support_chat?conversation_id="+encodeURIComponent(state.chatConversationId));
   // A poll that began before a send/handoff must never overwrite the newer chat response.
   if(requestId!==chatSnapshotRequestId||state.sub!=="LIVE_CHAT")return;
   state.chatMessages=Array.isArray(r.messages)?r.messages:[];
+  shouldForceBottom=shouldForceBottom||!chatHasLoadedInitialSnapshot;
+  chatHasLoadedInitialSnapshot=true;
   state.chatSupportStatus=r.support_status||"bot";
   state.chatAssignedAgent=r.assigned_agent_name||"";
   state.chatError="";
@@ -1021,14 +1067,14 @@ async function loadSupportSnapshotWeb(redraw){
   if(requestId!==chatSnapshotRequestId||state.sub!=="LIVE_CHAT")return;
   state.chatError=e.message;
  }
- if(requestId===chatSnapshotRequestId&&state.sub==="LIVE_CHAT")refreshLiveChatDom();
+ if(requestId===chatSnapshotRequestId&&state.sub==="LIVE_CHAT")refreshLiveChatDom(shouldForceBottom);
  else if(requestId===chatSnapshotRequestId&&redraw!==false)render();
 }
 function scrollSupportChatToLatest(){
  requestAnimationFrame(()=>{const box=$("chat-box");if(box)box.scrollTop=box.scrollHeight});
 }
 async function loadSupportChat(){
- state.chatLoading=true;state.chatError="";state.chatAgentScreen="customer";state.chatAgentQueueError="";render();
+ state.chatLoading=true;state.chatError="";chatHasLoadedInitialSnapshot=false;state.chatAgentScreen="customer";state.chatAgentQueueError="";render();
  const results=await Promise.allSettled([api("/support_chat?action=agent_me"),api("/support_chat?action=bot_profile"),api("/support_chat")]);
  const agent=results[0].status==="fulfilled"?results[0].value:{};
  state.chatAgentIsAgent=!!agent.is_agent;state.chatAgentDisplayName=agent.display_name||"Support Agent";
@@ -1186,7 +1232,7 @@ function supportChatView(){
  const suggestions=!state.chatMessages.length?'<div class="chat-suggestions"><div class="chat-suggestions-label">SUGGESTED TOPICS</div><div class="chat-suggestions-row"><button type="button" data-chat-suggestion="I forgot my password. How can I reset it?">Forgot password</button><button type="button" data-chat-suggestion="I need help with my subscription and payment.">Subscription</button><button type="button" data-chat-suggestion="How do I upload clear 4H and 15M charts?">How to upload charts</button><button type="button" data-chat-suggestion="Please explain the entry, stop loss and take profit in my analysis.">Understand analysis</button></div></div>':"";
  const attachment=state.chatAttachment?'<div class="chat-attachment-preview"><img src="'+safe(state.chatAttachment)+'" alt="Attachment preview"><span>Image attached</span><button type="button" class="chat-attachment-remove" data-act="remove-chat-image">REMOVE</button></div>':"";
  const botEdit=state.chatBotIsOwner?'<input class="hidden" id="support-bot-avatar" type="file" accept="image/jpeg,image/png,image/webp">':"";
- return '<div class="support-chat-fullscreen"><header class="support-full-header"><button type="button" class="chat-back-button" data-act="back" aria-label="Back">‹</button><button type="button" class="chat-full-avatar '+(state.chatBotIsOwner?"editable":"")+'" '+(state.chatBotIsOwner?'data-act="choose-support-bot-avatar" aria-label="Change support bot avatar"':"aria-label=\"LM Support Bot avatar\"")+'>'+botAvatar+(state.chatBotIsOwner?'<span class="chat-avatar-pencil">✎</span>':"")+'</button>'+botEdit+'<div class="support-full-header-copy"><strong>LM SUPPORT BOT</strong><small id="chat-status-line">'+safe(statusText)+'</small></div><span id="chat-status-pill" class="chat-full-status '+(status==="waiting"||status==="assigned"?"gold":"green")+'">'+safe(status.toUpperCase())+'</span>'+topAction+'</header><div class="chat-full-main">'+statusBanner+(state.chatLoading?'<div class="loading">Loading conversation…</div>':"")+'<div class="chat-box" id="chat-box">'+supportMessagesHtml()+'</div>'+suggestions+'</div>'+(state.chatError?'<div id="chat-error" class="error">'+safe(state.chatError)+'</div>':'<div id="chat-error" class="error"></div>')+'<div class="chat-composer chat-composer-pinned">'+attachment+'<div class="chat-composer-input-row"><button type="button" class="chat-tool-button" data-act="choose-chat-image" aria-label="Attach image">＋</button><input class="hidden" id="chat-image" type="file" accept="image/png,image/jpeg,image/webp"><textarea id="chat-draft" class="field" rows="1" maxlength="2000" placeholder="'+(status==="waiting"?"Add information for the agent…":"Message LM Support Bot…")+'">'+safe(state.chatDraft||"")+'</textarea><button type="button" class="chat-tool-button" data-act="voice-chat" aria-label="Voice input">🎙</button><button type="button" class="chat-send-button" id="chat-send" data-act="send-chat" '+(state.chatBusy||(!String(state.chatDraft||"").trim()&&!state.chatAttachment)?"disabled":"")+'>'+(state.chatBusy?"…":"➤")+'</button></div>'+(state.chatTyping?'<div class="chat-typing-note"><span class="chat-typing-dots">•••</span> LM Support Bot is typing</div>':"")+'<div class="chat-privacy-note">'+(state.chatAssignedAgent?"Assigned agent: "+safe(state.chatAssignedAgent):"Never send your MT5 or account password in chat.")+'</div></div></div>';
+ return '<div class="support-chat-fullscreen" id="customer-support-chat"><header class="support-full-header"><button type="button" class="chat-back-button" data-act="back" aria-label="Back">‹</button><button type="button" class="chat-full-avatar '+(state.chatBotIsOwner?"editable":"")+'" '+(state.chatBotIsOwner?'data-act="choose-support-bot-avatar" aria-label="Change support bot avatar"':"aria-label=\"LM Support Bot avatar\"")+'>'+botAvatar+(state.chatBotIsOwner?'<span class="chat-avatar-pencil">✎</span>':"")+'</button>'+botEdit+'<div class="support-full-header-copy"><strong>LM SUPPORT BOT</strong><small id="chat-status-line">'+safe(statusText)+'</small></div><span id="chat-status-pill" class="chat-full-status '+(status==="waiting"||status==="assigned"?"gold":"green")+'">'+safe(status.toUpperCase())+'</span>'+topAction+'</header><div class="chat-full-main"><div id="chat-status-banner-slot">'+statusBanner+'</div><div id="chat-loading-slot">'+(state.chatLoading?'<div class="loading">Loading conversation…</div>':"")+'</div><div class="chat-box" id="chat-box">'+supportMessagesHtml()+'</div><div id="chat-suggestions-slot">'+(suggestions?suggestions.replace('class="chat-suggestions"','class="chat-suggestions" id="chat-suggestions"'):"")+'</div></div>'+(state.chatError?'<div id="chat-error" class="error">'+safe(state.chatError)+'</div>':'<div id="chat-error" class="error"></div>')+'<div class="chat-composer chat-composer-pinned"><div id="chat-attachment-slot">'+attachment+'</div><div class="chat-composer-input-row"><button type="button" class="chat-tool-button" data-act="choose-chat-image" aria-label="Attach image">＋</button><input class="hidden" id="chat-image" type="file" accept="image/png,image/jpeg,image/webp"><textarea id="chat-draft" class="field" rows="1" maxlength="2000" placeholder="'+(status==="waiting"?"Add information for the agent…":"Message LM Support Bot…")+'">'+safe(state.chatDraft||"")+'</textarea><button type="button" class="chat-tool-button" data-act="voice-chat" aria-label="Voice input">🎙</button><button type="button" class="chat-send-button" id="chat-send" data-act="send-chat" '+(state.chatBusy||(!String(state.chatDraft||"").trim()&&!state.chatAttachment)?"disabled":"")+'>'+(state.chatBusy?"…":"➤")+'</button></div><div id="chat-typing-note" class="chat-typing-note"'+(state.chatTyping?'':' hidden')+'>'+(state.chatTyping?'<span class="chat-typing-dots">•••</span> LM Support Bot is typing':"")+'</div><div class="chat-privacy-note" id="chat-privacy-note">'+(state.chatAssignedAgent?"Assigned agent: "+safe(state.chatAssignedAgent):"Never send your MT5 or account password in chat.")+'</div></div></div>';
 }
 
 function compressSupportImage(file){
@@ -1221,7 +1267,7 @@ async function sendSupportMessageWeb(){
  const box=$("chat-box");if(box){box.innerHTML=supportMessagesHtml();box.scrollTop=box.scrollHeight}
  try{
   const body={action:"send",message:submittedDraft};if(state.chatConversationId)body.conversation_id=state.chatConversationId;if(attachment)body.attachment_data_url=attachment;
-  const r=await api("/support_chat",{method:"POST",body});state.chatConversationId=r.conversation_id||state.chatConversationId;state.chatSupportStatus=r.support_status||"bot";state.chatAssignedAgent=r.assigned_agent_name||"";await loadSupportSnapshotWeb(false);
+  const r=await api("/support_chat",{method:"POST",body});state.chatConversationId=r.conversation_id||state.chatConversationId;state.chatSupportStatus=r.support_status||"bot";state.chatAssignedAgent=r.assigned_agent_name||"";await loadSupportSnapshotWeb(false,true);
  }catch(e){state.chatError=e.message;if(!state.chatDraft)state.chatDraft=submittedDraft;if(!state.chatAttachment)state.chatAttachment=attachment}
  finally{state.chatTyping=false;state.chatBusy=false;render()}
 }
@@ -1333,6 +1379,10 @@ async function restoreSupabaseBrowserSession(){
  try{const client=await getSupabaseBrowserClient(),{data,error}=await client.auth.getSession();if(error)throw error;const session=data?.session;if(session?.access_token){state.token=session.access_token;state.refresh=session.refresh_token||"";localStorage.setItem("lm_access_token",state.token);if(state.refresh)localStorage.setItem("lm_refresh_token",state.refresh);if(location.search.includes("code="))history.replaceState(null,"",location.pathname)}}catch(e){console.warn("Supabase session restore failed:",e.message||e)}
 }
 function render(){
+ if(state.sub==="LIVE_CHAT"&&state.chatAgentScreen==="customer"&&$("customer-support-chat")){
+  refreshCustomerSupportChatDom();
+  return;
+ }
  const preserveCustomerChat=state.sub==="LIVE_CHAT"&&!state.chatAgentIsAgent;
  const oldChatDraft=preserveCustomerChat?$("chat-draft"):null;
  const chatDraftHadFocus=!!oldChatDraft&&document.activeElement===oldChatDraft;
