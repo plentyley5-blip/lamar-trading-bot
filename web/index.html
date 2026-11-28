@@ -919,7 +919,45 @@ function timeframeSelectorModal(){
 }
 function uploadBox(key,label){const data=state.images[key];return '<div><label class="field-label">'+safe(label)+'</label><label class="upload-box" for="file-'+key+'">'+(data?'<img src="'+data+'" alt="Chart preview">':'<span class="plus">＋</span><strong>Tap to upload chart</strong><small>PNG, JPG or WEBP</small>')+'</label><input class="hidden" id="file-'+key+'" type="file" accept="image/png,image/jpeg,image/webp" data-file="'+key+'"></div>'}
 function resultView(r){return '<div class="divider"></div><div class="row-between"><h2 class="section-title">AI ANALYSIS RESULT</h2><span class="pill blue">'+safe(r.signal||"WAIT")+'</span></div><div class="metric-grid" style="margin-top:12px">'+metric("Instrument",r.instrument||state.selectedInstrument)+metric("Confidence",String(r.confidence??"—")+"%")+metric("Entry",r.entry||"—")+metric("Stop loss",r.stop_loss||"—")+metric("Take profit 1",r.take_profit_1||"—")+metric("Take profit 2",r.take_profit_2||"—")+'</div><div class="notice">'+safe(r.trade_idea||r.setup_status||"Review all levels and invalidation conditions before making a decision.")+'</div>'}
-async function compressFile(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(new Error("The selected chart could not be read."));reader.onload=()=>{const img=new Image();img.onerror=()=>reject(new Error("The selected chart is not a supported image."));img.onload=()=>{const scale=Math.min(1,2200/Math.max(img.width,img.height));const canvas=document.createElement("canvas");canvas.width=Math.max(1,Math.round(img.width*scale));canvas.height=Math.max(1,Math.round(img.height*scale));canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);let quality=.88,data=canvas.toDataURL("image/jpeg",quality);while(data.length>1450000&&quality>.48){quality-=.08;data=canvas.toDataURL("image/jpeg",quality)}if(data.length>1500000)return reject(new Error("The image is too large. Choose a smaller screenshot."));resolve(data)};img.src=reader.result};reader.readAsDataURL(file)})}
+async function compressFile(file){
+ return new Promise((resolve,reject)=>{
+  const reader=new FileReader();
+  reader.onerror=()=>reject(new Error("The selected chart could not be read."));
+  reader.onload=()=>{
+   const img=new Image();
+   img.onerror=()=>reject(new Error("The selected chart is not a supported image."));
+   img.onload=()=>{
+    const maxEdge=2200,limit=1150000;
+    let width=Math.max(1,Math.round(img.width*Math.min(1,maxEdge/Math.max(img.width,img.height))));
+    let height=Math.max(1,Math.round(img.height*Math.min(1,maxEdge/Math.max(img.width,img.height))));
+    const canvas=document.createElement("canvas"),ctx=canvas.getContext("2d");
+    if(!ctx)return reject(new Error("Image compression is unavailable in this browser."));
+    let quality=.84,data="";
+    const encode=()=>{
+     canvas.width=width;canvas.height=height;
+     ctx.fillStyle="#fff";ctx.fillRect(0,0,width,height);
+     ctx.drawImage(img,0,0,width,height);
+     data=canvas.toDataURL("image/jpeg",quality);
+    };
+    encode();
+    while(data.length>limit&&quality>.44){
+     quality=Math.max(.44,quality-.07);
+     encode();
+    }
+    while(data.length>limit&&Math.max(width,height)>1400){
+     width=Math.max(1,Math.round(width*.9));
+     height=Math.max(1,Math.round(height*.9));
+     quality=.52;
+     encode();
+    }
+    if(data.length>limit)return reject(new Error("This chart screenshot is too large to upload safely. Choose a smaller screenshot with the price chart and symbol clearly visible."));
+    resolve(data);
+   };
+   img.src=reader.result;
+  };
+  reader.readAsDataURL(file);
+ });
+}
 async function submitAnalysis(){state.analysisError="";if(!canAnalyze()&&!isOwner()){state.sub="PLANS";return render()}if(!state.selectedInstrument){state.analysisError="Choose an instrument.";render();return}if(!state.images.H4||!state.images.M15){state.analysisError="Upload both 4H and 15M charts first.";render();return}for(const x of state.optionalTimeframes){if(!state.images[x]){state.analysisError="Upload the selected "+x+" optional chart or remove its selection.";render();return}}state.analysisBusy=true;render();try{const additional={};state.optionalTimeframes.forEach(x=>additional[x]=state.images[x]);const submit=await api("/analysis_submit",{method:"POST",body:{instrument:state.selectedInstrument,trade_focus:state.focus,higher_timeframe_image:state.images.H4,lower_timeframe_image:state.images.M15,additional_timeframe_images:additional}});if(!submit.job_id)throw new Error("The analysis job was not created.");let result=null;for(let i=0;i<75;i++){await new Promise(r=>setTimeout(r,2000));const status=await api("/analysis_status?job_id="+encodeURIComponent(submit.job_id));if(status.status==="completed"){result=status.result||{};break}if(status.status==="failed")throw new Error(status.error||"The analysis did not complete.")}if(!result)throw new Error("The analysis is taking longer than expected. Check Trade history shortly.");state.analysisResult=result;await loadProfile()}catch(e){state.analysisError=e.message}finally{state.analysisBusy=false;render()}}
 async function loadNews(){state.newsBusy=true;state.newsError="";render();try{const r=await api("/news?refresh="+Date.now());state.news=(r.events||[]).filter(e=>String(e.impact||"").toLowerCase()==="high")}catch(e){state.newsError=e.message}finally{state.newsBusy=false;render()}}
 function newsView(){return subHeader("High Impact News","Verified high-impact Forex economic events")+'<section class="glass card"><div class="row-between"><div class="eyebrow" style="color:var(--gold)">UPCOMING EVENTS</div><button class="btn outline" data-act="refresh-news">↻ REFRESH</button></div>'+(state.newsBusy?'<div class="loading"><span class="spinner"></span>Loading high-impact events…</div>':"")+(state.newsError?'<div class="error">'+safe(state.newsError)+'</div>':"")+(state.news.length?state.news.map((e,i)=>'<button class="news-row" style="width:100%;text-align:left;color:white" data-event="'+i+'"><span class="currency">'+safe(e.currency)+'</span><span style="flex:1"><span class="news-meta">'+safe(e.date)+" · "+safe(e.time)+'</span><span class="news-title" style="display:block;margin-top:3px">'+safe(e.title||e.event)+'</span><span class="news-meta" style="display:block;margin-top:5px;color:var(--red)">Expected volatility: High</span></span><span style="color:var(--bright)">›</span></button>').join(""):'<div class="muted small" style="padding:28px;text-align:center">◷<h3 style="color:white">No High Impact News</h3>'+(state.newsError?"The calendar is unavailable.":"There are currently no scheduled high-impact Forex events.")+'</div>')+'</section>'}
