@@ -849,15 +849,136 @@ async function loadSupportSnapshotWeb(redraw){
  else if(requestId===chatSnapshotRequestId&&redraw!==false)render();
 }
 async function loadSupportChat(){
- state.chatLoading=true;state.chatError="";render();
- try{
-  const list=await api("/support_chat");state.chatConversations=Array.isArray(list.conversations)?list.conversations:[];
-  const latest=state.chatConversations.slice().sort((a,b)=>new Date(b.updated_at||b.created_at||0)-new Date(a.updated_at||a.created_at||0))[0];
-  state.chatConversationId=latest?latest.id:"";state.chatMessages=[];state.chatSupportStatus=latest?latest.support_status||"bot":"bot";state.chatAssignedAgent=latest?latest.assigned_agent_name||"":"";
-  if(state.chatConversationId)await loadSupportSnapshotWeb(false);
- }catch(e){state.chatError=e.message}
- finally{state.chatLoading=false;render()}
+ state.chatLoading=true;state.chatError="";state.chatAgentScreen="customer";state.chatAgentQueueError="";render();
+ const results=await Promise.allSettled([api("/support_chat?action=agent_me"),api("/support_chat?action=bot_profile"),api("/support_chat")]);
+ const agent=results[0].status==="fulfilled"?results[0].value:{};
+ state.chatAgentIsAgent=!!agent.is_agent;state.chatAgentDisplayName=agent.display_name||"Support Agent";
+ if(results[1].status==="fulfilled"){state.chatBotIsOwner=!!results[1].value.is_owner;state.chatBotAvatarDataUrl=results[1].value.avatar_data_url||""}
+ if(results[2].status==="rejected"){state.chatError=results[2].reason?.message||"Unable to load support conversations."}
+ else{const list=results[2].value;state.chatConversations=Array.isArray(list.conversations)?list.conversations:[];const latest=state.chatConversations.slice().sort((a,b)=>new Date(b.updated_at||b.created_at||0)-new Date(a.updated_at||a.created_at||0))[0];state.chatConversationId=latest?latest.id:"";state.chatMessages=[];state.chatSupportStatus=latest?latest.support_status||"bot":"bot";state.chatAssignedAgent=latest?latest.assigned_agent_name||"":"";if(state.chatConversationId)await loadSupportSnapshotWeb(false)}
+ state.chatLoading=false;render();
 }
+
+async function loadSupportAgentQueueWeb(silent=false){
+ if(!state.chatAgentIsAgent||state.chatAgentQueueLoading)return;
+ state.chatAgentQueueLoading=true;state.chatAgentQueueError="";
+ if(!silent&&state.sub==="LIVE_CHAT"&&state.chatAgentScreen==="inbox")render();
+ try{
+  const r=await api("/support_chat?action=agent_queue");
+  const waiting=(Array.isArray(r.waiting)?r.waiting:[]).map(x=>({...x,support_status:"waiting"}));
+  const assigned=(Array.isArray(r.assigned)?r.assigned:[]).map(x=>({...x,support_status:"assigned"}));
+  state.chatAgentQueue=waiting.concat(assigned);
+  state.chatAgentActiveCount=Number(r.active_count||0);
+  state.chatAgentMaxActiveChats=Math.max(1,Number(r.max_active_chats||1));
+ }catch(e){state.chatAgentQueueError=e.message||"Unable to refresh the support inbox."}
+ finally{state.chatAgentQueueLoading=false;if(state.sub==="LIVE_CHAT"&&state.chatAgentScreen==="inbox")render()}
+}
+async function openSupportAgentInboxWeb(){
+ if(!state.chatAgentIsAgent)return;
+ state.chatAgentScreen="inbox";state.chatAgentQueueError="";await loadSupportAgentQueueWeb();render();
+}
+async function loadSupportAgentConversationWeb(silent=false){
+ const id=state.chatAgentConversationId;if(!id||!state.chatAgentIsAgent||state.chatAgentLoading)return;
+ state.chatAgentLoading=true;
+ if(!silent&&state.sub==="LIVE_CHAT"&&state.chatAgentScreen==="agent_chat")render();
+ try{
+  const r=await api("/support_chat?conversation_id="+encodeURIComponent(id));
+  state.chatAgentMessages=Array.isArray(r.messages)?r.messages:[];
+  state.chatAgentConversationStatus=String(r.support_status||"assigned");
+  state.chatAgentResolved=state.chatAgentConversationStatus==="resolved";
+  state.chatAgentQueueError="";
+ }catch(e){state.chatAgentQueueError=e.message||"Unable to load this conversation."}
+ finally{state.chatAgentLoading=false;if(state.sub==="LIVE_CHAT"&&state.chatAgentScreen==="agent_chat")render()}
+}
+async function claimSupportConversationWeb(id){
+ if(!id||state.chatAgentBusyId)return;
+ state.chatAgentBusyId=id;state.chatAgentQueueError="";render();
+ try{
+  const r=await api("/support_chat",{method:"POST",body:{action:"agent_claim",conversation_id:id}});
+  if(r.claimed!==true)throw new Error(r.error||"This support request is no longer available.");
+  state.chatAgentConversationId=id;state.chatAgentMessages=[];state.chatAgentResolved=false;state.chatAgentConversationStatus="assigned";state.chatAgentReplyDraft="";state.chatAgentScreen="agent_chat";
+  await loadSupportAgentConversationWeb();
+  await loadSupportAgentQueueWeb(true);
+ }catch(e){state.chatAgentQueueError=e.message||"Unable to attend this request."}
+ finally{state.chatAgentBusyId="";render()}
+}
+async function sendSupportAgentReplyWeb(){
+ const draft=(state.chatAgentReplyDraft||"").trim(),id=state.chatAgentConversationId;
+ if(!draft||!id||state.chatAgentReplyBusy||state.chatAgentResolved)return;
+ state.chatAgentReplyBusy=true;state.chatAgentQueueError="";render();
+ try{
+  await api("/support_chat",{method:"POST",body:{action:"agent_reply",conversation_id:id,message:draft}});
+  state.chatAgentReplyDraft="";
+  await loadSupportAgentConversationWeb(true);
+ }catch(e){state.chatAgentQueueError=e.message||"Unable to send the agent reply."}
+ finally{state.chatAgentReplyBusy=false;render()}
+}
+async function resolveSupportConversationWeb(){
+ const id=state.chatAgentConversationId;if(!id||state.chatAgentReplyBusy)return;
+ if(!window.confirm("Mark this support conversation as resolved?"))return;
+ state.chatAgentReplyBusy=true;state.chatAgentQueueError="";render();
+ try{
+  await api("/support_chat",{method:"POST",body:{action:"agent_resolve",conversation_id:id}});
+  state.chatAgentResolved=true;state.chatAgentConversationStatus="resolved";state.chatAgentScreen="inbox";state.chatAgentConversationId="";
+  await loadSupportAgentQueueWeb(true);
+ }catch(e){state.chatAgentQueueError=e.message||"Unable to resolve this conversation."}
+ finally{state.chatAgentReplyBusy=false;render()}
+}
+function supportAgentMessagesHtml(){
+ const messages=Array.isArray(state.chatAgentMessages)?state.chatAgentMessages:[];
+ if(!messages.length)return '<div class="chat-empty-message">This conversation has no messages yet.</div>';
+ return messages.map(m=>{
+  const role=String(m.role||"assistant"),isAgent=role==="agent",isSystem=role==="system",isCustomer=role==="user";
+  const name=isCustomer?"CUSTOMER":isSystem?"SUPPORT UPDATE":isAgent?(m.sender_name||state.chatAgentDisplayName||"YOU · AGENT"):"LM SUPPORT BOT";
+  const body=(m.content?'<div class="agent-message-text">'+safe(m.content)+'</div>':"")+(m.attachment_data_url?'<img class="agent-message-attachment" src="'+safe(m.attachment_data_url)+'" alt="Customer attachment">':"");
+  return '<div class="agent-chat-message '+(isAgent?"agent-outgoing":isCustomer?"customer-incoming":"system-message")+'"><div class="agent-chat-bubble"><div class="agent-chat-sender">'+safe(name)+'</div>'+body+'</div></div>';
+ }).join("");
+}
+function supportAgentInboxView(){
+ const waiting=state.chatAgentQueue.filter(x=>x.support_status==="waiting");
+ const assigned=state.chatAgentQueue.filter(x=>x.support_status==="assigned");
+ const cards=state.chatAgentQueue.map(item=>{
+  const id=String(item.id||"");
+  const status=item.support_status==="waiting"?"WAITING":"ASSIGNED TO YOU";
+  const action=item.support_status==="waiting"?
+   '<button type="button" class="agent-inbox-action" data-agent-claim="'+safe(id)+'" '+(state.chatAgentBusyId||state.chatAgentActiveCount>=state.chatAgentMaxActiveChats?"disabled":"")+'>'+(state.chatAgentBusyId===id?"CLAIMING…":"ATTEND CONVERSATION")+'</button>':
+   '<button type="button" class="agent-inbox-action secondary" data-agent-open="'+safe(id)+'">OPEN CONVERSATION</button>';
+  return '<article class="agent-inbox-item"><div class="agent-inbox-item-head"><strong>'+safe(item.title||"Customer support request")+'</strong><span class="agent-status '+(item.support_status==="waiting"?"waiting":"assigned")+'">'+status+'</span></div><div class="caption">Customer '+safe(String(item.user_id||"").slice(0,8))+(item.updated_at?' · '+safe(String(item.updated_at).replace("T"," ").slice(0,16)):"")+'</div>'+action+'</article>';
+ }).join("");
+ return '<div class="support-agent-screen"><header class="support-full-header"><button type="button" class="chat-back-button" data-act="agent-back-customer" aria-label="Back to support chat">‹</button><div class="support-full-header-copy"><strong>SUPPORT AGENT INBOX</strong><small>'+safe(state.chatAgentDisplayName||"Support Agent")+'</small></div><button type="button" class="compact-refresh-button" data-act="refresh-agent-inbox">↻</button></header><div class="agent-inbox-summary"><div><small>ACTIVE CONVERSATIONS</small><strong>'+safe(state.chatAgentActiveCount)+' / '+safe(state.chatAgentMaxActiveChats)+'</strong></div><div><small>WAITING REQUESTS</small><strong>'+safe(waiting.length)+'</strong></div></div>'+(state.chatAgentQueueError?'<div class="error">'+safe(state.chatAgentQueueError)+'</div>':"")+'<div class="agent-inbox-list">'+(state.chatAgentQueueLoading&&!state.chatAgentQueue.length?'<div class="chat-empty-message">Loading support requests…</div>':cards||'<div class="chat-empty-message">No waiting or assigned support conversations.</div>')+'</div></div>';
+}
+function supportAgentConversationView(){
+ const id=state.chatAgentConversationId;
+ return '<div class="support-agent-screen"><header class="support-full-header"><button type="button" class="chat-back-button" data-act="agent-back-inbox">‹</button><div class="support-full-header-copy"><strong>CUSTOMER CONVERSATION</strong><small>Same conversation · live updates</small></div><button type="button" class="agent-resolve-button" data-act="resolve-agent-conversation" '+(state.chatAgentResolved||state.chatAgentReplyBusy?"disabled":"")+'>'+ (state.chatAgentResolved?"RESOLVED":"RESOLVE")+'</button></header><div class="agent-conversation-message-list" id="agent-conversation-message-list">'+(state.chatAgentLoading&&!state.chatAgentMessages.length?'<div class="chat-empty-message">Loading conversation…</div>':supportAgentMessagesHtml())+'</div>'+(state.chatAgentQueueError?'<div class="error">'+safe(state.chatAgentQueueError)+'</div>':"")+(state.chatAgentResolved?'<div class="agent-resolved-note">This conversation has been resolved.</div>':'<div class="chat-composer agent-reply-composer"><textarea id="agent-chat-draft" class="field" rows="2" maxlength="2000" placeholder="Reply to customer…">'+safe(state.chatAgentReplyDraft)+'</textarea><div class="chat-composer-actions"><button type="button" class="btn agent-send-button" data-act="send-agent-reply" '+(state.chatAgentReplyBusy||!state.chatAgentReplyDraft.trim()?"disabled":"")+'>'+(state.chatAgentReplyBusy?"SENDING…":"SEND")+'</button></div></div>')+'</div>';
+}
+async function loadSupportBotProfileWeb(){
+ try{const r=await api("/support_chat?action=bot_profile");state.chatBotIsOwner=!!r.is_owner;state.chatBotAvatarDataUrl=r.avatar_data_url||""}catch(_){state.chatBotIsOwner=false;state.chatBotAvatarDataUrl=""}
+}
+async function saveSupportBotAvatarWeb(file){
+ const dataUrl=await compressSupportImage(file),raw=dataUrl.split(",")[1]||"";
+ if(Math.floor(raw.length*3/4)>500000)throw new Error("The support avatar must be 500 KB or smaller after compression.");
+ const r=await api("/support_chat",{method:"POST",body:{action:"update_bot_avatar",avatar_data_url:dataUrl}});
+ state.chatBotAvatarDataUrl=r.avatar_data_url||dataUrl;
+}
+async function compressSupportBotAvatar(file){
+ return new Promise((resolve,reject)=>{
+  const reader=new FileReader();reader.onerror=()=>reject(new Error("The selected image could not be read."));
+  reader.onload=()=>{
+   const img=new Image();img.onerror=()=>reject(new Error("Choose a valid JPG, PNG or WEBP image."));
+   img.onload=()=>{
+    const scale=Math.min(1,640/Math.max(img.width,img.height)),canvas=document.createElement("canvas");
+    canvas.width=Math.max(1,Math.round(img.width*scale));canvas.height=Math.max(1,Math.round(img.height*scale));
+    const ctx=canvas.getContext("2d");if(!ctx)return reject(new Error("Image compression is unavailable."));
+    ctx.fillStyle="#fff";ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    let quality=.82,data=canvas.toDataURL("image/jpeg",quality);
+    while(data.length>660000&&quality>.35){quality-=.07;data=canvas.toDataURL("image/jpeg",quality)}
+    if(data.length>666700)return reject(new Error("Choose a smaller image. The support avatar must be under 500 KB."));
+    resolve(data);
+   };img.src=reader.result;
+  };reader.readAsDataURL(file);
+ });
+}
+
 function supportChatView(){
  const status=String(state.chatSupportStatus||"bot").toLowerCase();
  return subHeader("LM SUPPORT BOT","Your ongoing LM Analyzer support conversation")+'<section class="glass card chat-room"><div class="chat-brand-row"><div class="chat-brand-identity"><div class="chat-bot-avatar">'+botAvatarSvg()+'</div><div class="chat-brand-copy"><div class="chat-brand-name">LM SUPPORT BOT</div><div class="chat-brand-meta"><div class="chat-brand-sub" id="chat-status-line">'+(status==="assigned"?"Human support agent joined":status==="waiting"?"Your request is in the human-support queue":status==="resolved"?"Conversation resolved":"Online · AI support")+'</div><span id="chat-status-pill" class="pill chat-status-pill '+(status==="waiting"||status==="assigned"?"gold":"green")+'">'+safe(status.toUpperCase())+'</span></div></div></div><button type="button" class="btn gold chat-human-button" data-act="request-human" '+(!state.chatConversationId||state.chatBusy?"disabled":"")+'>REQUEST HUMAN</button></div>'+(state.chatLoading?'<div class="loading"><span class="spinner"></span>Loading conversation…</div>':"")+'<div class="chat-box" id="chat-box">'+supportMessagesHtml()+'</div><div class="chat-suggestions"><button type="button" data-chat-suggestion="I forgot my password. How can I reset it?">Forgot password</button><button type="button" data-chat-suggestion="I need help with my subscription and payment.">Subscription</button><button type="button" data-chat-suggestion="How do I upload clear 4H and 15M charts?">How to upload charts</button><button type="button" data-chat-suggestion="Please explain the entry, stop loss and take profit in my analysis.">Understand analysis</button></div><div class="chat-composer">'+(state.chatAttachment?'<div class="chat-attachment-preview"><img src="'+state.chatAttachment+'" alt="Attachment preview"><span>Image attached</span><button type="button" class="btn outline" style="margin-left:auto;padding:6px 9px" data-act="remove-chat-image">REMOVE</button></div>':"")+'<textarea id="chat-draft" class="field" rows="2" maxlength="2000" placeholder="Type a message…">'+safe(state.chatDraft||"")+'</textarea><input class="hidden" id="chat-image" type="file" accept="image/png,image/jpeg,image/webp"><div class="chat-composer-actions"><label for="chat-image" class="chat-tool-button" title="Attach an image">＋</label><button type="button" class="chat-tool-button" data-act="voice-chat" title="Voice input">🎙</button><button type="button" class="btn" id="chat-send" data-act="send-chat" '+(state.chatBusy?"disabled":"")+'>'+(state.chatBusy?"SENDING…":"SEND")+'</button></div></div><div id="chat-error" class="error">'+safe(state.chatError||"")+'</div><div class="caption chat-assigned-note" id="chat-assigned">'+(state.chatAssignedAgent?"Assigned agent: "+safe(state.chatAssignedAgent):"Never send your MT5 or account password in chat.")+'</div></section>';
