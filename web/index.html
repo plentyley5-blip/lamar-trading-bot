@@ -413,7 +413,7 @@ html[data-appearance="light"] .profile-identity-avatar,html[data-appearance="lig
 .chat-status-banner.waiting{background:rgba(222,174,66,.12);color:#f1ce7b}
 .chat-status-banner.assigned{background:rgba(57,194,143,.12);color:#9be7c5}
 .chat-status-banner.resolved{background:rgba(124,145,172,.12);color:#b4c3d7}
-.support-chat-fullscreen .chat-box{height:auto!important;max-height:none!important;min-height:0;flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:10px;padding:12px 9px;margin:0;border-radius:15px;background:rgba(3,11,24,.32);border:1px solid rgba(116,174,232,.12)}
+.support-chat-fullscreen .chat-box{height:auto!important;max-height:none!important;min-height:0;flex:1 1 auto;overflow-y:auto;overflow-anchor:none;overscroll-behavior:contain;scroll-behavior:auto!important;display:flex;flex-direction:column;gap:10px;padding:12px 9px;margin:0;border-radius:15px;background:rgba(3,11,24,.32);border:1px solid rgba(116,174,232,.12)}
 .support-chat-fullscreen .chat-box .bubble{font-size:13px;max-width:min(88%,520px);padding:11px 13px}
 .chat-suggestions{flex:0 0 auto;padding:7px 0 5px}
 .chat-suggestions-label{font-size:8px;font-weight:900;letter-spacing:.6px;color:var(--muted);margin:0 0 6px}
@@ -1024,6 +1024,9 @@ async function loadSupportSnapshotWeb(redraw){
  if(requestId===chatSnapshotRequestId&&state.sub==="LIVE_CHAT")refreshLiveChatDom();
  else if(requestId===chatSnapshotRequestId&&redraw!==false)render();
 }
+function scrollSupportChatToLatest(){
+ requestAnimationFrame(()=>{const box=$("chat-box");if(box)box.scrollTop=box.scrollHeight});
+}
 async function loadSupportChat(){
  state.chatLoading=true;state.chatError="";state.chatAgentScreen="customer";state.chatAgentQueueError="";render();
  const results=await Promise.allSettled([api("/support_chat?action=agent_me"),api("/support_chat?action=bot_profile"),api("/support_chat")]);
@@ -1032,7 +1035,7 @@ async function loadSupportChat(){
  if(results[1].status==="fulfilled"){state.chatBotIsOwner=!!results[1].value.is_owner;state.chatBotAvatarDataUrl=results[1].value.avatar_data_url||""}
  if(results[2].status==="rejected"){state.chatError=results[2].reason?.message||"Unable to load support conversations."}
  else{const list=results[2].value;state.chatConversations=Array.isArray(list.conversations)?list.conversations:[];const latest=state.chatConversations.slice().sort((a,b)=>new Date(b.updated_at||b.created_at||0)-new Date(a.updated_at||a.created_at||0))[0];state.chatConversationId=latest?latest.id:"";state.chatMessages=[];state.chatSupportStatus=latest?latest.support_status||"bot":"bot";state.chatAssignedAgent=latest?latest.assigned_agent_name||"":"";if(state.chatConversationId)await loadSupportSnapshotWeb(false)}
- state.chatLoading=false;render();
+ state.chatLoading=false;render();scrollSupportChatToLatest();
 }
 
 async function loadSupportAgentQueueWeb(silent=false){
@@ -1330,6 +1333,14 @@ async function restoreSupabaseBrowserSession(){
  try{const client=await getSupabaseBrowserClient(),{data,error}=await client.auth.getSession();if(error)throw error;const session=data?.session;if(session?.access_token){state.token=session.access_token;state.refresh=session.refresh_token||"";localStorage.setItem("lm_access_token",state.token);if(state.refresh)localStorage.setItem("lm_refresh_token",state.refresh);if(location.search.includes("code="))history.replaceState(null,"",location.pathname)}}catch(e){console.warn("Supabase session restore failed:",e.message||e)}
 }
 function render(){
+ const preserveCustomerChat=state.sub==="LIVE_CHAT"&&!state.chatAgentIsAgent;
+ const oldChatDraft=preserveCustomerChat?$("chat-draft"):null;
+ const chatDraftHadFocus=!!oldChatDraft&&document.activeElement===oldChatDraft;
+ const chatDraftSelection=oldChatDraft?{start:oldChatDraft.selectionStart,end:oldChatDraft.selectionEnd,direction:oldChatDraft.selectionDirection}:null;
+ const oldChatBox=preserveCustomerChat?$("chat-box"):null;
+ const oldChatScrollTop=oldChatBox?oldChatBox.scrollTop:0;
+ const oldChatWasAtBottom=oldChatBox?oldChatBox.scrollHeight-oldChatBox.scrollTop-oldChatBox.clientHeight<90:false;
+ if(oldChatDraft&&!state.chatBusy)state.chatDraft=oldChatDraft.value;
  applyAppearance();
  const root=$("app");
  if(!state.token||!state.profile){
@@ -1356,6 +1367,20 @@ function render(){
  }
  let body=state.sub?subView():({HOME:homeView,TRADE:tradeView,COMMUNITY:communityView,MARKETS:marketsView,TOOLS:toolsView,PROFILE:profileView}[state.page]||homeView)();
  root.innerHTML=state.sub==="LIVE_CHAT"?'<div class="chat-app-shell"><main class="chat-app-content">'+body+'</main></div>':'<div class="shell"><main class="content">'+body+'</main></div>'+(!state.sub?nav():"");
+ if(preserveCustomerChat){
+  requestAnimationFrame(()=>{
+   if(state.sub!=="LIVE_CHAT"||state.chatAgentIsAgent)return;
+   const box=$("chat-box");
+   if(box){
+    if(!oldChatBox||oldChatWasAtBottom)box.scrollTop=box.scrollHeight;
+    else box.scrollTop=Math.min(oldChatScrollTop,Math.max(0,box.scrollHeight-box.clientHeight));
+   }
+   const field=$("chat-draft");
+   if(field&&chatDraftHadFocus){
+    try{field.focus({preventScroll:true});if(chatDraftSelection&&typeof field.setSelectionRange==="function")field.setSelectionRange(chatDraftSelection.start,chatDraftSelection.end,chatDraftSelection.direction||"none")}catch(_){field.focus()}
+   }
+  });
+ }
 }
 function go(page){state.sub="";state.page=page;state.message="";if(page==="TRADE")loadHistory().then(render);if(page==="PROFILE"){loadCommunityProfileWeb();loadHistory().then(render)}if(page==="COMMUNITY")loadCommunity();if(page==="MARKETS")loadMarkets();render()}
 function openSub(s){state.sub=s;state.message="";if(s==="HIGH_IMPACT_NEWS"){if(!canNews()){state.sub="PLANS"}else loadNews()}if(s==="LIVE_CHAT")loadSupportChat();if(s==="ADMIN_MONITORING")loadAdminMonitorWeb();if(s==="FOLLOWERS"||s==="FOLLOWING"){state.communityMemberDirection=s.toLowerCase();loadCommunityMembersWeb()}if(s==="LEARNING")loadLessons();if(s==="JOURNAL")loadJournal();if(s==="MT5_AUTO_TRADER")loadAutoTrader();render()}
@@ -1499,7 +1524,9 @@ setInterval(()=>{
   if(!state.chatAgentLoading)loadSupportAgentConversationWeb(true);
   return;
  }
- if(state.chatConversationId&&!state.chatBusy&&!chatSnapshotInFlight){
+ const chatDraftField=$("chat-draft");
+ const customerIsComposing=!!chatDraftField&&(document.activeElement===chatDraftField||!!String(state.chatDraft||"").trim());
+ if(state.chatConversationId&&!state.chatBusy&&!chatSnapshotInFlight&&!customerIsComposing){
   chatSnapshotInFlight=true;
   loadSupportSnapshotWeb(false).finally(()=>{chatSnapshotInFlight=false});
  }
