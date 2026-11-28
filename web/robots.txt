@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-# Add the XML sitemap after the final pages.dev hostname is confirmed.
+Sitemap: https://lmanalyzer.pages.dev/sitemap.xml
