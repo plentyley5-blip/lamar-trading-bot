@@ -2,4 +2,3 @@ User-agent: *
 Allow: /
 
 Sitemap: https://lmanalyzer.pages.dev/sitemap.xml
-Sitemap: https://lmanalyzer.pages.dev/sitemap.txt
