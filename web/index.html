@@ -4,9 +4,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#030B18">
-<meta name="description" content="LM Analyzer — 4H + 15M chart intelligence, AI chart analysis, live markets, high-impact news and trading tools.">
+<meta name="description" content="LM Analyzer by LAMAR Trading Bot provides AI-assisted forex chart analysis using 4H and 15M charts, live markets, high-impact news and trading tools.">
+<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
+<link rel="canonical" href="https://lmanalyzer.pages.dev/">
 <link rel="manifest" href="./manifest.webmanifest">
-<title>LM Analyzer</title>
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="LM Analyzer">
+<meta property="og:title" content="LM Analyzer | AI Forex Chart Analysis">
+<meta property="og:description" content="AI-assisted forex chart analysis, live markets and high-impact financial news from LAMAR Trading Bot.">
+<meta property="og:url" content="https://lmanalyzer.pages.dev/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="LM Analyzer | AI Forex Chart Analysis">
+<meta name="twitter:description" content="AI-assisted forex chart analysis, live markets and high-impact financial news.">
+<script type="application/ld+json">{
+  "@context":"https://schema.org",
+  "@type":"WebSite",
+  "name":"LM Analyzer",
+  "alternateName":"LAMAR Trading Bot LM Analyzer",
+  "url":"https://lmanalyzer.pages.dev/",
+  "description":"AI-assisted forex chart analysis using 4H and 15M charts, live markets and high-impact financial news."
+}</script>
+<title>LM Analyzer | AI Forex Chart Analysis &amp; Market Intelligence</title>
 <style>
 :root{color-scheme:dark;--bg:#030B18;--card:rgba(11,32,56,.88);--glass:rgba(20,53,87,.72);--deep:rgba(16,31,52,.78);--blue:#1677FF;--bright:#2F8CFF;--white:#FFF;--muted:#AFC0D2;--border:#294768;--green:#36D399;--red:#FF6378;--gold:#F5C76A;--radius:24px}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--white);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{min-height:100vh;background:radial-gradient(circle at 88% 0%,rgba(22,119,255,.15),transparent 27rem),radial-gradient(circle at 0% 75%,rgba(47,140,255,.07),transparent 25rem),var(--bg)}button,input,select,textarea{font:inherit}button{cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}a{color:var(--bright)}.hidden{display:none!important}
@@ -181,6 +199,19 @@
  .community-post-image{max-height:260px}
 }
 
+
+/* Public, crawlable LM Analyzer product information below the sign-in panel. */
+.auth-seo{width:100%;max-width:640px;margin:28px auto 0;padding:0 2px 28px;color:var(--muted);font-size:13px;line-height:1.7}
+.auth-seo h2{margin:0 0 10px;color:#fff;font-size:20px;line-height:1.3;font-weight:850;letter-spacing:-.2px}
+.auth-seo p{margin:0 0 12px}
+.auth-seo strong{color:#fff}
+.auth-seo-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:18px 0}
+.auth-seo-grid article{padding:13px;border:1px solid rgba(255,255,255,.09);border-radius:14px;background:rgba(11,32,56,.52)}
+.auth-seo-grid h3{margin:0 0 6px;color:#fff;font-size:12px;line-height:1.35}
+.auth-seo-grid p{margin:0;font-size:12px;line-height:1.55}
+.auth-seo-note{font-size:11px;opacity:.9}
+.auth-seo-link{font-weight:750}
+@media(max-width:620px){.auth-seo{padding-left:24px;padding-right:24px}.auth-seo-grid{grid-template-columns:1fr}.auth-seo h2{font-size:18px}}
 </style>
 </head>
 <body><div id="app"><div class="loading"><span class="spinner"></span>Loading LM Analyzer…</div></div>
@@ -258,7 +289,7 @@ function authView(){
  const emailField=input("auth-email","email","Email",state.authEmail,"email");
  const passwordField='<div class="auth-input-wrap auth-password-wrap"><input class="auth-input-native" id="auth-password" name="password" type="password" placeholder="Password" value="'+safe(state.authPassword||"")+'" autocomplete="'+(state.authMode==="signup"?"new-password":"current-password")+'" autocapitalize="off" spellcheck="false" /><button type="button" class="auth-eye" id="auth-eye" aria-label="Show password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.7-7 10-7 10 7 10 7-3.7 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path d="M3 21 21 3"/></svg></button></div>';
  const googleButton='<div class="google-signin-native" id="google-signin"><button type="button" class="google-fallback-native" id="google-fallback"><svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M43.6 24.5c0-1.4-.1-2.8-.4-4.1H24v7.8h11c-.5 2.5-1.9 4.6-4.1 6v5h6.6c3.9-3.6 6.1-8.8 6.1-14.7Z"/><path fill="#34A853" d="M24 44c5.5 0 10.1-1.8 13.5-4.8l-6.6-5c-1.8 1.2-4 1.9-6.9 1.9-5.3 0-9.8-3.6-11.4-8.4H5.8v5.2C9.2 39.5 16 44 24 44Z"/><path fill="#FBBC05" d="M12.6 27.7a12 12 0 0 1 0-7.4v-5.2H5.8a20 20 0 0 0 0 17.8l6.8-5.2Z"/><path fill="#EA4335" d="M24 11.9c3 0 5.7 1 7.8 3.1l5.8-5.8C34.1 6 29.5 4 24 4 16 4 9.2 8.5 5.8 15.1l6.8 5.2c1.6-4.8 6.1-8.4 11.4-8.4Z"/></svg>Continue with Google</button></div>';
- return '<main class="auth-screen"><header class="auth-brand-native"><h1>LM Analyzer</h1><p>4H + 15M chart intelligence</p></header><section class="auth-card-native"><h2>'+(state.authMode==="signup"?"Create account":"Welcome back")+'</h2><p class="auth-subtitle">'+(state.authMode==="signup"?"Register to start analysing charts.":"Sign in to continue.")+'</p><form class="auth-form-native" id="auth-form" novalidate>'+(state.authMode==="signup"?input("auth-name","text","Full name",state.authFullName,"name"):"")+emailField+passwordField+(state.authMode==="signup"?input("auth-confirm","password","Confirm password",state.authConfirm,"new-password"):"")+'<div id="auth-msg">'+msgBox()+'</div><button class="auth-submit-native" id="auth-submit" type="submit" '+(state.busy?"disabled":"")+'>'+(state.busy?(state.authMode==="signup"?"CREATING ACCOUNT…":"LOGGING IN…"):(state.authMode==="signup"?"CREATE ACCOUNT":"LOGIN"))+'</button></form><div class="auth-divider-native">OR</div>'+googleButton+'<button type="button" class="auth-toggle-native" id="auth-toggle">'+(state.authMode==="signup"?"Already have an account? Login":"Need an account? Create one")+'</button></section></main>';
+ return '<main class="auth-screen"><header class="auth-brand-native"><h1>LM Analyzer</h1><p>4H + 15M chart intelligence</p></header><section class="auth-card-native"><h2>'+(state.authMode==="signup"?"Create account":"Welcome back")+'</h2><p class="auth-subtitle">'+(state.authMode==="signup"?"Register to start analysing charts.":"Sign in to continue.")+'</p><form class="auth-form-native" id="auth-form" novalidate>'+(state.authMode==="signup"?input("auth-name","text","Full name",state.authFullName,"name"):"")+emailField+passwordField+(state.authMode==="signup"?input("auth-confirm","password","Confirm password",state.authConfirm,"new-password"):"")+'<div id="auth-msg">'+msgBox()+'</div><button class="auth-submit-native" id="auth-submit" type="submit" '+(state.busy?"disabled":"")+'>'+(state.busy?(state.authMode==="signup"?"CREATING ACCOUNT…":"LOGGING IN…"):(state.authMode==="signup"?"CREATE ACCOUNT":"LOGIN"))+'</button></form><div class="auth-divider-native">OR</div>'+googleButton+'<button type="button" class="auth-toggle-native" id="auth-toggle">'+(state.authMode==="signup"?"Already have an account? Login":"Need an account? Create one")+'</button></section><section class="auth-seo" aria-labelledby="auth-seo-title"><h2 id="auth-seo-title">AI Forex Chart Analysis and Market Intelligence</h2><p><strong>LM Analyzer</strong> by LAMAR Trading Bot is an AI-assisted market analysis platform for traders who want to study price action, understand market conditions and prepare their own trading decisions. Upload clear <strong>4-hour (4H)</strong> and <strong>15-minute (15M)</strong> charts to receive structured chart analysis.</p><div class="auth-seo-grid"><article><h3>AI chart analysis</h3><p>Review forex pairs, metals, commodities, crypto and supported market indices with a workflow built around 4H context and 15M entry analysis.</p></article><article><h3>Markets and economic news</h3><p>Follow market prices and high-impact economic events, with market context and analysis tools in one workspace.</p></article><article><h3>Trading workspace and support</h3><p>Use the trading community, learning resources and in-app support to keep your market research organised.</p></article></div><p class="auth-seo-note">LM Analyzer is an analysis and research tool. It does not guarantee trading results. Trading involves risk.</p><p class="auth-seo-link"><a href="./">Open LM Analyzer</a> · <a href="https://lmanalyzer.pages.dev/manifest.webmanifest">Web app details</a></p></section></main>';
 }
 
 function captureAuthDraft(){
