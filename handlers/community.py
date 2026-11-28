@@ -228,7 +228,7 @@ def _attach_member_profiles(member_ids, viewer_id=""):
         result.append({
             "user_id": member_id,
             "full_name": profiles.get(member_id) or "LM Analyzer member",
-            "avatar_url": "" if member_id in agent_ids else _profile_avatar_url(avatar_paths.get(member_id, "")),
+            "avatar_url": _profile_avatar_url(avatar_paths.get(member_id, "")),
             "is_verified": member_id in verified,
             "verification_reason": str(verified.get(member_id, {}).get("reason", "")),
             "follower_count": follower_counts.get(member_id, 0),
@@ -289,7 +289,7 @@ def _attach_author_profiles(posts, viewer_id=""):
         item = dict(post)
         author_id = str(item.get("user_id", ""))
         item["author_name"] = names.get(author_id) or "LM Analyzer member"
-        item["author_avatar_url"] = "" if author_id in agent_ids else _profile_avatar_url(avatar_paths.get(author_id, ""))
+        item["author_avatar_url"] = _profile_avatar_url(avatar_paths.get(author_id, ""))
         item["follower_count"] = follower_counts.get(author_id, 0)
         item["following_count"] = following_counts.get(author_id, 0)
         item["is_following"] = author_id in following_now and author_id != str(viewer_id)
@@ -659,7 +659,7 @@ class handler(BaseHTTPRequestHandler):
                     print("community optional badge lookup failed; type={}; error={!r}".format(type(exc).__name__, str(exc)))
 
                 agent_ids = _support_agent_ids([target_id])
-                avatar_url = "" if target_id in agent_ids else _profile_avatar_url(profile.get("avatar_path"))
+                avatar_url = _profile_avatar_url(profile.get("avatar_path"))
                 _send(self, 200, {"profile": {"id": target_id, "full_name": str(profile.get("full_name") or "LM Analyzer member"), "avatar_url": avatar_url, "followers": followers, "following": following, "posts_count": len(authored_posts), "is_following": is_following, "is_self": target_id == str(user["id"]), "is_verified": bool(badge), "verification_reason": str(badge.get("reason", ""))}, "posts": authored_posts})
                 return
             if action == "members":
@@ -742,9 +742,9 @@ class handler(BaseHTTPRequestHandler):
             body = _read_body(self)
             action = str(body.get("action", "publish")).strip().lower()
             if action == "profile_avatar":
-                if _support_agent_ids([user_id]):
-                    _send(self, 403, {"error": "Support-agent avatars are managed separately."})
-                    return
+                # Every authenticated member, including support agents, may update
+                # their own personal profile photo. The official bot avatar remains
+                # a separate owner-only setting.
                 avatar_path = _upload_community_image(user_id, body.get("image_data_url"), profile_avatar=True)
                 _supabase("PATCH", "/rest/v1/profiles?id=eq." + urllib.parse.quote(user_id, safe=""),
                           {"avatar_path": avatar_path}, prefer="return=minimal")
