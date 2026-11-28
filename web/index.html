@@ -533,7 +533,7 @@ const state={
  news:[],newsBusy:false,newsError:"",selectedEvent:null,selectedNewsInstrument:"",
  newsSignal:null,newsSignalBusy:false,newsSignalError:"",
  selectedInstrument:"EURUSD",instrumentPickerOpen:false,instrumentSearch:"",focus:"DAY TRADE",focusPickerOpen:false,timeframeSelectorOpen:false,optionalTimeframes:[],images:{H4:"",M15:"","1D":"","1H":"","5M":"","1M":""},analysisBusy:false,analysisError:"",analysisResult:null,
- communityPosts:[],communityBusy:false,communityError:"",communityCanPost:false,communityImage:"",communityMeta:null,communityProfile:null,communityProfileError:"",communityMembers:[],communityMembersLoading:false,communityMemberDirection:"followers",communityMembersError:"",profileAvatarBusy:false,activeCommentsPostId:"",communityComments:[],
+ communityPosts:[],communityBusy:false,communityError:"",communityCanPost:false,communityImage:"",communityMeta:null,communityProfile:null,communityProfileError:"",communityMembers:[],communityMembersLoading:false,communityMemberDirection:"followers",communityMembersError:"",communityFollowBusyId:"",profileAvatarBusy:false,activeCommentsPostId:"",communityComments:[],
  toolsTab:"TOOLS",selectedPlan:"monthly",lessons:[],lessonProgress:[],selectedLessonId:"",selectedQuizOption:null,quizFeedback:"",journal:[],toolError:"",toolNotice:"",
  autoTrader:null,autoTraderError:"",autoTraderBusy:false,marketSelectedSymbol:"",marketInterval:"15min",marketCandles:[],marketChartBusy:false,marketChartError:"",marketChartUpdatedAt:"",marketAlerts:[],marketAlertsError:"",chatMessages:[],chatConversationId:"",chatBusy:false,chatTyping:false,chatError:"",chatLoading:false,chatSupportStatus:"bot",chatAssignedAgent:"",chatConversations:[],chatAgentIsAgent:false,chatAgentDisplayName:"",chatAgentScreen:"customer",chatAgentConversationId:"",chatAgentQueue:[],chatAgentQueueLoading:false,chatAgentQueueError:"",chatAgentActiveCount:0,chatAgentMaxActiveChats:1,chatAgentBusyId:"",chatAgentMessages:[],chatAgentLoading:false,chatAgentReplyDraft:"",chatAgentReplyBusy:false,chatAgentResolved:false,chatBotAvatarDataUrl:"",chatBotIsOwner:false,adminMonitor:null,adminMonitorBusy:false,adminMonitorError:"",googleNonce:"",googleScriptLoading:false,
  appearance:localStorage.getItem("lm_appearance")||"blue",notifications:localStorage.getItem("lm_web_notifications")==="true",communityDraft:"",communityUserId:"",chatDraft:"",chatAttachment:"",chatUploadBusy:false,chatVoiceActive:false,supabaseClient:null,autoTraderTab:"OVERVIEW",autoTraderLinkCode:"",autoTraderLinkExpires:"",autoTraderSelectedPlan:"3 Months"
@@ -1265,7 +1265,7 @@ function render(){
   return;
  }
  let body=state.sub?subView():({HOME:homeView,TRADE:tradeView,COMMUNITY:communityView,MARKETS:marketsView,TOOLS:toolsView,PROFILE:profileView}[state.page]||homeView)();
- root.innerHTML='<div class="shell"><main class="content">'+body+'</main></div>'+(!state.sub?nav():"");
+ root.innerHTML=state.sub==="LIVE_CHAT"?'<div class="chat-app-shell"><main class="chat-app-content">'+body+'</main></div>':'<div class="shell"><main class="content">'+body+'</main></div>'+(!state.sub?nav():"");
 }
 function go(page){state.sub="";state.page=page;state.message="";if(page==="TRADE")loadHistory().then(render);if(page==="PROFILE"){loadCommunityProfileWeb();loadHistory().then(render)}if(page==="COMMUNITY")loadCommunity();if(page==="MARKETS")loadMarkets();render()}
 function openSub(s){state.sub=s;state.message="";if(s==="HIGH_IMPACT_NEWS"){if(!canNews()){state.sub="PLANS"}else loadNews()}if(s==="LIVE_CHAT")loadSupportChat();if(s==="ADMIN_MONITORING")loadAdminMonitorWeb();if(s==="FOLLOWERS"||s==="FOLLOWING"){state.communityMemberDirection=s.toLowerCase();loadCommunityMembersWeb()}if(s==="LEARNING")loadLessons();if(s==="JOURNAL")loadJournal();if(s==="MT5_AUTO_TRADER")loadAutoTrader();render()}
@@ -1285,6 +1285,16 @@ document.addEventListener("click",async e=>{
  const act=e.target.closest("[data-act]");if(act){const a=act.dataset.act;try{
  if(a==="open-instrument-picker"){state.instrumentSearch="";state.instrumentPickerOpen=true;render()}
  if(a==="close-instrument-picker"){state.instrumentPickerOpen=false;render()}
+ if(a==="choose-profile-avatar"){$("profile-avatar")?.click()}
+ if(a==="choose-support-bot-avatar"){$("support-bot-avatar")?.click()}
+ if(a==="choose-chat-image"){$("chat-image")?.click()}
+ if(a==="refresh-community-members")await loadCommunityMembersWeb();
+ if(a==="open-agent-inbox")await openSupportAgentInboxWeb();
+ if(a==="agent-back-customer"){state.chatAgentScreen="customer";state.chatAgentQueueError="";render()}
+ if(a==="refresh-agent-inbox")await loadSupportAgentQueueWeb();
+ if(a==="agent-back-inbox"){state.chatAgentScreen="inbox";state.chatAgentReplyDraft="";await loadSupportAgentQueueWeb()}
+ if(a==="send-agent-reply")await sendSupportAgentReplyWeb();
+ if(a==="resolve-agent-conversation")await resolveSupportConversationWeb();
  if(a==="open-focus-selector"){state.focusPickerOpen=true;render()}
  if(a==="close-focus-selector"){state.focusPickerOpen=false;render()}
  if(a==="open-timeframe-selector"){state.timeframeSelectorOpen=true;render()}
@@ -1331,6 +1341,8 @@ document.addEventListener("click",async e=>{
  if(a==="android-purchase")showMsg("Open LM Analyzer on Android and select the same plan to complete Google Play checkout. No browser payment has been started.","notice");
  if(a==="test-notification"){if(!("Notification"in window))throw new Error("This browser does not support desktop notifications.");const permission=await Notification.requestPermission();if(permission==="granted")new Notification("LM Analyzer",{body:"Browser notification test."});else throw new Error("Notification permission was not granted.")}
  }catch(err){showMsg(err.message,"error")}return}
+ const agentClaim=e.target.closest("[data-agent-claim]");if(agentClaim){await claimSupportConversationWeb(agentClaim.dataset.agentClaim);return}
+ const agentOpen=e.target.closest("[data-agent-open]");if(agentOpen){state.chatAgentConversationId=agentOpen.dataset.agentOpen;state.chatAgentScreen="agent_chat";state.chatAgentResolved=false;state.chatAgentReplyDraft="";await loadSupportAgentConversationWeb();render();return}
  const like=e.target.closest("[data-like-post]");if(like){togglePostLike(like.dataset.likePost);return}const comments=e.target.closest("[data-comments]");if(comments){loadPostComments(comments.dataset.comments);return}const sendComment=e.target.closest("[data-send-comment]");if(sendComment){sendPostComment(sendComment.dataset.sendComment);return}const lesson=e.target.closest("[data-lesson]");if(lesson){state.selectedLessonId=lesson.dataset.lesson;state.selectedQuizOption=null;state.quizFeedback="";render();return}const answer=e.target.closest("[data-quiz-answer]");if(answer){state.selectedQuizOption=Number(answer.dataset.quizAnswer);state.quizFeedback="";render();return}const historyItem=e.target.closest("[data-history-id]");if(historyItem){state.selectedHistoryId=historyItem.dataset.historyId;state.analysisExpandedSections={"TRADE SETUP":true};state.analysisRiskOpen=false;state.analysisRiskOutput=null;state.analysisRiskError="";render();return}const filter=e.target.closest("[data-filter]");if(filter){state.historyFilter=filter.dataset.filter;render();return}
  const cat=e.target.closest("[data-category]");if(cat){state.marketCategory=cat.dataset.category;loadMarkets();return}const md=e.target.closest("[data-market-detail]");if(md){state.marketSelectedSymbol=md.dataset.marketDetail;state.marketInterval="15min";state.marketCandles=[];render();loadMarketCandles();return}const interval=e.target.closest("[data-interval]");if(interval){state.marketInterval=interval.dataset.interval;loadMarketCandles();return}const alertAnalysis=e.target.closest("[data-alert-analysis]");if(alertAnalysis){state.selectedInstrument=alertAnalysis.dataset.alertAnalysis;openSub("ANALYZER");return}
  const plan=e.target.closest("[data-plan]");if(plan){state.selectedPlan=plan.dataset.plan;render();return}
@@ -1343,14 +1355,42 @@ document.addEventListener("click",async e=>{
  const appearance=e.target.closest("[data-appearance]");if(appearance){state.appearance=appearance.dataset.appearance;localStorage.setItem("lm_appearance",state.appearance);showMsg("Appearance preference saved for this browser.","success");return}
  const toolIndex=e.target.closest("[data-tool-index]");if(toolIndex){state.toolIndex=Number(toolIndex.dataset.toolIndex)||0;render();return}const toolAction=e.target.closest("[data-tool-action]");if(toolAction){const action=toolAction.dataset.toolAction;if(action==="HIGH_IMPACT_NEWS")return openSub("HIGH_IMPACT_NEWS");if(action==="BROKER"){window.open("https://one.exnessonelink.com/a/gzhynodvm1","_blank","noopener");return}if(action==="COMMUNITY_LINK"){window.open("https://t.me/lamar_fx958","_blank","noopener");return}}const memberDirection=e.target.closest("[data-member-direction]");if(memberDirection){state.communityMemberDirection=memberDirection.dataset.memberDirection;state.sub=state.communityMemberDirection.toUpperCase();loadCommunityMembersWeb();render();return}const follow=e.target.closest("[data-toggle-follow]");if(follow){toggleCommunityFollow(follow.dataset.toggleFollow,follow.dataset.following==="true");return}const url=e.target.closest("[data-url]");if(url){window.open(url.dataset.url,"_blank","noopener");return}
 });
-document.addEventListener("input",e=>{if(e.target.id==="risk-instrument"){const symbol=e.target.value.trim().toUpperCase(),saved=loadWebLotProfile(symbol);["tick-size","tick-value","volume-step","min-volume"].forEach((field,i)=>{const input=$("risk-"+field);if(input)input.value=saved?[saved.tickSize,saved.tickValue,saved.volumeStep,saved.minVolume][i]:""})}if(e.target.matches("[data-risk-field]")){state.analysisRiskForm=state.analysisRiskForm||{};state.analysisRiskForm[e.target.dataset.riskField]=e.target.value;state.analysisRiskError=""}if(e.target.id==="community-body")state.communityDraft=e.target.value;if(e.target.id==="chat-draft")state.chatDraft=e.target.value;if(e.target.id==="instrument-search"){state.instrumentSearch=e.target.value;const pos=e.target.selectionStart;render();const next=$("instrument-search");if(next){next.focus();try{next.setSelectionRange(pos,pos)}catch(_){}}}});
+document.addEventListener("input",e=>{if(e.target.id==="agent-chat-draft")state.chatAgentReplyDraft=e.target.value;if(e.target.id==="risk-instrument"){const symbol=e.target.value.trim().toUpperCase(),saved=loadWebLotProfile(symbol);["tick-size","tick-value","volume-step","min-volume"].forEach((field,i)=>{const input=$("risk-"+field);if(input)input.value=saved?[saved.tickSize,saved.tickValue,saved.volumeStep,saved.minVolume][i]:""})}if(e.target.matches("[data-risk-field]")){state.analysisRiskForm=state.analysisRiskForm||{};state.analysisRiskForm[e.target.dataset.riskField]=e.target.value;state.analysisRiskError=""}if(e.target.id==="community-body")state.communityDraft=e.target.value;if(e.target.id==="chat-draft")state.chatDraft=e.target.value;if(e.target.id==="instrument-search"){state.instrumentSearch=e.target.value;const pos=e.target.selectionStart;render();const next=$("instrument-search");if(next){next.focus();try{next.setSelectionRange(pos,pos)}catch(_){}}}});
 document.addEventListener("change",async e=>{if(e.target.id==="instrument-select"){state.selectedInstrument=e.target.value;render();return}if(e.target.id==="chat-image"){const file=e.target.files&&e.target.files[0];if(file){try{state.chatAttachment=await compressSupportImage(file);render()}catch(err){state.chatError=err.message;render()}}}
- if(e.target.matches("[data-file]")){const key=e.target.dataset.file,file=e.target.files&&e.target.files[0];if(!file)return;try{state.images[key]=await compressFile(file);render()}catch(err){showMsg(err.message,"error")}}if(e.target.id==="profile-avatar"){const file=e.target.files&&e.target.files[0];if(file){try{const image_data_url=await compressFile(file);await api("/community",{method:"POST",body:{action:"profile_avatar",image_data_url}});await loadCommunityProfileWeb()}catch(err){showMsg(err.message,"error")}}}if(e.target.id==="community-image"){const file=e.target.files&&e.target.files[0];if(file){try{state.communityImage=await compressFile(file);render()}catch(err){showMsg(err.message,"error")}}}
+ if(e.target.matches("[data-file]")){const key=e.target.dataset.file,file=e.target.files&&e.target.files[0];if(!file)return;try{state.images[key]=await compressFile(file);render()}catch(err){showMsg(err.message,"error")}}if(e.target.id==="profile-avatar"){
+ const file=e.target.files&&e.target.files[0];if(file){
+  state.profileAvatarBusy=true;render();
+  try{
+   const image_data_url=await compressSupportImage(file);
+   localStorage.setItem(profileAvatarLocalKey(),image_data_url);
+   try{
+    const result=await api("/community",{method:"POST",body:{action:"profile_avatar",image_data_url}});
+    state.communityProfile={...(state.communityProfile||{}),avatar_url:result.avatar_url||image_data_url};
+    showMsg("Profile photo updated.","success");
+   }catch(uploadError){
+    if(/support-agent avatars are managed separately/i.test(uploadError.message||"")){
+     showMsg("Profile photo saved on this browser. Support-agent profile photos are managed separately on the server.","notice");
+    }else{
+     showMsg("Photo saved on this browser, but account sync failed: "+uploadError.message,"error");
+    }
+   }
+   await loadCommunityProfileWeb();
+  }catch(err){showMsg(err.message||"Could not save that profile photo.","error")}
+  finally{state.profileAvatarBusy=false;if(state.page==="PROFILE"&&!state.sub)render()}
+ }
+}if(e.target.id==="support-bot-avatar"){
+ const file=e.target.files&&e.target.files[0];if(file){
+  try{await saveSupportBotAvatarWeb(file);showMsg("LM Support Bot avatar updated.","success");render()}
+  catch(err){showMsg(err.message||"Could not update the support avatar.","error")}
+ }
+}
+ if(e.target.id==="community-image"){const file=e.target.files&&e.target.files[0];if(file){try{state.communityImage=await compressFile(file);render()}catch(err){showMsg(err.message,"error")}}}
  if(e.target.id==="notifications-toggle"){state.notifications=e.target.checked;localStorage.setItem("lm_web_notifications",String(state.notifications));if(state.notifications&&"Notification"in window){const p=await Notification.requestPermission();if(p!=="granted"){state.notifications=false;localStorage.setItem("lm_web_notifications","false");render()}}}
 });
 document.addEventListener("keydown",e=>{
  if(e.target.id==="auth-password"&&e.key==="Enter"){e.preventDefault();submitAuth();return}
- if(e.target.id==="chat-draft"&&e.key==="Enter"&&!e.shiftKey&&!e.isComposing){e.preventDefault();sendSupportMessageWeb()}
+ if(e.target.id==="chat-draft"&&e.key==="Enter"&&!e.shiftKey&&!e.isComposing){e.preventDefault();sendSupportMessageWeb();return}
+ if(e.target.id==="agent-chat-draft"&&e.key==="Enter"&&!e.shiftKey&&!e.isComposing){e.preventDefault();sendSupportAgentReplyWeb()}
 });
 startup();
 setInterval(()=>{if(state.token&&state.profile&&state.page==="HOME"&&!state.sub){state.toolIndex=(state.toolIndex+1)%3;render()}},10000);
